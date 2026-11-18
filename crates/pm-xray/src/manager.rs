@@ -7,7 +7,7 @@
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Mutex, RwLock};
 use std::thread;
 
 use crate::config::{write_config_with_stats, InboundProtocol};
@@ -129,7 +129,7 @@ impl ManagerState {
 
 /// Manages one Xray child at a time.
 pub struct XrayManager {
-    binary: String,
+    binary: RwLock<String>,
     data_dir: PathBuf,
     /// Port of the gRPC API inbound added to generated configs; 0 disables it.
     stats_port: u16,
@@ -149,7 +149,7 @@ impl XrayManager {
         stats_port: u16,
     ) -> XrayManager {
         XrayManager {
-            binary,
+            binary: RwLock::new(binary),
             data_dir,
             stats_port,
             inner: Mutex::new(ManagerState {
@@ -182,17 +182,24 @@ impl XrayManager {
         Self::with_stats_port(binary, data_dir, Box::new(SystemProcessAdapter), stats_port)
     }
 
-    pub fn binary(&self) -> &str {
-        &self.binary
+    pub fn binary(&self) -> String {
+        self.binary.read().map(|b| b.clone()).unwrap_or_default()
     }
 
     pub fn binary_available(&self) -> bool {
-        !self.binary.is_empty()
+        self.binary.read().map(|b| !b.is_empty()).unwrap_or(false)
+    }
+
+    pub fn set_binary(&self, new_binary: String) {
+        if let Ok(mut b) = self.binary.write() {
+            *b = new_binary;
+        }
     }
 
     /// Connects to `node`, replacing any running process (restart on change).
     pub fn connect(&self, node: &XrayNode, inbound_port: u16, inbound: InboundProtocol) -> Result<()> {
-        if self.binary.is_empty() {
+        let binary_path = self.binary();
+        if binary_path.is_empty() {
             return Err(Error::Process(
                 "xray binary is not configured or was not found".into(),
             ));
@@ -217,7 +224,7 @@ impl XrayManager {
         state.exit_latitude = None;
         state.exit_longitude = None;
 
-        match self.adapter.spawn(&self.binary, &config) {
+        match self.adapter.spawn(&binary_path, &config) {
             Ok(child) => {
                 tracing::info!(pid = child.id(), config = %config.display(), "xray: process started");
                 state.child = Some(ChildGuard { child: Some(child) });
@@ -287,7 +294,7 @@ impl XrayManager {
             .map(|node| node.country_code.clone());
         XrayStatus {
             enabled: self.binary_available(),
-            binary: self.binary.clone(),
+            binary: self.binary(),
             binary_available: self.binary_available(),
             state: state.state,
             node_id: state.node.as_ref().map(|node| node.id.clone()),

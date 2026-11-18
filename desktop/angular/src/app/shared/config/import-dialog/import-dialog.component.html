@@ -18,28 +18,28 @@
   #codeBlock id="yaml" contenteditable="true" (blur)="onBlur()" (mouseleave)="onBlur()" (paste)="onPaste($event)"></pre>
 
 <fieldset class="p-2 text-xs font-light bg-gray-400 rounded border border-gray-500 border-solid">
-  <legend class="px-2 py-1 m-0 text-xs w-fit">Configuration</legend>
+  <legend class="px-2 py-1 m-0 text-xs w-fit">{{ 'cfg.importConfig' | t: undefined : ('' | i18nVersion) }}</legend>
 
   <div class="p-2 space-y-2">
     <div class="flex flex-row gap-2" *ngIf="dialogRef.data.type === 'setting'">
       <input type="checkbox" [(ngModel)]="reset" id="reset" />
-      <label class="text-primary" for="reset">Reset all settings to default before importing</label>
+      <label class="text-primary cursor-pointer" for="reset">{{ 'cfg.importReset' | t: undefined : ('' | i18nVersion) }}</label>
     </div>
 
     <div class="flex flex-row gap-2" *ngIf="result?.containsUnknown">
       <input type="checkbox" id="allowUnknown" [(ngModel)]="allowUnknown" />
-      <label class="text-primary" for="allowUnknown">Allow unknown settings</label>
+      <label class="text-primary cursor-pointer" for="allowUnknown">{{ 'cfg.importAllowUnknown' | t: undefined : ('' | i18nVersion) }}</label>
     </div>
 
     <!-- Replacing existing profile must be explicitly accepted for profile (but not for settings...) -->
     <div class="flex flex-row gap-2" *ngIf="result?.replacesExisting && dialogRef.data.type === 'profile'">
-      <input type="checkbox" id="allowUnknown" [(ngModel)]="allowReplace" />
-      <label class="text-primary" for="allowUnknown">Allow replacing an existing profile</label>
+      <input type="checkbox" id="allowReplace" [(ngModel)]="allowReplace" />
+      <label class="text-primary cursor-pointer" for="allowReplace">{{ 'cfg.importAllowReplace' | t: undefined : ('' | i18nVersion) }}</label>
     </div>
 
     <div class="flex flex-row gap-2" *ngIf="result?.restartRequired">
       <input type="checkbox" id="restart" [(ngModel)]="triggerRestart" />
-      <label class="text-primary" for="restart">Automatically restart Portmaster after a successfull import</label>
+      <label class="text-primary cursor-pointer" for="restart">{{ 'cfg.importRestart' | t: undefined : ('' | i18nVersion) }}</label>
     </div>
   </div>
 </fieldset>
@@ -51,7 +51,7 @@
         result.replacesExisting ||
         result.restartRequired))
   ">
-  <legend class="px-2 py-1 m-0 text-xs w-fit">Warning</legend>
+  <legend class="px-2 py-1 m-0 text-xs w-fit">{{ 'cfg.importWarning' | t: undefined : ('' | i18nVersion) }}</legend>
 
   <div *ngIf="!!errorMessage" class="flex flex-row gap-2 items-center p-2 w-full text-xs font-normal">
     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"
@@ -88,11 +88,11 @@
 
 <div class="flex flex-row justify-between">
   <button>
-    <label class="block" for="avatarInput"> Choose File </label>
+    <label class="block cursor-pointer" for="avatarInput"> {{ 'cfg.chooseFile' | t: undefined : ('' | i18nVersion) }} </label>
   </button>
 
-  <button class="text-white bg-blue" (click)="import()" [disabled]="!result">
-    Import
+  <button class="text-white bg-blue cursor-pointer" (click)="import()" [disabled]="!result">
+    {{ 'cfg.importBtn' | t: undefined : ('' | i18nVersion) }}
   </button>
 </div>
 

@@ -15,13 +15,18 @@
           <span *ngIf="st.exitCountry"> ({{ st.exitCountry }})</span>
         </span>
       </p>
-      <div *ngIf="status$ | async as st" class="mt-0.5 text-xxs">
+      <div *ngIf="status$ | async as st" class="mt-0.5 text-xxs flex flex-row items-center gap-2">
         <span *ngIf="st.binary_available" class="text-secondary">
           {{ 'xray.binaryAvailable' | t: { path: st.binary }: ('' | i18nVersion) }}
         </span>
         <span *ngIf="!st.binary_available" class="text-amber-400">
           ⚠️ {{ 'xray.binaryMissing' | t: undefined : ('' | i18nVersion) }}
         </span>
+        <button type="button" (click)="downloadBinary()" [disabled]="downloadingBinary"
+          class="px-2 py-0.5 text-xxs font-medium rounded bg-blue text-white hover:bg-opacity-90 inline-flex items-center gap-1 cursor-pointer">
+          <fa-icon icon="spinner" [spin]="true" *ngIf="downloadingBinary"></fa-icon>
+          <span>{{ (downloadingBinary ? 'xray.downloadingBinary' : 'xray.downloadBinaryBtn') | t: undefined : ('' | i18nVersion) }}</span>
+        </button>
       </div>
       <label class="inline-flex flex-row items-center gap-1.5 mt-1 text-xs text-secondary cursor-pointer" *ngIf="(status$ | async)?.connected">
         <input type="checkbox" [(ngModel)]="showRealExitIp" (change)="toggleRealExitIp()" class="cursor-pointer">
@@ -29,10 +34,38 @@
       </label>
     </div>
 
-    <button type="button" (click)="reload()" [title]="'xray.reloadHint' | t: undefined : ('' | i18nVersion)"
-      class="px-3 py-1.5 text-xs font-medium rounded bg-gray-300 hover:bg-gray-200 whitespace-nowrap">
-      {{ 'common.refresh' | t: undefined : ('' | i18nVersion) }}
-    </button>
+    <div class="flex flex-row items-center gap-2">
+      <button *ngIf="(status$ | async)?.connected" type="button" (click)="disconnect()"
+        class="px-3 py-1.5 text-xs font-medium rounded bg-red-400 text-white hover:bg-red-300 whitespace-nowrap cursor-pointer">
+        {{ 'xray.disconnect' | t: undefined : ('' | i18nVersion) }}
+      </button>
+      <button type="button" (click)="reload()" [title]="'xray.reloadHint' | t: undefined : ('' | i18nVersion)"
+        class="px-3 py-1.5 text-xs font-medium rounded bg-gray-300 hover:bg-gray-200 whitespace-nowrap cursor-pointer">
+        {{ 'common.refresh' | t: undefined : ('' | i18nVersion) }}
+      </button>
+    </div>
+  </div>
+
+  <!-- Default routing toggle and quick settings -->
+  <div class="flex flex-row flex-wrap items-center justify-between gap-4 p-2.5 rounded bg-gray-300 bg-opacity-30 border border-gray-400 text-xs">
+    <div class="flex flex-row items-center gap-3">
+      <sfng-toggle [ngModel]="routeByDefault" (ngModelChange)="toggleRouteByDefault($event)"></sfng-toggle>
+      <div>
+        <div class="font-medium text-primary">
+          {{ 'xray.routeByDefault' | t: undefined : ('' | i18nVersion) }}
+        </div>
+        <div class="text-xxs text-secondary">
+          {{ (routeByDefault ? 'xray.routeByDefaultDescOn' : 'xray.routeByDefaultDescOff') | t: undefined : ('' | i18nVersion) }}
+        </div>
+      </div>
+    </div>
+
+    <div class="flex flex-row items-center gap-3">
+      <a [routerLink]="['/settings']" [queryParams]="{setting: 'spn/usagePolicy'}"
+        class="text-xs text-blue hover:underline cursor-pointer">
+        {{ 'xray.openRoutingRules' | t: undefined : ('' | i18nVersion) }} →
+      </a>
+    </div>
   </div>
 
   <div class="flex flex-row flex-1 min-h-0 gap-4">

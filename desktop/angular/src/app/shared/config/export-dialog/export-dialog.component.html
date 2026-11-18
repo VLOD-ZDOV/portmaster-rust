@@ -14,6 +14,6 @@
 <markdown lineNumbers [data]="content" emoji class="overflow-auto"></markdown>
 
 <div class="flex flex-row justify-end gap-2 items-center">
-  <button (click)="copyToClipboard()">Copy To Clipboard</button>
-  <button (click)="download()">Save</button>
+  <button (click)="copyToClipboard()">{{ 'cfg.copyToClipboard' | t: undefined : ('' | i18nVersion) }}</button>
+  <button (click)="download()">{{ 'common.save' | t: undefined : ('' | i18nVersion) }}</button>
 </div>

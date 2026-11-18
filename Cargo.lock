@@ -2230,6 +2230,7 @@ dependencies = [
  "tokio",
  "tracing",
  "ureq",
+ "zip",
 ]
 
 [[package]]

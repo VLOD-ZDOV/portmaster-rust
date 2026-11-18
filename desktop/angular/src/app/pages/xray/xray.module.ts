@@ -1,6 +1,8 @@
 import { CommonModule } from '@angular/common';
 import { NgModule } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { RouterModule } from '@angular/router';
+import { FontAwesomeModule } from '@fortawesome/angular-fontawesome';
 import { I18nModule } from 'src/i18n';
 import { SPNModule } from '../spn/spn.module';
 import { XrayPageComponent } from './xray-page';
@@ -9,6 +11,8 @@ import { XrayPageComponent } from './xray-page';
   imports: [
     CommonModule,
     FormsModule,
+    RouterModule,
+    FontAwesomeModule,
     SPNModule,
     I18nModule,
   ],

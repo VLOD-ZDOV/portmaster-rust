@@ -1,4 +1,6 @@
 import { ChangeDetectionStrategy, ChangeDetectorRef, Component, DestroyRef, OnDestroy, OnInit, forwardRef, inject } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { BoolSetting, ConfigService } from '@safing/portmaster-api';
 import { Subscription, catchError, combineLatest, of } from 'rxjs';
 import { ActionIndicatorService } from '../../shared/action-indicator';
 import { XrayNode, XrayService, XrayStatus, XraySubscription } from '../../shared/xray';
@@ -27,6 +29,8 @@ export class XrayPageComponent implements OnInit, OnDestroy {
   pins: MapPin[] = [];
   selectedPinId: string | null = null;
   showRealExitIp = false;
+  downloadingBinary = false;
+  routeByDefault = true;
 
   toggleRealExitIp(): void {
     this.xrayMapService.showRealExitIp = this.showRealExitIp;
@@ -66,12 +70,20 @@ export class XrayPageComponent implements OnInit, OnDestroy {
     private readonly xray: XrayService,
     private readonly xrayMapService: XrayMapService,
     private readonly actionIndicator: ActionIndicatorService,
+    private readonly configService: ConfigService,
     private readonly i18n: I18nService,
     private readonly cdr: ChangeDetectorRef,
   ) { }
 
   ngOnInit(): void {
     this.destroyRef.onDestroy(() => this.subscription.unsubscribe());
+
+    this.configService.watch<BoolSetting>('spn/use')
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe(v => {
+        this.routeByDefault = v ?? true;
+        this.cdr.markForCheck();
+      });
 
     this.subscription = combineLatest([
       this.xray.nodes$.pipe(catchError(err => {
@@ -227,6 +239,49 @@ export class XrayPageComponent implements OnInit, OnDestroy {
   removeSubscription(subscription: XraySubscription): void {
     this.xray.removeSubscription(subscription.id).subscribe({
       next: () => this.actionIndicator.success(this.i18n.t('common.remove'), subscription.url),
+      error: err => this.actionIndicator.error(this.i18n.t('common.error'), err),
+    });
+  }
+
+  toggleRouteByDefault(value: boolean): void {
+    this.configService.save('spn/use', value).subscribe({
+      next: () => {
+        this.routeByDefault = value;
+        this.actionIndicator.success(
+          this.i18n.t('xray.routingSettingSaved'),
+          value ? this.i18n.t('xray.routeByDefaultOn') : this.i18n.t('xray.routeByDefaultOff')
+        );
+        this.cdr.markForCheck();
+      },
+      error: err => this.actionIndicator.error(this.i18n.t('common.error'), err),
+    });
+  }
+
+  downloadBinary(): void {
+    this.downloadingBinary = true;
+    this.cdr.markForCheck();
+    this.xray.downloadBinary().subscribe({
+      next: res => {
+        this.downloadingBinary = false;
+        this.actionIndicator.success(this.i18n.t('xray.downloadSuccess'), res.path);
+        this.reload();
+        this.cdr.markForCheck();
+      },
+      error: err => {
+        this.downloadingBinary = false;
+        this.actionIndicator.error(this.i18n.t('xray.downloadFailed'), err);
+        this.cdr.markForCheck();
+      },
+    });
+  }
+
+  disconnect(): void {
+    this.xray.disconnect().subscribe({
+      next: () => {
+        this.actionIndicator.success(this.i18n.t('xray.disconnected'), '');
+        this.reload();
+        this.cdr.markForCheck();
+      },
       error: err => this.actionIndicator.error(this.i18n.t('common.error'), err),
     });
   }

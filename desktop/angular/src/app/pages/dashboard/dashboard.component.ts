@@ -13,6 +13,7 @@ import { CircularBarChartConfig, splitQueryResult } from "src/app/shared/netquer
 import { BytesPipe } from "src/app/shared/pipes/bytes.pipe";
 import { HttpErrorResponse } from "@angular/common/http";
 import { I18nService } from 'src/i18n';
+import { XrayService } from 'src/app/shared/xray';
 
 interface BlockedProfile {
   profileID: string;
@@ -69,6 +70,9 @@ export class DashboardPageComponent implements OnInit, AfterViewInit {
   private readonly dialog = inject(SfngDialogService);
   private readonly portapi = inject(PortapiService)
   private readonly router = inject(Router);
+  private readonly xrayService = inject(XrayService);
+
+  readonly xrayStatus$ = this.xrayService.status$;
 
   private readonly i18n = inject(I18nService);
 

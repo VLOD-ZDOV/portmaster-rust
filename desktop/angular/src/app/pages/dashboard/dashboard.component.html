@@ -22,46 +22,25 @@
     -->
     </div>
 
-    <div class="flex flex-row gap-8">
-      <div class="flex flex-col text-xs leading-4">
-        <span class="font-light text-secondary">
-          {{ 'dash.currentPlan' | t: undefined : ('' | i18nVersion) }}
-          <span class="font-normal text-primary">
-            {{ profile?.current_plan?.name || ('dash.free' | t: undefined : ('' | i18nVersion)) }}
+    <div class="flex flex-row items-center gap-4" *ngIf="xrayStatus$ | async as xs">
+      <div class="flex flex-col text-xs leading-4 text-right">
+        <span class="font-medium flex flex-row items-center gap-1.5 justify-end">
+          <span class="inline-block w-2 h-2 rounded-full" [class.bg-green-400]="xs.connected" [class.bg-gray-400]="!xs.connected"></span>
+          <span [class.text-green-300]="xs.connected" [class.text-secondary]="!xs.connected">
+            {{ (xs.connected ? 'dash.xrayConnected' : 'dash.xrayDisconnected') | t: undefined : ('' | i18nVersion) }}
           </span>
         </span>
-
-        <span class="font-light text-secondary" *ngIf="!profile?.subscription?.next_billing_date">
-          {{ 'dash.ends' | t: undefined : ('' | i18nVersion) }}
-          <ng-container *ngIf="profile?.subscription?.ends_at; else: endsNever">
-            {{ 'dash.in' | t: undefined : ('' | i18nVersion) }}
-            <span class="font-normal text-primary">
-              {{ profile?.subscription?.ends_at! | timeAgo }}
-            </span>
-          </ng-container>
-          <ng-template #endsNever>
-            {{ 'dash.never' | t: undefined : ('' | i18nVersion) }}
-          </ng-template>
+        <span *ngIf="xs.connected && xs.node_name" class="text-secondary truncate max-w-xs">
+          {{ xs.node_name }}
         </span>
-        <span class="font-light text-secondary" *ngIf="!!profile?.subscription?.next_billing_date">
-          {{ 'dash.autoRenews' | t: undefined : ('' | i18nVersion) }} <span class="font-normal text-primary">
-            {{ profile?.subscription?.next_billing_date! | timeAgo }}
-          </span>
+        <span *ngIf="xs.connected && xs.exitIp" class="text-secondary text-xxs">
+          IP: {{ xs.exitIp }} <span *ngIf="xs.exitCountry">({{ xs.exitCountry }})</span>
         </span>
       </div>
-
-      <ng-container *ngIf="!!profile && profile.state !== ''; else: loginButton">
-        <button (click)="openAccountDetails()"
-          class="text-sm font-normal text-white cursor-pointer btn bg-blue bg-opacity-80 hover:bg-opacity-100 hover:bg-blue">
-          {{ 'dash.accountDetails' | t: undefined : ('' | i18nVersion) }}
-        </button>
-      </ng-container>
-      <ng-template #loginButton>
-        <button (click)="openAccountDetails()"
-          class="text-sm font-normal text-white cursor-pointer btn bg-blue bg-opacity-80 hover:bg-opacity-100 hover:bg-blue">
-          {{ 'dash.loginSubscribe' | t: undefined : ('' | i18nVersion) }}
-        </button>
-      </ng-template>
+      <button routerLink="/xray"
+        class="text-xs font-normal text-white cursor-pointer btn bg-blue bg-opacity-80 hover:bg-opacity-100 hover:bg-blue py-1.5 px-3 whitespace-nowrap">
+        {{ 'dash.manageXray' | t: undefined : ('' | i18nVersion) }}
+      </button>
     </div>
   </header>
 

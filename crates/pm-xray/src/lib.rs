@@ -131,9 +131,9 @@ pub fn register_options(config: &Config) -> pm_config::Result<()> {
     )?;
     config.register(
         ConfigOption::new(
-            "Xray Integration",
+            "Служба ядра Xray",
             CFG_XRAY_ENABLE,
-            "Enable the Xray VPN integration. Subscriptions and nodes can still be managed when disabled, but no process is started.",
+            "Включение интеграции и фонового процесса Xray для проксирования.",
             pm_config::OPT_TYPE_BOOL,
             Value::Bool(false),
         )
@@ -177,9 +177,9 @@ pub fn register_options(config: &Config) -> pm_config::Result<()> {
     if config.option("spn/enable").is_err() {
         let _ = config.register(
             ConfigOption::new(
-                "Enable SPN / Xray Routing",
+                "Маршрутизация Xray",
                 "spn/enable",
-                "Whether SPN / Xray routing is enabled globally.",
+                "Глобальное включение маршрутизации сетевого трафика через Xray.",
                 pm_config::OPT_TYPE_BOOL,
                 Value::Bool(false),
             )
@@ -281,6 +281,8 @@ pub struct Xray {
     /// Source of traffic statistics: real gRPC client when a stats port is
     /// configured, [`NoopTrafficStats`] otherwise.
     pub stats: Arc<dyn StatsService>,
+    pub data_dir: PathBuf,
+    pub bin_dir: PathBuf,
 }
 
 impl Xray {
@@ -327,12 +329,14 @@ impl Xray {
             config: Arc::clone(config),
             store: SubscriptionStore::new(databases)
                 .expect("register xray database"),
-            manager: XrayManager::system_with_stats_port(binary, data_dir, stats_port),
+            manager: XrayManager::system_with_stats_port(binary, data_dir.clone(), stats_port),
             geoip,
             enabled,
             inbound_port,
             inbound,
             stats,
+            data_dir,
+            bin_dir,
         })
     }
 
@@ -367,17 +371,139 @@ impl Xray {
         adapter: Box<dyn ProcessAdapter>,
         stats: Arc<dyn StatsService>,
     ) -> Arc<Xray> {
+        let bin_dir = data_dir.join("bin");
         Arc::new(Xray {
             config: Arc::clone(config),
             store: SubscriptionStore::new(databases)
                 .expect("register xray database"),
-            manager: XrayManager::new(binary, data_dir, adapter),
+            manager: XrayManager::with_stats_port(binary, data_dir.clone(), adapter, 0),
             geoip,
             enabled: true,
             inbound_port: DEFAULT_INBOUND_PORT,
             inbound: InboundProtocol::Socks,
             stats,
+            data_dir,
+            bin_dir,
         })
+    }
+
+    /// Downloads the latest official Xray-core binary from GitHub, extracts it into
+    /// the Portmaster bin or data directory, marks it executable, and updates the manager.
+    pub fn download_and_install_binary(&self) -> Result<String> {
+        use std::io::Read;
+
+        let (os, arch) = match (std::env::consts::OS, std::env::consts::ARCH) {
+            ("linux", "x86_64") => ("linux", "64"),
+            ("linux", "aarch64") => ("linux", "arm64-v8a"),
+            ("windows", "x86_64") => ("windows", "64"),
+            ("windows", "aarch64") => ("windows", "arm64-v8a"),
+            (other_os, other_arch) => {
+                return Err(Error::Process(format!(
+                    "unsupported OS/architecture for Xray download: {other_os} {other_arch}"
+                )));
+            }
+        };
+
+        let asset_name = format!("Xray-{os}-{arch}.zip");
+        let download_url = format!("https://github.com/XTLS/Xray-core/releases/latest/download/{asset_name}");
+
+        tracing::info!(%download_url, "downloading Xray-core release binary");
+        let agent = ureq::Agent::new_with_defaults();
+        let mut response = agent
+            .get(&download_url)
+            .header("User-Agent", "Portmaster-Rust")
+            .call()
+            .map_err(|e| Error::Fetch(format!("failed to download {asset_name}: {e}")))?;
+
+        let mut zip_bytes = Vec::new();
+        response
+            .body_mut()
+            .as_reader()
+            .read_to_end(&mut zip_bytes)
+            .map_err(|e| Error::Process(format!("failed to read zip payload: {e}")))?;
+
+        let cursor = std::io::Cursor::new(zip_bytes);
+        let mut archive = zip::ZipArchive::new(cursor)
+            .map_err(|e| Error::Process(format!("failed to parse zip archive: {e}")))?;
+
+        let inner_binary_name = if cfg!(windows) { "xray.exe" } else { "xray" };
+        let target_binary_name = if cfg!(windows) { "xray-rust.exe" } else { "xray-rust" };
+
+        let mut binary_bytes: Option<Vec<u8>> = None;
+        let mut geoip_bytes: Option<Vec<u8>> = None;
+        let mut geosite_bytes: Option<Vec<u8>> = None;
+
+        for i in 0..archive.len() {
+            let mut file = archive
+                .by_index(i)
+                .map_err(|e| Error::Process(format!("failed to inspect zip entry: {e}")))?;
+            let raw_name = match file.name() {
+                Ok(n) => n.to_string(),
+                Err(_) => continue,
+            };
+            if raw_name == inner_binary_name || raw_name.ends_with(&format!("/{inner_binary_name}")) {
+                let mut buf = Vec::new();
+                file.read_to_end(&mut buf)
+                    .map_err(|e| Error::Process(format!("failed to extract binary: {e}")))?;
+                binary_bytes = Some(buf);
+            } else if raw_name == "geoip.dat" || raw_name.ends_with("/geoip.dat") {
+                let mut buf = Vec::new();
+                let _ = file.read_to_end(&mut buf);
+                geoip_bytes = Some(buf);
+            } else if raw_name == "geosite.dat" || raw_name.ends_with("/geosite.dat") {
+                let mut buf = Vec::new();
+                let _ = file.read_to_end(&mut buf);
+                geosite_bytes = Some(buf);
+            }
+        }
+
+        let binary_data = binary_bytes.ok_or_else(|| {
+            Error::Process(format!("'{inner_binary_name}' binary not found inside {asset_name}"))
+        })?;
+
+        // Determine destination: prefer bin_dir, fallback to data_dir/bin
+        let candidate_bin = self.bin_dir.join(target_binary_name);
+        let write_primary = std::fs::create_dir_all(&self.bin_dir)
+            .and_then(|_| std::fs::write(&candidate_bin, &binary_data));
+
+        let final_path = match write_primary {
+            Ok(_) => candidate_bin,
+            Err(_) => {
+                let fallback_dir = self.data_dir.join("bin");
+                std::fs::create_dir_all(&fallback_dir)
+                    .map_err(|e| Error::Process(format!("failed to create dir {}: {e}", fallback_dir.display())))?;
+                let fallback_file = fallback_dir.join(target_binary_name);
+                std::fs::write(&fallback_file, &binary_data)
+                    .map_err(|e| Error::Process(format!("failed to write binary {}: {e}", fallback_file.display())))?;
+                fallback_file
+            }
+        };
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&final_path, std::fs::Permissions::from_mode(0o755));
+        }
+
+        if let Some(geoip) = geoip_bytes {
+            if let Some(parent) = final_path.parent() {
+                let _ = std::fs::write(parent.join("geoip.dat"), geoip);
+            }
+        }
+        if let Some(geosite) = geosite_bytes {
+            if let Some(parent) = final_path.parent() {
+                let _ = std::fs::write(parent.join("geosite.dat"), geosite);
+            }
+        }
+
+        let path_str = final_path.to_string_lossy().into_owned();
+        tracing::info!(path = %path_str, "Xray binary successfully installed");
+
+        self.manager.set_binary(path_str.clone());
+        let _ = self.config.set_config_option(CFG_XRAY_BINARY_NAMESPACED, serde_json::Value::String(path_str.clone()));
+        let _ = self.config.set_config_option(CFG_XRAY_ENABLE, serde_json::Value::Bool(true));
+
+        Ok(path_str)
     }
 
     /// Returns the process state enriched with live traffic counters. Stats

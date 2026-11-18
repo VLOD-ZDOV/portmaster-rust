@@ -178,12 +178,14 @@ jobs:
               $sum "$f" > "$f.sha256"
             fi
           done
+          CORE_VER=$(grep 'PORTMASTER_VERSION' ../crates/pm-core/src/service.rs | cut -d '"' -f 2)
+          echo "RELEASE_VERSION=${CORE_VER:-2.2.11}" >> $GITHUB_ENV
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
-          name: ${{ startsWith(github.ref, 'refs/tags/') && format('Portmaster {0}', github.ref_name) || 'Portmaster Continuous Release (main)' }}
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', env.RELEASE_VERSION) }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && format('Portmaster {0}', github.ref_name) || format('Portmaster v{0}', env.RELEASE_VERSION) }}
           files: dist/*
           draft: false
           prerelease: false

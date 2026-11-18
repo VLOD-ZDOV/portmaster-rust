@@ -29,6 +29,24 @@ pub enum GithubCheckResult {
     Error(String),
 }
 
+/// Extracts a semantic version from an input string, either directly or by searching words.
+fn extract_semver(text: &str) -> Option<Version> {
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    if let Ok(v) = Version::parse(text) {
+        return Some(v);
+    }
+    for word in text.split_whitespace() {
+        let cleaned = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '.');
+        if let Ok(v) = Version::parse(cleaned) {
+            return Some(v);
+        }
+    }
+    None
+}
+
 /// Checks the specified GitHub repository (`owner/repo`) for the latest release.
 pub fn check_github_repo_release(
     client: &dyn HttpClient,
@@ -58,18 +76,27 @@ pub fn check_github_repo_release(
     let latest_tag = release.tag_name.trim();
     let current = current_version.trim();
 
-    let cur_v = Version::parse(current);
-    let lat_v = Version::parse(latest_tag);
+    let cur_v = extract_semver(current);
+    let lat_v = extract_semver(latest_tag)
+        .or_else(|| release.name.as_deref().and_then(extract_semver));
 
     let is_newer = match (&cur_v, &lat_v) {
-        (Ok(c), Ok(l)) => l > c,
-        _ => latest_tag != current && !latest_tag.is_empty(),
+        (Some(c), Some(l)) => l > c,
+        (None, Some(_)) => latest_tag != current && !latest_tag.is_empty() && latest_tag != "latest",
+        _ => false,
     };
 
     if is_newer {
+        let display_tag = if latest_tag == "latest" {
+            lat_v
+                .map(|v| format!("v{v}"))
+                .unwrap_or_else(|| latest_tag.to_string())
+        } else {
+            latest_tag.to_string()
+        };
         GithubCheckResult::UpdateAvailable {
             current: current.to_string(),
-            latest: latest_tag.to_string(),
+            latest: display_tag,
             release_name: release.name.unwrap_or_else(|| latest_tag.to_string()),
             html_url: release.html_url,
         }
@@ -121,5 +148,37 @@ mod tests {
         let client = MockClient(json.to_vec());
         let res = check_github_repo_release(&client, "VLOD-ZDOV/portmaster-rust", "2.2.10");
         assert_eq!(res, GithubCheckResult::UpToDate { current: "2.2.10".into() });
+    }
+
+    #[test]
+    fn ignores_latest_tag_without_semver() {
+        let json = br#"{
+            "tag_name": "latest",
+            "name": "Portmaster Continuous Release (latest)",
+            "html_url": "https://github.com/VLOD-ZDOV/portmaster-rust/releases/tag/latest"
+        }"#;
+        let client = MockClient(json.to_vec());
+        let res = check_github_repo_release(&client, "VLOD-ZDOV/portmaster-rust", "2.2.10");
+        assert_eq!(res, GithubCheckResult::UpToDate { current: "2.2.10".into() });
+    }
+
+    #[test]
+    fn resolves_version_from_release_name_when_tag_is_latest() {
+        let json = br#"{
+            "tag_name": "latest",
+            "name": "Portmaster v2.2.12",
+            "html_url": "https://github.com/VLOD-ZDOV/portmaster-rust/releases/tag/latest"
+        }"#;
+        let client = MockClient(json.to_vec());
+        let res = check_github_repo_release(&client, "VLOD-ZDOV/portmaster-rust", "2.2.10");
+        assert_eq!(
+            res,
+            GithubCheckResult::UpdateAvailable {
+                current: "2.2.10".into(),
+                latest: "v2.2.12".into(),
+                release_name: "Portmaster v2.2.12".into(),
+                html_url: "https://github.com/VLOD-ZDOV/portmaster-rust/releases/tag/latest".into(),
+            }
+        );
     }
 }

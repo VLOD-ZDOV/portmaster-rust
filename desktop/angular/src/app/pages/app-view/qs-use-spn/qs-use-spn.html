@@ -6,7 +6,7 @@
     {{ 'app.useSPN' | t: undefined : ('' | i18nVersion) }}
   </span>
 
-  <span *ngIf="!canUse" routerLink="/dashboard" class="cursor-pointer text-tertiary hover:underline">
+  <span *ngIf="!canUse" routerLink="/xray" class="cursor-pointer text-tertiary hover:underline">
     {{ 'app.getPro' | t: undefined : ('' | i18nVersion) }}
   </span>
 
@@ -15,7 +15,7 @@
   </sfng-toggle>
 
   <span *ngIf="canUse && spnDisabled === true"
-    routerLink="/spn" class="cursor-pointer text-tertiary hover:underline"
+    routerLink="/xray" class="cursor-pointer text-tertiary hover:underline"
     [sfng-tooltip]="'app.enableSPNUse' | t: undefined : ('' | i18nVersion)">
       {{ 'common.disabled' | t: undefined : ('' | i18nVersion) }}
   </span>

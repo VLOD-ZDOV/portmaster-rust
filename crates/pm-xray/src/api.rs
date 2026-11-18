@@ -337,5 +337,24 @@ pub fn register_api(xray: &Arc<Xray>, api: &Api) -> pm_api::Result<()> {
         }),
     )?;
 
+    let download = Arc::clone(xray);
+    api.register_endpoint(
+        Endpoint::new(
+            "xray/download-binary",
+            "Download Xray Binary",
+            "Downloads the latest official Xray-core release binary into the Portmaster bin directory.",
+        )
+        .with_write(PERMIT_ADMIN)
+        .with_write_method("POST")
+        .with_struct(move |_| {
+            let path = download.download_and_install_binary().map_err(crate::Error::api)?;
+            serde_json::to_value(json!({
+                "success": true,
+                "path": path,
+            }))
+            .map_err(pm_api::ApiError::Json)
+        }),
+    )?;
+
     Ok(())
 }

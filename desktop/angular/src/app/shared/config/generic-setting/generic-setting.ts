@@ -12,6 +12,7 @@ import { ActionIndicatorService } from '../../action-indicator';
 import { fadeInAnimation, fadeOutAnimation } from '../../animations';
 import { ExpertiseService } from '../../expertise/expertise.service';
 import { SPNAccountDetailsComponent } from '../../spn-account-details';
+import { I18nService } from 'src/i18n';
 
 export interface SaveSettingEvent<S extends BaseSetting<any, any> = any> {
   key: string;
@@ -64,14 +65,38 @@ export class GenericSettingComponent<S extends BaseSetting<any, any>> implements
   get disabled() {
     return this._disabled || this._upgradeRequired;
   }
-  private _disabled: boolean = false;
+  private _disabled = false;
 
   /** Returns the symbolMap annoation for endpoint-lists */
   get symbolMap() {
+    if (this.setting?.Key === 'spn/usagePolicy' || this.setting?.Key === 'spn/transitHubPolicy' || this.setting?.Key === 'spn/exitHubPolicy') {
+      return {
+        '+': this.i18n.t('xray.verdictRoute') || 'Маршрутизировать через Xray',
+        '-': this.i18n.t('xray.verdictDirect') || 'Напрямую (в обход Xray)',
+      };
+    }
     return this.setting?.Annotations[WellKnown.EndpointListVerdictNames] || {
       '+': 'Allow',
       '-': 'Block'
     };
+  }
+
+  get settingTitle(): string {
+    if (!this.setting) {
+      return '';
+    }
+    const key = `cfg.${this.setting.Key}.name`;
+    const translated = this.i18n.t(key);
+    return translated !== key ? translated : (this.setting.Name || '');
+  }
+
+  get settingDescription(): string {
+    if (!this.setting) {
+      return '';
+    }
+    const key = `cfg.${this.setting.Key}.desc`;
+    const translated = this.i18n.t(key);
+    return translated !== key ? translated : (this.setting.Description || '');
   }
 
   /** Whether or not the setting should be in select mode */
@@ -464,6 +489,7 @@ export class GenericSettingComponent<S extends BaseSetting<any, any>> implements
     private spn: SPNService,
     private viewRef: ViewContainerRef,
     private destryoRef: DestroyRef,
+    private i18n: I18nService,
   ) { }
 
   ngOnInit() {

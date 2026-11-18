@@ -60,6 +60,18 @@ export class XrayService {
       .pipe(tap(() => this.refresh()));
   }
 
+  /** Disconnect active Xray node and stop process. */
+  disconnect(): Observable<unknown> {
+    return this.http.post(`${this.basePath}/disconnect`, {})
+      .pipe(tap(() => this.refresh()));
+  }
+
+  /** Download / update the official Xray-core binary into Portmaster bin directory. */
+  downloadBinary(): Observable<{ success: boolean; path: string; version?: string }> {
+    return this.http.post<{ success: boolean; path: string; version?: string }>(`${this.basePath}/download-binary`, {})
+      .pipe(tap(() => this.refresh()));
+  }
+
   /** Ask the backend to re-fetch all subscription URLs. */
   refresh(): void {
     this.reload$.next();
