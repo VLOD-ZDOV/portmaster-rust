@@ -45,6 +45,7 @@ import {
 } from './import-dialog/import-dialog.component';
 
 import { subsystems, SubsystemWithExpertise } from './subsystems'
+import { I18nService } from 'src/i18n';
 
 interface Category {
   name: string;
@@ -204,7 +205,21 @@ export class ConfigSettingsViewComponent
     private actionIndicator: ActionIndicatorService,
     private portapi: PortapiService,
     private dialog: SfngDialogService,
+    public i18n: I18nService,
   ) { }
+
+  getSubsystemName(subsys: SubsystemWithExpertise): string {
+    const key = `subsys.${subsys?.ID}`;
+    const tr = this.i18n.t(key);
+    return tr !== key ? tr : (subsys?.Name || '');
+  }
+
+  getCategoryName(name: string): string {
+    const slug = (name || '').toLowerCase().replace(/[\s/]+/g, '-');
+    const key = `cat.${slug}`;
+    const tr = this.i18n.t(key);
+    return tr !== key ? tr : name;
+  }
 
   openImportDialog() {
     const importConfig: ImportConfig = {

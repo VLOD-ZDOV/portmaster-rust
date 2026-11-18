@@ -13,6 +13,7 @@ import { fadeInAnimation, fadeOutAnimation } from '../../animations';
 import { ExpertiseService } from '../../expertise/expertise.service';
 import { SPNAccountDetailsComponent } from '../../spn-account-details';
 import { I18nService } from 'src/i18n';
+import { DNS_PRESETS } from '../dns-presets';
 
 export interface SaveSettingEvent<S extends BaseSetting<any, any> = any> {
   key: string;
@@ -705,6 +706,9 @@ export class GenericSettingComponent<S extends BaseSetting<any, any>> implements
    * The getter makes sure to always return an array.
    */
   get quickSettings(): QuickSetting<SettingValueType<S>>[] {
+    if (this.setting?.Key === 'dns/nameservers') {
+      return DNS_PRESETS as any;
+    }
     if (!this.setting || !this.setting.Annotations[WellKnown.QuickSetting]) {
       return [];
     }
@@ -714,6 +718,14 @@ export class GenericSettingComponent<S extends BaseSetting<any, any>> implements
     return Array.isArray(quickSettings)
       ? quickSettings
       : [quickSettings];
+  }
+
+  quickSettingName(quick: QuickSetting<any>): string {
+    if (!quick?.Name) {
+      return '';
+    }
+    const tr = this.i18n.t(quick.Name);
+    return tr !== quick.Name ? tr : quick.Name;
   }
 
   /**

@@ -89,7 +89,7 @@
 
     <app-menu #quickSettingsMenu>
       <app-menu-item *ngFor="let quick of quickSettings" (click)="applyQuickSetting(quick)">
-        {{quick.Name}}
+        {{ quickSettingName(quick) }}
       </app-menu-item>
     </app-menu>
   </div>

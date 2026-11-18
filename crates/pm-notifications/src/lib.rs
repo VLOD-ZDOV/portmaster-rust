@@ -100,6 +100,7 @@ pub struct ActionTypeWebhookPayload {
 
 /// An action that can be taken for a notification.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Action {
     #[serde(rename = "ID")]
     pub id: String,
@@ -143,6 +144,7 @@ impl Action {
 ///
 /// Field names and order match the Go struct.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Notification {
     #[serde(rename = "EventID")]
     pub event_id: String,

@@ -5,6 +5,8 @@ import { Step } from "@safing/ui";
 import { of } from "rxjs";
 import { mergeMap } from "rxjs/operators";
 import { SaveSettingEvent } from "src/app/shared/config/generic-setting";
+import { I18nService } from "src/i18n";
+import { DNS_PRESETS } from "src/app/shared/config/dns-presets";
 
 interface QuickSettingModel extends QuickSetting<any> {
   active: boolean;
@@ -28,9 +30,21 @@ export class Step3DNSComponent implements Step, OnInit {
     public configService: ConfigService,
     public readonly elementRef: ElementRef,
     private cdr: ChangeDetectorRef,
+    private i18n: I18nService,
   ) { }
 
   private getQuickSettings(): QuickSettingModel[] {
+    if (this.setting?.Key === 'dns/nameservers') {
+      return DNS_PRESETS.map(v => {
+        const tr = this.i18n.t(v.Name);
+        return {
+          ...v,
+          Name: tr !== v.Name ? tr : v.Name,
+          active: false,
+        };
+      });
+    }
+
     if (!this.setting) {
       return [];
     }

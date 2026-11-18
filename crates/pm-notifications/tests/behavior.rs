@@ -301,6 +301,16 @@ async fn database_serves_notifications() {
     assert_eq!(third.snapshot().state, STATE_EXECUTED);
     assert_eq!(*response.borrow(), Some("ack".to_string()));
 
+    // Partial update payload (e.g. from UI resolving an action: {"EventID":"...","SelectedActionID":"..."})
+    let fourth = notifications
+        .notify_info("test:db-4", "Title", "Message")
+        .unwrap();
+    let mut partial_record = internal.get("notifications:all/test:db-4").unwrap();
+    partial_record.data = br#"{"EventID":"test:db-4","SelectedActionID":"ack"}"#.to_vec();
+    internal.put(partial_record).unwrap();
+    assert_eq!(fourth.snapshot().state, STATE_RESPONDED);
+    assert_eq!(fourth.snapshot().selected_action_id, "ack");
+
     // Deleting through the database.
     internal.delete("notifications:all/test:db-2").unwrap();
     assert!(internal.get("notifications:all/test:db-2").is_err());

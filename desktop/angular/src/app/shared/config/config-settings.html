@@ -7,7 +7,7 @@
         [appExpertiseLevelOverwrite]="mustShowSubsystem">
         <li [class.active]="activeSection === subsys.ConfigKeySpace" [class.separated]="subsys.ID === 'core'">
           <span (click)="scrollTo(subsys.ConfigKeySpace)" class="relative">
-            {{subsys.Name}}
+            {{getSubsystemName(subsys)}}
             <span *ngIf="subsys.hasUserDefinedValues && userSettingsMarker" class="user-defined-value"></span>
           </span>
           <ul class="settings">
@@ -16,7 +16,7 @@
                 *appExpertiseLevel="cat.minimumExpertise; data: cat; overwrite: mustShowCategory"
                 (click)="scrollTo(subsys.ConfigKeySpace + ':' + cat.name, cat)">
                 <span class="relative">
-                  {{cat.name}}
+                  {{getCategoryName(cat.name)}}
                   <span *ngIf="cat.hasUserDefinedValues && userSettingsMarker"
                     class="user-defined-value category"></span>
                 </span>
@@ -56,7 +56,7 @@
         [appExpertiseLevelOverwrite]="mustShowSubsystem">
 
         <h2 class="w-full px-0 ml-0 text-xl text-primary" [attr.id]="subsys.ConfigKeySpace">
-          {{subsys.Name}}
+          {{getSubsystemName(subsys)}}
         </h2>
 
         <ng-container *ngFor="let cat of settings.get(subsys.ConfigKeySpace); trackBy: trackCategory; let index=index">
@@ -66,7 +66,7 @@
 
             <div (click)="cat.collapsed = !cat.collapsed" [attr.id]="subsys.ConfigKeySpace +':' + cat.name"
               class="flex items-center justify-between p-3 px-5 bg-gray-300 rounded cursor-pointer select-none">
-              <h4 class="text-md text-primary">{{cat.name}}</h4>
+              <h4 class="text-md text-primary">{{getCategoryName(cat.name)}}</h4>
 
               <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 transition-transform duration-150 transform"
                 [class.rotate-90]="!cat.collapsed" fill="none" viewBox="0 0 24 24" stroke="currentColor">
