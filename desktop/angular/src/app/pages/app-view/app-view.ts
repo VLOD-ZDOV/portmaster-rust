@@ -620,8 +620,7 @@ export class AppViewComponent implements OnInit, OnDestroy {
           profile?.current_plan?.feature_ids?.includes(FeatureID.History) ??
           true;
         this.canViewBW = true;
-        this.canUseSPN =
-          profile?.current_plan?.feature_ids?.includes(FeatureID.SPN) || false;
+        this.canUseSPN = true;
       },
     });
   }

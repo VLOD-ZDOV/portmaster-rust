@@ -116,3 +116,134 @@ pub fn create_special_profile(profile_id: &str, path: &str) -> Option<Profile> {
         ..Profile::default()
     }))
 }
+
+/// Builds the global configuration profile from current config values,
+/// port of Go `service/profile/config-update.go` (`updateGlobalConfigProfile`).
+pub fn build_global_config_profile(config: &std::sync::Arc<pm_config::Config>) -> Profile {
+    let mut map = serde_json::Map::new();
+
+    // SPN / VPN
+    map.insert(
+        crate::options::CFG_OPTION_USE_SPN_KEY.into(),
+        json!(config.get_as_bool(crate::options::CFG_OPTION_USE_SPN_KEY, false)()),
+    );
+    map.insert(
+        crate::options::CFG_OPTION_SPN_USAGE_POLICY_KEY.into(),
+        json!(config.get_as_string_array(crate::options::CFG_OPTION_SPN_USAGE_POLICY_KEY, &[])()),
+    );
+    map.insert(
+        crate::options::CFG_OPTION_TRANSIT_HUB_POLICY_KEY.into(),
+        json!(config.get_as_string_array(crate::options::CFG_OPTION_TRANSIT_HUB_POLICY_KEY, &[])()),
+    );
+    map.insert(
+        crate::options::CFG_OPTION_EXIT_HUB_POLICY_KEY.into(),
+        json!(config.get_as_string_array(crate::options::CFG_OPTION_EXIT_HUB_POLICY_KEY, &[])()),
+    );
+    map.insert(
+        crate::options::CFG_OPTION_ROUTING_ALGORITHM_KEY.into(),
+        json!(config.get_as_string(crate::options::CFG_OPTION_ROUTING_ALGORITHM_KEY, "home")()),
+    );
+
+    // Filter
+    map.insert(
+        crate::CFG_OPTION_DEFAULT_ACTION_KEY.into(),
+        json!(config.get_as_string(crate::CFG_OPTION_DEFAULT_ACTION_KEY, "permit")()),
+    );
+    map.insert(
+        crate::options::CFG_OPTION_BLOCK_SCOPE_LOCAL_KEY.into(),
+        json!(config.get_as_bool(crate::options::CFG_OPTION_BLOCK_SCOPE_LOCAL_KEY, false)()),
+    );
+    map.insert(
+        crate::options::CFG_OPTION_BLOCK_SCOPE_LAN_KEY.into(),
+        json!(config.get_as_bool(crate::options::CFG_OPTION_BLOCK_SCOPE_LAN_KEY, false)()),
+    );
+    map.insert(
+        crate::options::CFG_OPTION_BLOCK_SCOPE_INTERNET_KEY.into(),
+        json!(config.get_as_bool(crate::options::CFG_OPTION_BLOCK_SCOPE_INTERNET_KEY, false)()),
+    );
+    map.insert(
+        crate::options::CFG_OPTION_BLOCK_P2P_KEY.into(),
+        json!(config.get_as_bool(crate::options::CFG_OPTION_BLOCK_P2P_KEY, false)()),
+    );
+    map.insert(
+        crate::options::CFG_OPTION_BLOCK_INBOUND_KEY.into(),
+        json!(config.get_as_bool(crate::options::CFG_OPTION_BLOCK_INBOUND_KEY, false)()),
+    );
+    map.insert(
+        crate::options::CFG_OPTION_REMOVE_OUT_OF_SCOPE_DNS_KEY.into(),
+        json!(config.get_as_bool(crate::options::CFG_OPTION_REMOVE_OUT_OF_SCOPE_DNS_KEY, true)()),
+    );
+    map.insert(
+        crate::options::CFG_OPTION_REMOVE_BLOCKED_DNS_KEY.into(),
+        json!(config.get_as_bool(crate::options::CFG_OPTION_REMOVE_BLOCKED_DNS_KEY, true)()),
+    );
+    map.insert(
+        crate::options::CFG_OPTION_FILTER_SUB_DOMAINS_KEY.into(),
+        json!(config.get_as_bool(crate::options::CFG_OPTION_FILTER_SUB_DOMAINS_KEY, true)()),
+    );
+    map.insert(
+        crate::options::CFG_OPTION_FILTER_CNAME_KEY.into(),
+        json!(config.get_as_bool(crate::options::CFG_OPTION_FILTER_CNAME_KEY, true)()),
+    );
+    map.insert(
+        crate::options::CFG_OPTION_PREVENT_BYPASSING_KEY.into(),
+        json!(config.get_as_bool(crate::options::CFG_OPTION_PREVENT_BYPASSING_KEY, true)()),
+    );
+    map.insert(
+        crate::options::CFG_OPTION_DOMAIN_HEURISTICS_KEY.into(),
+        json!(config.get_as_bool(crate::options::CFG_OPTION_DOMAIN_HEURISTICS_KEY, true)()),
+    );
+    map.insert(
+        crate::options::CFG_OPTION_DISABLE_AUTO_PERMIT_KEY.into(),
+        json!(config.get_as_bool(crate::options::CFG_OPTION_DISABLE_AUTO_PERMIT_KEY, true)()),
+    );
+    map.insert(
+        crate::CFG_OPTION_ENDPOINTS_KEY.into(),
+        json!(config.get_as_string_array(crate::CFG_OPTION_ENDPOINTS_KEY, &[])()),
+    );
+    map.insert(
+        crate::CFG_OPTION_SERVICE_ENDPOINTS_KEY.into(),
+        json!(config.get_as_string_array(crate::CFG_OPTION_SERVICE_ENDPOINTS_KEY, &[])()),
+    );
+    map.insert(
+        crate::options::CFG_OPTION_FILTER_LISTS_KEY.into(),
+        json!(config.get_as_string_array(crate::options::CFG_OPTION_FILTER_LISTS_KEY, &[])()),
+    );
+
+    // History
+    map.insert(
+        crate::options::CFG_OPTION_ENABLE_HISTORY_KEY.into(),
+        json!(config.get_as_bool(crate::options::CFG_OPTION_ENABLE_HISTORY_KEY, false)()),
+    );
+    map.insert(
+        crate::options::CFG_OPTION_KEEP_HISTORY_KEY.into(),
+        json!(config.get_as_int(crate::options::CFG_OPTION_KEEP_HISTORY_KEY, 30)()),
+    );
+
+    // Split tunnel
+    map.insert(
+        crate::options::CFG_OPTION_SPLIT_TUN_USE_KEY.into(),
+        json!(config.get_as_bool(crate::options::CFG_OPTION_SPLIT_TUN_USE_KEY, false)()),
+    );
+    map.insert(
+        crate::options::CFG_OPTION_SPLIT_TUN_INTERFACE_KEY.into(),
+        json!(config.get_as_string(crate::options::CFG_OPTION_SPLIT_TUN_INTERFACE_KEY, "")()),
+    );
+    map.insert(
+        crate::options::CFG_OPTION_SPLIT_TUN_PROXY_KEY.into(),
+        json!(config.get_as_string(crate::options::CFG_OPTION_SPLIT_TUN_PROXY_KEY, "")()),
+    );
+    map.insert(
+        crate::options::CFG_OPTION_SPLIT_TUN_USAGE_POLICY_KEY.into(),
+        json!(config.get_as_string_array(crate::options::CFG_OPTION_SPLIT_TUN_USAGE_POLICY_KEY, &[])()),
+    );
+
+    Profile::new(Profile {
+        id: crate::GLOBAL_CONFIG_PROFILE_ID.to_string(),
+        source: crate::SOURCE_SPECIAL.to_string(),
+        name: crate::GLOBAL_CONFIG_PROFILE_NAME.to_string(),
+        config: map,
+        internal: true,
+        ..Profile::default()
+    })
+}

@@ -1,4 +1,4 @@
-//! Application switcher & VPN split-tunneling router component.
+//! Application list & routing controls styled 1:1 with Portmaster App View.
 
 use leptos::prelude::*;
 
@@ -9,228 +9,215 @@ pub fn AppSwitcher() -> impl IntoView {
     let state = expect_context::<AppState>();
     let profiles = state.profiles;
     let filter_query = state.filter_query;
-    let set_filter_query = state.set_filter_query;
+    let _set_filter_query = state.set_filter_query;
+    let route_by_default = state.route_by_default;
 
-    // Filter tab: "all", "vpn", "direct"
+    // Filter tab: "all", "vpn", "direct", "blocked"
     let (active_tab, set_active_tab) = signal("all".to_string());
 
     view! {
-        <section class="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 shadow-xl backdrop-blur-sm transition-all hover:border-slate-700/80 mt-6">
-            // Header with search and counts
-            <div class="flex items-center justify-between pb-5 border-b border-slate-800/80 mb-5 flex-wrap gap-4">
+        <div class="space-y-4">
+            // Filter Bar matching Portmaster's App View Sub-header
+            <div class="flex items-center justify-between pb-3 border-b border-[#2c2c2c] flex-wrap gap-3">
                 <div class="flex items-center space-x-3">
-                    <div class="w-10 h-10 rounded-xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400">
-                        <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
-                        </svg>
-                    </div>
-                    <div>
-                        <div class="flex items-center space-x-3">
-                            <h2 class="text-lg font-semibold text-white tracking-tight">"App Routing & Protection"</h2>
-                            <span class="px-2 py-0.5 text-xs font-semibold rounded-full bg-slate-800 text-slate-300 border border-slate-700">
-                                {move || format!("{} Apps", profiles.get().len())}
-                            </span>
-                        </div>
-                        <p class="text-xs text-slate-400">"Control per-app VPN routing and firewall behavior"</p>
-                    </div>
+                    <span class="text-sm font-semibold text-white">
+                        {move || format!("{} Applications", profiles.get().len())}
+                    </span>
+                    <span class="text-xs text-[#666666]">
+                        {move || {
+                            let def = route_by_default.get();
+                            if def {
+                                "Global VPN Default: ON"
+                            } else {
+                                "Global VPN Default: OFF (Direct)"
+                            }
+                        }}
+                    </span>
                 </div>
 
-                // Search & Filter controls
-                <div class="flex items-center space-x-3 flex-wrap gap-2">
-                    // Search box
-                    <div class="relative">
-                        <input
-                            type="text"
-                            placeholder="Filter apps..."
-                            prop:value=move || filter_query.get()
-                            on:input=move |ev| {
-                                set_filter_query.set(event_target_value(&ev));
+                // Tabs: All / VPN / Direct / Blocked
+                <div class="flex items-center space-x-1 bg-[#1b1b1b] p-1 rounded-md border border-[#2c2c2c] text-xs">
+                    <button
+                        on:click=move |_| set_active_tab.set("all".to_string())
+                        class=move || {
+                            if active_tab.get() == "all" {
+                                "px-3 py-1 rounded bg-[#2c2c2c] text-white font-medium shadow-sm"
+                            } else {
+                                "px-3 py-1 rounded text-[#ababab] hover:text-white transition-colors"
                             }
-                            class="w-48 sm:w-64 pl-9 pr-3 py-1.5 rounded-xl bg-slate-950/80 border border-slate-700/80 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500 transition-all"
-                        />
-                        <svg class="w-4 h-4 text-slate-500 absolute left-3 top-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                        </svg>
-                    </div>
-
-                    // Tabs: All / VPN / Direct
-                    <div class="flex items-center rounded-xl bg-slate-950 p-1 border border-slate-800 text-xs font-medium">
-                        <button
-                            on:click=move |_| set_active_tab.set("all".to_string())
-                            class=move || {
-                                if active_tab.get() == "all" {
-                                    "px-3 py-1 rounded-lg bg-slate-800 text-white shadow-sm"
-                                } else {
-                                    "px-3 py-1 rounded-lg text-slate-400 hover:text-slate-200 transition-colors"
-                                }
+                        }
+                    >
+                        "All"
+                    </button>
+                    <button
+                        on:click=move |_| set_active_tab.set("vpn".to_string())
+                        class=move || {
+                            if active_tab.get() == "vpn" {
+                                "px-3 py-1 rounded bg-[#4e97fa]/20 text-[#4e97fa] font-medium border border-[#4e97fa]/30"
+                            } else {
+                                "px-3 py-1 rounded text-[#ababab] hover:text-white transition-colors"
                             }
-                        >
-                            "All"
-                        </button>
-                        <button
-                            on:click=move |_| set_active_tab.set("vpn".to_string())
-                            class=move || {
-                                if active_tab.get() == "vpn" {
-                                    "px-3 py-1 rounded-lg bg-cyan-600/30 text-cyan-300 shadow-sm border border-cyan-500/30"
-                                } else {
-                                    "px-3 py-1 rounded-lg text-slate-400 hover:text-slate-200 transition-colors"
-                                }
+                        }
+                    >
+                        "VPN Routed"
+                    </button>
+                    <button
+                        on:click=move |_| set_active_tab.set("direct".to_string())
+                        class=move || {
+                            if active_tab.get() == "direct" {
+                                "px-3 py-1 rounded bg-[#2c2c2c] text-white font-medium shadow-sm"
+                            } else {
+                                "px-3 py-1 rounded text-[#ababab] hover:text-white transition-colors"
                             }
-                        >
-                            "VPN Routed"
-                        </button>
-                        <button
-                            on:click=move |_| set_active_tab.set("direct".to_string())
-                            class=move || {
-                                if active_tab.get() == "direct" {
-                                    "px-3 py-1 rounded-lg bg-slate-800 text-white shadow-sm"
-                                } else {
-                                    "px-3 py-1 rounded-lg text-slate-400 hover:text-slate-200 transition-colors"
-                                }
+                        }
+                    >
+                        "Direct"
+                    </button>
+                    <button
+                        on:click=move |_| set_active_tab.set("blocked".to_string())
+                        class=move || {
+                            if active_tab.get() == "blocked" {
+                                "px-3 py-1 rounded bg-[#e01d1d]/20 text-[#e01d1d] font-medium border border-[#e01d1d]/30"
+                            } else {
+                                "px-3 py-1 rounded text-[#ababab] hover:text-white transition-colors"
                             }
-                        >
-                            "Direct"
-                        </button>
-                    </div>
+                        }
+                    >
+                        "Blocked"
+                    </button>
                 </div>
             </div>
 
-            // App list
-            <div class="space-y-3">
+            // App list rows
+            <div class="space-y-2">
                 {move || {
-                    let query = filter_query.get().to_lowercase();
+                    let q = filter_query.get().to_lowercase();
                     let tab = active_tab.get();
-                    let list = profiles.get();
+                    let _def_route = route_by_default.get();
+                    let all = profiles.get();
 
-                    let filtered: Vec<_> = list.into_iter().filter(|p| {
-                        // Text match
-                        let name_match = p.name.to_lowercase().contains(&query)
-                            || p.presentation_path.to_lowercase().contains(&query)
-                            || p.id.to_lowercase().contains(&query);
+                    let filtered: Vec<_> = all
+                        .into_iter()
+                        .filter(|p| {
+                            // Text filter
+                            let matches_query = q.is_empty()
+                                || p.name.to_lowercase().contains(&q)
+                                || p.presentation_path.to_lowercase().contains(&q)
+                                || p.id.to_lowercase().contains(&q);
 
-                        if !name_match {
-                            return false;
-                        }
+                            if !matches_query {
+                                return false;
+                            }
 
-                        // Tab filter
-                        match tab.as_str() {
-                            "vpn" => p.route_via_vpn(),
-                            "direct" => !p.route_via_vpn(),
-                            _ => true,
-                        }
-                    }).collect();
+                            // Tab filter
+                            let is_vpn = p.route_via_vpn();
+                            let is_blocked = p.default_action() == "block";
+
+                            match tab.as_str() {
+                                "vpn" => is_vpn,
+                                "direct" => !is_vpn,
+                                "blocked" => is_blocked,
+                                _ => true,
+                            }
+                        })
+                        .collect();
 
                     if filtered.is_empty() {
                         view! {
-                            <div class="p-8 text-center rounded-xl bg-slate-950/40 border border-slate-800/60 text-slate-500 text-sm">
-                                "No applications found matching the filter."
+                            <div class="py-12 text-center text-xs text-[#666666] bg-[#1b1b1b] rounded-lg border border-[#2c2c2c]">
+                                "No applications match the selected filter."
                             </div>
                         }.into_any()
                     } else {
                         view! {
-                            <div class="grid grid-cols-1 gap-3">
-                                {filtered.into_iter().map(|p| {
-                                    let app_id = p.id.clone();
-                                    let is_vpn = p.route_via_vpn();
-                                    let display_name = p.display_name().to_string();
-                                    let path = p.presentation_path.clone();
-                                    let action = p.default_action().to_string();
+                            <div class="space-y-2">
+                                {filtered.into_iter().map(|app| {
+                                    let app_id_vpn = app.id.clone();
+                                    let app_id_block = app.id.clone();
+                                    let is_vpn = app.route_via_vpn();
+                                    let action = app.default_action().to_string();
+                                    let is_blocked = action == "block";
 
-                                    let state_toggle = state.clone();
-                                    let id_for_vpn = app_id.clone();
+                                    let initials = app.name.chars().take(2).collect::<String>().to_uppercase();
 
-                                    let state_permit = state.clone();
-                                    let id_for_permit = app_id.clone();
+                                    let state_clone = state.clone();
+                                    let on_toggle_vpn = move |_| {
+                                        state_clone.toggle_app_vpn(app_id_vpn.clone());
+                                    };
 
-                                    let state_block = state.clone();
-                                    let id_for_block = app_id.clone();
-
-                                    let monogram = display_name.chars().next().unwrap_or('A').to_uppercase().to_string();
+                                    let state_clone2 = state.clone();
+                                    let next_action = if is_blocked { "permit".to_string() } else { "block".to_string() };
+                                    let on_toggle_block = move |_| {
+                                        state_clone2.set_app_action(app_id_block.clone(), next_action.clone());
+                                    };
 
                                     view! {
-                                        <div class="bg-slate-950/60 rounded-xl p-4 border border-slate-800/80 flex items-center justify-between flex-wrap gap-4 transition-all hover:border-slate-700">
-                                            // Left: Monogram + Name + Path
-                                            <div class="flex items-center space-x-3 min-w-[200px]">
-                                                <div class=if is_vpn {
-                                                    "w-10 h-10 rounded-xl bg-cyan-500/20 text-cyan-400 border border-cyan-500/40 flex items-center justify-center font-bold text-sm shadow-sm"
-                                                } else {
-                                                    "w-10 h-10 rounded-xl bg-slate-800 text-slate-300 border border-slate-700 flex items-center justify-center font-bold text-sm"
-                                                }>
-                                                    {monogram}
+                                        <div class="bg-[#1b1b1b] border border-[#2c2c2c] hover:border-[#3a3a3a] rounded-lg p-3 flex items-center justify-between gap-4 transition-all">
+                                            // Left: Monogram icon & App Info
+                                            <div class="flex items-center space-x-3 min-w-0">
+                                                <div class="w-10 h-10 rounded bg-[#222222] border border-[#2c2c2c] flex items-center justify-center text-white font-semibold text-xs flex-shrink-0">
+                                                    {initials}
                                                 </div>
-                                                <div>
+                                                <div class="min-w-0">
                                                     <div class="flex items-center space-x-2">
-                                                        <h4 class="text-sm font-semibold text-white tracking-tight">{display_name}</h4>
-                                                        {if is_vpn {
+                                                        <span class="text-sm font-medium text-white truncate">{app.name.clone()}</span>
+                                                        {if is_blocked {
                                                             view! {
-                                                                <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
-                                                                    "VPN"
+                                                                <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-[#e01d1d]/20 text-[#e01d1d] border border-[#e01d1d]/30">
+                                                                    "Blocked"
                                                                 </span>
                                                             }.into_any()
                                                         } else {
                                                             view! { <span/> }.into_any()
                                                         }}
                                                     </div>
-                                                    <p class="text-xs text-slate-500 font-mono truncate max-w-xs">{path}</p>
+                                                    <p class="text-xs text-[#666666] font-mono truncate">{app.presentation_path.clone()}</p>
                                                 </div>
                                             </div>
 
-                                            // Middle: Firewall Action selector (Permit / Ask / Block)
-                                            <div class="flex items-center rounded-lg bg-slate-900 p-0.5 border border-slate-800 text-xs">
+                                            // Right: Quick Action Controls
+                                            <div class="flex items-center space-x-2 flex-shrink-0">
+                                                // VPN Routing Toggle Button
                                                 <button
-                                                    on:click=move |_| state_permit.set_app_action(id_for_permit.clone(), "permit".to_string())
-                                                    class=if action == "permit" {
-                                                        "px-2.5 py-1 rounded-md bg-emerald-500/20 text-emerald-300 font-semibold border border-emerald-500/30"
-                                                    } else {
-                                                        "px-2.5 py-1 text-slate-400 hover:text-slate-200 transition-colors"
-                                                    }
-                                                >
-                                                    "Permit"
-                                                </button>
-                                                <button
-                                                    on:click=move |_| state_block.set_app_action(id_for_block.clone(), "block".to_string())
-                                                    class=if action == "block" {
-                                                        "px-2.5 py-1 rounded-md bg-rose-500/20 text-rose-300 font-semibold border border-rose-500/30"
-                                                    } else {
-                                                        "px-2.5 py-1 text-slate-400 hover:text-slate-200 transition-colors"
-                                                    }
-                                                >
-                                                    "Block"
-                                                </button>
-                                            </div>
-
-                                            // Right: Route via VPN interactive Switch
-                                            <div class="flex items-center space-x-3">
-                                                <span class="text-xs text-slate-400 font-medium">
-                                                    {if is_vpn { "Tunnel via VPN" } else { "Direct (Bypass)" }}
-                                                </span>
-                                                <button
-                                                    on:click=move |_| state_toggle.toggle_app_vpn(id_for_vpn.clone())
-                                                    role="switch"
-                                                    aria-checked=if is_vpn { "true" } else { "false" }
+                                                    on:click=on_toggle_vpn
+                                                    title=if is_vpn { "Routing traffic via VPN (Xray)" } else { "Bypassing VPN (Direct connection)" }
                                                     class=if is_vpn {
-                                                        "relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent bg-cyan-500 transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-cyan-500/50 shadow-md shadow-cyan-500/20"
+                                                        "px-3 py-1.5 rounded text-xs font-medium bg-[#4e97fa]/15 text-[#4e97fa] border border-[#4e97fa]/40 hover:bg-[#4e97fa]/25 flex items-center space-x-1.5 transition-colors"
                                                     } else {
-                                                        "relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent bg-slate-800 transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-slate-700"
+                                                        "px-3 py-1.5 rounded text-xs font-medium bg-[#222222] text-[#ababab] border border-[#2c2c2c] hover:border-[#3a3a3a] hover:text-white flex items-center space-x-1.5 transition-colors"
                                                     }
                                                 >
-                                                    <span
-                                                        class=if is_vpn {
-                                                            "translate-x-5 pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out"
-                                                        } else {
-                                                            "translate-x-0 pointer-events-none inline-block h-5 w-5 transform rounded-full bg-slate-400 shadow-lg ring-0 transition duration-200 ease-in-out"
-                                                        }
-                                                    />
+                                                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                                        <circle cx="12" cy="12" r="9" />
+                                                        <path d="M3.6 9h16.8M3.6 15h16.8" />
+                                                    </svg>
+                                                    <span>{if is_vpn { "VPN: ON" } else { "VPN: OFF" }}</span>
+                                                </button>
+
+                                                // Block/Permit Internet Toggle
+                                                <button
+                                                    on:click=on_toggle_block
+                                                    title=if is_blocked { "Permit Internet" } else { "Block Internet" }
+                                                    class=if is_blocked {
+                                                        "px-3 py-1.5 rounded text-xs font-medium bg-[#e01d1d]/20 text-[#e01d1d] border border-[#e01d1d]/40 hover:bg-[#e01d1d]/30 flex items-center space-x-1 transition-colors"
+                                                    } else {
+                                                        "px-3 py-1.5 rounded text-xs font-medium bg-[#222222] text-[#ababab] border border-[#2c2c2c] hover:border-[#3a3a3a] hover:text-white flex items-center space-x-1 transition-colors"
+                                                    }
+                                                >
+                                                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+                                                    </svg>
+                                                    <span>{if is_blocked { "Unblock" } else { "Block" }}</span>
                                                 </button>
                                             </div>
                                         </div>
                                     }
-                                }).collect_view()}
+                                }).collect::<Vec<_>>()}
                             </div>
                         }.into_any()
                     }
                 }}
             </div>
-        </section>
+        </div>
     }
 }

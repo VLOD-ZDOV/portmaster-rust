@@ -68,7 +68,7 @@ pub use profile::{
     DEFAULT_ACTION_NOT_SET, DEFAULT_ACTION_PERMIT, DEFAULT_ACTION_PERMIT_VALUE,
 };
 pub use proxy_url::validate_upstream_proxy_url;
-pub use special::create_special_profile;
+pub use special::{build_global_config_profile, create_special_profile};
 pub use store::{encode_profile, Error as StoreError, ProfileStore};
 
 /// Profile source: local, editable profiles.
@@ -111,6 +111,10 @@ pub const PORTMASTER_APP_PROFILE_NAME: &str = "Portmaster User Interface";
 pub const PORTMASTER_NOTIFIER_PROFILE_ID: &str = "_portmaster-notifier";
 /// Name of the Portmaster notifier component profile.
 pub const PORTMASTER_NOTIFIER_PROFILE_NAME: &str = "Portmaster Notifier";
+/// Profile ID of the global configuration reference profile.
+pub const GLOBAL_CONFIG_PROFILE_ID: &str = "global-config";
+/// Name of the global configuration reference profile.
+pub const GLOBAL_CONFIG_PROFILE_NAME: &str = "Global Configuration";
 
 /// Returns the scoped profile ID (`source/id`).
 pub fn make_scoped_id(source: &str, id: &str) -> String {
@@ -133,6 +137,7 @@ pub fn is_special_profile_id(id: &str) -> bool {
             | PORTMASTER_PROFILE_ID
             | PORTMASTER_APP_PROFILE_ID
             | PORTMASTER_NOTIFIER_PROFILE_ID
+            | GLOBAL_CONFIG_PROFILE_ID
     )
 }
 
@@ -146,6 +151,7 @@ pub fn special_profile_name(id: &str) -> Option<&'static str> {
         PORTMASTER_PROFILE_ID => Some(PORTMASTER_PROFILE_NAME),
         PORTMASTER_APP_PROFILE_ID => Some(PORTMASTER_APP_PROFILE_NAME),
         PORTMASTER_NOTIFIER_PROFILE_ID => Some(PORTMASTER_NOTIFIER_PROFILE_NAME),
+        GLOBAL_CONFIG_PROFILE_ID => Some(GLOBAL_CONFIG_PROFILE_NAME),
         _ => None,
     }
 }

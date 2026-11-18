@@ -1,28 +1,47 @@
 @import "tailwindcss";
 
+@theme {
+  --color-pm-bg: #121213;
+  --color-pm-panel: #1b1b1b;
+  --color-pm-card: #222222;
+  --color-pm-card-hover: #292929;
+  --color-pm-border: #2c2c2c;
+  --color-pm-border-light: #3a3a3a;
+  --color-pm-text-primary: #ffffff;
+  --color-pm-text-secondary: #ababab;
+  --color-pm-text-tertiary: #666666;
+  --color-pm-blue: #4e97fa;
+  --color-pm-blue-hover: #3d86e8;
+  --color-pm-green: #1de966;
+  --color-pm-green-dim: #18823d;
+  --color-pm-red: #e01d1d;
+  --color-pm-red-dim: #811818;
+  --color-pm-yellow: #e9d81d;
+}
+
 @layer base {
   body {
-    background-color: #090d16;
-    color: #e2e8f0;
+    background-color: #121213;
+    color: #ffffff;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   }
 }
 
-/* Custom scrollbars */
+/* Custom scrollbars matching Portmaster */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #0f172a;
+  background: #121213;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #334155;
+  background: #2c2c2c;
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  background: #474747;
 }

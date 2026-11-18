@@ -556,6 +556,13 @@ impl Service {
             profile_store,
         )
         .map_err(|error| anyhow::anyhow!("load local profiles: {error}"))?);
+
+        // Save initial global configuration profile (profiles/special/global-config)
+        // so UI and clients have a reference copy of all global settings.
+        let initial_global_profile = pm_profile::build_global_config_profile(&config);
+        if let Err(error) = profiles.store().save(&initial_global_profile) {
+            tracing::warn!(%error, "profile: failed to save initial global config profile");
+        }
         let ip_info = Arc::new(pm_resolver::IpInfoStore::new(
             databases.interface(pm_resolver::ipinfo::ip_info_interface_options()),
         ));
@@ -879,6 +886,12 @@ impl Service {
             {
                 if let Err(error) = profile_config.refresh() {
                     tracing::warn!(%error, "profile: some global settings are invalid");
+                }
+                // Sync global-config profile with current config so UI subscribers
+                // receive updated default values immediately.
+                let global_profile = pm_profile::build_global_config_profile(&config);
+                if let Err(error) = firewall_profiles.store().save(&global_profile) {
+                    tracing::warn!(%error, "profile: failed to update global config profile");
                 }
                 // Like Go's EventConfigChange callback "update API keys":
                 // reparse core/apiKeys on every config change so keys added or

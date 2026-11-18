@@ -371,18 +371,18 @@ pub fn register_options(config: &Config) -> Result<(), pm_config::Error> {
     )?;
 
     config.register(base(
-        "Use SPN",
+        "Route Through VPN (Xray)",
         CFG_OPTION_USE_SPN_KEY,
         DESC_USE_SPN,
         OPT_TYPE_BOOL,
-        json!(true),
+        json!(false),
         129,
         "General",
     ))?;
 
     config.register(endpoint_list(
         base(
-            "SPN Rules",
+            "Xray Routing Rules",
             CFG_OPTION_SPN_USAGE_POLICY_KEY,
             DESC_SPN_USAGE_POLICY,
             OPT_TYPE_STRING_ARRAY,
@@ -431,7 +431,7 @@ pub fn register_options(config: &Config) -> Result<(), pm_config::Error> {
 
     config.register(
         base(
-            "Select SPN Routing Algorithm",
+            "Select VPN Routing Algorithm",
             CFG_OPTION_ROUTING_ALGORITHM_KEY,
             DESC_ROUTING_ALGORITHM,
             OPT_TYPE_STRING,

@@ -108,19 +108,6 @@ pub fn register_options(config: &Config) -> pm_config::Result<()> {
     config.register(
         ConfigOption::new(
             "Xray Binary",
-            CFG_XRAY_BINARY,
-            "Путь к бинарнику Xray. Автопоиск проверяет: <папка Portmaster>/xray-rust, /usr/bin/xray-rust, /usr/local/bin/xray-rust, /opt/xray-rust/xray-rust, /opt/v2rayn-bin/bin/xray/xray или PATH.",
-            pm_config::OPT_TYPE_STRING,
-            Value::String(default_binary.clone()),
-        )
-        .with_expertise_level(pm_config::EXPERTISE_LEVEL_USER)
-        .with_possible_values(xray_binary_options())
-        .with_annotation(pm_config::DISPLAY_HINT_ANNOTATION, json!(pm_config::DISPLAY_HINT_ONE_OF))
-        .with_annotation(pm_config::CATEGORY_ANNOTATION, json!("General")),
-    )?;
-    config.register(
-        ConfigOption::new(
-            "Xray Binary",
             CFG_XRAY_BINARY_NAMESPACED,
             "Path to the Xray binary. Select a pre-installed binary or auto-detect.",
             pm_config::OPT_TYPE_STRING,

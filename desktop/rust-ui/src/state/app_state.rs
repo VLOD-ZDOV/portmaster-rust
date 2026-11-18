@@ -7,11 +7,23 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::client::PortApiClient;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewTab {
+    Apps,
+    Vpn,
+    Settings,
+    Monitor,
+}
+
 /// Global context holding UI signals and PortAPI interaction logic.
 #[derive(Clone)]
 #[allow(dead_code)]
 pub struct AppState {
     pub client: PortApiClient,
+    pub active_view: ReadSignal<ViewTab>,
+    pub set_active_view: WriteSignal<ViewTab>,
+    pub route_by_default: ReadSignal<bool>,
+    pub set_route_by_default: WriteSignal<bool>,
     pub xray_status: ReadSignal<XrayStatus>,
     pub set_xray_status: WriteSignal<XrayStatus>,
     pub xray_nodes: ReadSignal<Vec<XrayNode>>,
@@ -134,6 +146,8 @@ impl AppState {
         term.set_default_action("ask");
         initial_profiles.push(term);
 
+        let (active_view, set_active_view) = signal(ViewTab::Apps);
+        let (route_by_default, set_route_by_default) = signal(false);
         let (xray_status, set_xray_status) = signal(initial_status);
         let (xray_nodes, set_xray_nodes) = signal(initial_nodes);
         let (profiles, set_profiles) = signal(initial_profiles);
@@ -142,6 +156,10 @@ impl AppState {
 
         let state = Self {
             client,
+            active_view,
+            set_active_view,
+            route_by_default,
+            set_route_by_default,
             xray_status,
             set_xray_status,
             xray_nodes,
@@ -227,6 +245,27 @@ impl AppState {
                 });
             }
             set_busy.set(false);
+        });
+    }
+
+    /// Toggles "Route Through VPN (Xray) by Default" global setting.
+    pub fn toggle_route_by_default(&self) {
+        let current = self.route_by_default.get_untracked();
+        let new_val = !current;
+        self.set_route_by_default.set(new_val);
+
+        let client = self.client.clone();
+        spawn_local(async move {
+            let _ = client
+                .put(
+                    "update",
+                    "config:spn/use",
+                    serde_json::json!({
+                        "Key": "spn/use",
+                        "Value": new_val
+                    }),
+                )
+                .await;
         });
     }
 

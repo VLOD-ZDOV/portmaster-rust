@@ -127,7 +127,7 @@ impl GlobalProfileConfig {
             ),
             enable_history: getter!(config, get_as_bool, CFG_OPTION_ENABLE_HISTORY_KEY, false),
             keep_history: getter!(config, get_as_int, CFG_OPTION_KEEP_HISTORY_KEY, 30),
-            use_spn: getter!(config, get_as_bool, CFG_OPTION_USE_SPN_KEY, true),
+            use_spn: getter!(config, get_as_bool, CFG_OPTION_USE_SPN_KEY, false),
             routing_algorithm: getter!(
                 config,
                 get_as_string,

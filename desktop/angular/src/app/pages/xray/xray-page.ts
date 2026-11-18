@@ -82,7 +82,7 @@ export class XrayPageComponent implements OnInit, OnDestroy {
     this.configService.watch<BoolSetting>('spn/use')
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe(v => {
-        this.routeByDefault = v ?? true;
+        this.routeByDefault = v ?? false;
         this.cdr.markForCheck();
       });
 
