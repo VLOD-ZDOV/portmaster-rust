@@ -94,6 +94,15 @@ pub fn register_api(xray: &Arc<Xray>, api: &Api) -> pm_api::Result<()> {
                     } else {
                         id.to_string()
                     };
+                    let active_sub_id = subscriptions.store.active_subscription_id();
+                    let all_subs_count = subscriptions.store.list().map(|l| l.len()).unwrap_or(0);
+                    if active_sub_id.as_deref() == Some(&id) || all_subs_count <= 1 {
+                        let _ = subscriptions.manager.disconnect();
+                        subscriptions.store.clear_active();
+                        let _ = subscriptions.config.set_config_option("spn/enable", serde_json::Value::Bool(false));
+                        let _ = subscriptions.config.set_config_option("splittun/enable", serde_json::Value::Bool(false));
+                        let _ = subscriptions.config.set_config_option("splittun/proxy", serde_json::Value::String(String::new()));
+                    }
                     subscriptions.store.remove(&id).map_err(crate::Error::api)?;
                     serde_json::to_value(json!({ "removed": id })).map_err(pm_api::ApiError::Json)
                 }
@@ -117,6 +126,15 @@ pub fn register_api(xray: &Arc<Xray>, api: &Api) -> pm_api::Result<()> {
         .with_write_method("DELETE")
         .with_struct(move |request| {
             let id = request.param("id").unwrap_or_default();
+            let active_sub_id = remove_by_path.store.active_subscription_id();
+            let all_subs_count = remove_by_path.store.list().map(|l| l.len()).unwrap_or(0);
+            if active_sub_id.as_deref() == Some(id) || all_subs_count <= 1 {
+                let _ = remove_by_path.manager.disconnect();
+                remove_by_path.store.clear_active();
+                let _ = remove_by_path.config.set_config_option("spn/enable", serde_json::Value::Bool(false));
+                let _ = remove_by_path.config.set_config_option("splittun/enable", serde_json::Value::Bool(false));
+                let _ = remove_by_path.config.set_config_option("splittun/proxy", serde_json::Value::String(String::new()));
+            }
             remove_by_path
                 .store
                 .remove(id)
@@ -242,6 +260,7 @@ pub fn register_api(xray: &Arc<Xray>, api: &Api) -> pm_api::Result<()> {
                 .map_err(crate::Error::api)?;
             let inbound_port = payload.inbound_port.unwrap_or(connect.inbound_port);
             let _ = connect.config.set_config_option("spn/enable", serde_json::Value::Bool(true));
+            let _ = connect.config.set_config_option("splittun/enable", serde_json::Value::Bool(true));
             let _ = connect.config.set_config_option(
                 "splittun/proxy",
                 serde_json::Value::String(format!("socks5://127.0.0.1:{inbound_port}")),
@@ -264,9 +283,10 @@ pub fn register_api(xray: &Arc<Xray>, api: &Api) -> pm_api::Result<()> {
         )
         .with_write(PERMIT_ADMIN)
         .with_struct(move |_| {
-            disconnect.manager.disconnect().map_err(crate::Error::api)?;
+            let _ = disconnect.manager.disconnect();
             disconnect.store.clear_active();
             let _ = disconnect.config.set_config_option("spn/enable", serde_json::Value::Bool(false));
+            let _ = disconnect.config.set_config_option("splittun/enable", serde_json::Value::Bool(false));
             let _ = disconnect.config.set_config_option("splittun/proxy", serde_json::Value::String(String::new()));
             serde_json::to_value(disconnect.manager.status()).map_err(pm_api::ApiError::Json)
         }),

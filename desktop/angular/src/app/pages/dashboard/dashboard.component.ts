@@ -520,4 +520,15 @@ export class DashboardPageComponent implements OnInit, AfterViewInit {
         this.i18n.t('dash.logoutDone')
       ))
   }
+
+  disconnectXray(): void {
+    this.xrayService.disconnect().subscribe({
+      next: () => {
+        this.actionIndicator.success(this.i18n.t('xray.disconnected'), '');
+      },
+      error: (err) => {
+        this.actionIndicator.error(this.i18n.t('xray.disconnectFailed', { error: err?.message || err }), '');
+      }
+    });
+  }
 }

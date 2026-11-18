@@ -759,6 +759,7 @@ export const ru: Record<string, string> = {
   "xray.openRoutingRules": "Настроить правила маршрутизации Xray",
   "xray.disconnect": "Отключить",
   "xray.disconnected": "Xray отключен",
+  "xray.disconnectFailed": "Не удалось отключить: {{ error }}",
   "xray.routingSettingSaved": "Настройки маршрутизации сохранены",
   "xray.routeByDefaultOn": "Включено",
   "xray.routeByDefaultOff": "Выключено",

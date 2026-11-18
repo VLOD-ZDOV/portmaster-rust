@@ -328,12 +328,23 @@ fn main() {
                 // there's no need to handle that case here.
                 if let WindowEvent::CloseRequested { api, .. } = event {
                     debug!(
-                        "window (label={}) close request received, hiding to tray.",
+                        "window (label={}) close request received",
                         label
                     );
 
                     // Manually save the window state on close attempt.
                     let _ = handle.save_window_state(WINDOW_STATE_FLAGS_TO_SAVE);
+
+                    // If backend is not reachable (disconnected or shut down), exit the UI process completely
+                    if !handle.portmaster().is_reachable() {
+                        log::info!("[tauri] backend is not reachable on close request; exiting UI process");
+                        handle.exit(0);
+                        std::thread::spawn(|| {
+                            std::thread::sleep(std::time::Duration::from_millis(300));
+                            std::process::exit(0);
+                        });
+                        return;
+                    }
 
                     api.prevent_close();
                     if let Some(window) = handle.get_webview_window(label.as_str()) {

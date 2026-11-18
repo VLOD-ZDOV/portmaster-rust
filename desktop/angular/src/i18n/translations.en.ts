@@ -759,6 +759,7 @@ export const en: Record<string, string> = {
   "xray.openRoutingRules": "Configure Xray routing rules",
   "xray.disconnect": "Disconnect",
   "xray.disconnected": "Xray disconnected",
+  "xray.disconnectFailed": "Failed to disconnect: {{ error }}",
   "xray.routingSettingSaved": "Routing setting saved",
   "xray.routeByDefaultOn": "Enabled",
   "xray.routeByDefaultOff": "Disabled",

@@ -190,6 +190,10 @@ pub fn start_service<R: Runtime>(window: Window<R>, response_id: String) -> Resu
 pub fn exit_ui<R: Runtime>(app: tauri::AppHandle<R>) {
     log::info!("[tauri] exit_ui invoked from frontend, terminating UI process");
     app.exit(0);
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        std::process::exit(0);
+    });
 }
 
 #[tauri::command]
@@ -203,5 +207,7 @@ pub fn shutdown_app<R: Runtime>(
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
         handle.exit(0);
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        std::process::exit(0);
     });
 }

@@ -37,6 +37,10 @@
           IP: {{ xs.exitIp }} <span *ngIf="xs.exitCountry">({{ xs.exitCountry }})</span>
         </span>
       </div>
+      <button *ngIf="xs.connected || xs.nodeId" type="button" (click)="disconnectXray()"
+        class="text-xs font-normal text-white cursor-pointer btn bg-red-400 hover:bg-red-300 py-1.5 px-3 whitespace-nowrap">
+        {{ 'xray.disconnect' | t: undefined : ('' | i18nVersion) }}
+      </button>
       <button routerLink="/xray"
         class="text-xs font-normal text-white cursor-pointer btn bg-blue bg-opacity-80 hover:bg-opacity-100 hover:bg-blue py-1.5 px-3 whitespace-nowrap">
         {{ 'dash.manageXray' | t: undefined : ('' | i18nVersion) }}

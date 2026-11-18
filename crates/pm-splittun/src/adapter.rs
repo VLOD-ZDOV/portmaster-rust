@@ -90,9 +90,15 @@ impl SplitTunnelEnv for SplitTunnelEnvAdapter {
     }
 
     fn use_split_tun(&self, conn: &Connection) -> bool {
-        conn.process
-            .as_ref()
-            .is_some_and(|process| self.profiles.use_split_tun(process))
+        let Some(process) = conn.process.as_ref() else {
+            return false;
+        };
+        if !self.profiles.use_split_tun(process) {
+            return false;
+        }
+        let proxy = self.profiles.split_tun_proxy(process);
+        let interface = self.profiles.split_tun_interface(process);
+        !proxy.trim().is_empty() || !interface.trim().is_empty()
     }
 
     fn split_tun_proxy(&self, conn: &Connection) -> String {

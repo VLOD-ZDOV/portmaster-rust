@@ -16,7 +16,7 @@ use crate::api_auth::{ApiAuthenticator, SystemLookup};
 use crate::cli::Options;
 
 /// Current Portmaster release version.
-pub const PORTMASTER_VERSION: &str = "2.2.16";
+pub const PORTMASTER_VERSION: &str = "2.2.17";
 /// GitHub repository for update checks.
 pub const CFG_GITHUB_RELEASE_REPO: &str = "core/updates/githubRepo";
 
@@ -421,7 +421,7 @@ impl Service {
         let shutdown_token = service_stop_token.clone();
         api.register_endpoint(
             pm_api::Endpoint::new("core/shutdown", "Shut Down Portmaster", "Shut down the Portmaster Core Service and all UI components.")
-                .with_write(pm_api::PERMIT_SELF)
+                .with_write(pm_api::PERMIT_ADMIN)
                 .with_action(move |_| {
                     shutdown_token.cancel();
                     Ok("shutdown initiated".to_string())
@@ -1133,11 +1133,13 @@ impl Service {
             }
         });
 
-        // Start the split tunnel proxies when split tunneling or Xray routing is enabled.
+        // Start the split tunnel proxies when split tunneling or Xray routing is enabled and configured.
         let proxies_wanted = {
             let splittun_on = self.config.get_as_bool("splittun/enable", false)();
             let spn_on = self.config.get_as_bool("spn/enable", false)();
-            splittun_on || spn_on
+            let proxy_str = self.config.get_as_string("splittun/proxy", "")();
+            let iface_str = self.config.get_as_string("splittun/interface", "")();
+            (splittun_on || spn_on) && (!proxy_str.trim().is_empty() || !iface_str.trim().is_empty())
         };
         if proxies_wanted {
             if let Err(error) = self
@@ -1166,7 +1168,9 @@ impl Service {
                         }
                         let splittun_on = config_dyn.get_as_bool("splittun/enable", false)();
                         let spn_on = config_dyn.get_as_bool("spn/enable", false)();
-                        let wanted = splittun_on || spn_on;
+                        let proxy_str = config_dyn.get_as_string("splittun/proxy", "")();
+                        let iface_str = config_dyn.get_as_string("splittun/interface", "")();
+                        let wanted = (splittun_on || spn_on) && (!proxy_str.trim().is_empty() || !iface_str.trim().is_empty());
                         let running = proxies_dyn.is_ready();
                         if wanted && !running {
                             if let Err(err) = proxies_dyn.start(queue_dyn.clone(), ifaces_dyn.as_ref()).await {

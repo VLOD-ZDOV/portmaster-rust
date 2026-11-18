@@ -349,6 +349,8 @@ pub fn setup_tray_menu(
                 tokio::spawn(async move {
                     tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
                     handle.exit(0);
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                    std::process::exit(0);
                 });
             }
             SYSTEM_THEME_KEY => update_icon_theme(app, dark_light::Mode::Unspecified),

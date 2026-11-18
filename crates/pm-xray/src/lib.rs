@@ -524,6 +524,16 @@ impl Xray {
     /// the `traffic` field unset so the status endpoint stays usable.
     pub fn status(&self) -> XrayStatus {
         let mut status = self.manager.status();
+        if !status.connected {
+            let spn_on = self.config.get_as_bool("spn/enable", false)();
+            let splittun_on = self.config.get_as_bool("splittun/enable", false)();
+            if spn_on || splittun_on {
+                tracing::info!("xray: status is not connected, resetting proxy config");
+                let _ = self.config.set_config_option("spn/enable", serde_json::Value::Bool(false));
+                let _ = self.config.set_config_option("splittun/enable", serde_json::Value::Bool(false));
+                let _ = self.config.set_config_option("splittun/proxy", serde_json::Value::String(String::new()));
+            }
+        }
         if status.connected && self.stats.available() {
             match self.stats.traffic("proxy") {
                 Ok(snapshot) => {
@@ -559,15 +569,24 @@ impl Xray {
                 binary = XRAY_BINARY_NAME,
                 "xray: binary not found; integration stays inactive"
             );
+            let _ = self.config.set_config_option("spn/enable", serde_json::Value::Bool(false));
+            let _ = self.config.set_config_option("splittun/enable", serde_json::Value::Bool(false));
+            let _ = self.config.set_config_option("splittun/proxy", serde_json::Value::String(String::new()));
             return;
         }
         let auto_connect = self.config.get_as_bool(CFG_XRAY_AUTO_CONNECT, true)();
         if !auto_connect {
             tracing::info!("xray: auto-connect is disabled in settings");
+            let _ = self.config.set_config_option("spn/enable", serde_json::Value::Bool(false));
+            let _ = self.config.set_config_option("splittun/enable", serde_json::Value::Bool(false));
+            let _ = self.config.set_config_option("splittun/proxy", serde_json::Value::String(String::new()));
             return;
         }
         let Some(node_id) = self.store.last_node_id() else {
             tracing::info!("xray: no previous active node found to restore");
+            let _ = self.config.set_config_option("spn/enable", serde_json::Value::Bool(false));
+            let _ = self.config.set_config_option("splittun/enable", serde_json::Value::Bool(false));
+            let _ = self.config.set_config_option("splittun/proxy", serde_json::Value::String(String::new()));
             return;
         };
         match self.store.get_node(&node_id) {
@@ -577,6 +596,7 @@ impl Xray {
                     tracing::warn!(%error, "xray: failed to restore selected node");
                     let _ = self.config.set_config_option("spn/enable", serde_json::Value::Bool(false));
                     let _ = self.config.set_config_option("splittun/enable", serde_json::Value::Bool(false));
+                    let _ = self.config.set_config_option("splittun/proxy", serde_json::Value::String(String::new()));
                 } else {
                     let _ = self.store.set_active(&node.subscription_id, &node.id);
                     let _ = self.config.set_config_option("spn/enable", serde_json::Value::Bool(true));
@@ -587,12 +607,20 @@ impl Xray {
                     );
                 }
             }
-            Err(error) => tracing::warn!(%error, "xray: stored active node is gone"),
+            Err(error) => {
+                tracing::warn!(%error, "xray: stored active node is gone");
+                let _ = self.config.set_config_option("spn/enable", serde_json::Value::Bool(false));
+                let _ = self.config.set_config_option("splittun/enable", serde_json::Value::Bool(false));
+                let _ = self.config.set_config_option("splittun/proxy", serde_json::Value::String(String::new()));
+            }
         }
     }
 
     /// Stops the child process; called when the core shuts down.
     pub fn stop(&self) {
         self.manager.stop();
+        let _ = self.config.set_config_option("spn/enable", serde_json::Value::Bool(false));
+        let _ = self.config.set_config_option("splittun/enable", serde_json::Value::Bool(false));
+        let _ = self.config.set_config_option("splittun/proxy", serde_json::Value::String(String::new()));
     }
 }

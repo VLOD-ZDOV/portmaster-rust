@@ -454,8 +454,17 @@ impl SplitTunnelProfiles for CoreProfiles {
     }
 
     fn use_split_tun(&self, process: &Process) -> bool {
-        self.layered_for(process)
-            .is_some_and(|layered| layered.use_split_tun())
+        let splittun_enabled = self.config.get_as_bool("splittun/enable", false)();
+        let spn_enabled = self.config.get_as_bool("spn/enable", false)();
+        if !splittun_enabled && !spn_enabled {
+            return false;
+        }
+
+        self.layered_for(process).is_some_and(|layered| {
+            let use_st = splittun_enabled && layered.use_split_tun();
+            let use_spn = spn_enabled && layered.use_spn();
+            use_st || use_spn
+        })
     }
 
     fn split_tun_proxy(&self, process: &Process) -> String {

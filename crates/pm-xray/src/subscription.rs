@@ -927,6 +927,11 @@ impl SubscriptionStore {
             .and_then(|value| value.split_once(':').map(|(_, node)| node.to_string()))
     }
 
+    pub fn active_subscription_id(&self) -> Option<String> {
+        self.active_raw()
+            .and_then(|value| value.split_once(':').map(|(sub, _)| sub.to_string()))
+    }
+
     pub fn last_node_id(&self) -> Option<String> {
         self.db
             .get(&full_key(LAST_NODE_KEY))

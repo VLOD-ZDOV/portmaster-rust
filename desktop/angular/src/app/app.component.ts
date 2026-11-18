@@ -110,6 +110,7 @@ export class AppComponent implements OnInit, AfterViewInit {
 
   shutdownApp(e: Event) {
     e.stopPropagation();
+    this.exitService.setShutdownOverlay();
     if (this.integration instanceof TauriIntegrationService) {
       (this.integration as TauriIntegrationService).shutdownApp();
     } else {

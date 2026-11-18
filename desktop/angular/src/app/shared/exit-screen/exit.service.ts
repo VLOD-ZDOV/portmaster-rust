@@ -121,6 +121,10 @@ export class ExitService {
     })
   }
 
+  setShutdownOverlay() {
+    this._showOverlay.next(MessageShutdown);
+  }
+
   shutdownPortmaster() {
     this.dialog.confirm({
       canCancel: true,
@@ -136,6 +140,7 @@ export class ExitService {
       ]
     })
       .onAction('shutdown', () => {
+        this._showOverlay.next(MessageShutdown);
         if (this.integration instanceof TauriIntegrationService) {
           (this.integration as TauriIntegrationService).shutdownApp();
           return;

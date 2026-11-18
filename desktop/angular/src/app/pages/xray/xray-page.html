@@ -35,7 +35,7 @@
     </div>
 
     <div class="flex flex-row items-center gap-2">
-      <button *ngIf="(status$ | async)?.connected" type="button" (click)="disconnect()"
+      <button *ngIf="(status$ | async)?.connected || (status$ | async)?.nodeId" type="button" (click)="disconnect()"
         class="px-3 py-1.5 text-xs font-medium rounded bg-red-400 text-white hover:bg-red-300 whitespace-nowrap cursor-pointer">
         {{ 'xray.disconnect' | t: undefined : ('' | i18nVersion) }}
       </button>
@@ -127,10 +127,16 @@
         <div class="text-xxs text-secondary">
           {{ pin.pin.VerifiedOwner }} · {{ pin.entity.Country }} · {{ pin.pin.EntityV4?.IP }}
         </div>
-        <button type="button" (click)="connect(pin)"
-          class="mt-2 px-3 py-1 text-xs font-medium text-white uppercase rounded-full bg-blue hover:bg-blue">
-          {{ 'xray.connectTo' | t: { node: pin.pin.Name }: ('' | i18nVersion) }}
-        </button>
+        <div class="flex flex-row gap-2 mt-2">
+          <button *ngIf="(status$ | async)?.nodeId === pin.pin.ID && (status$ | async)?.connected" type="button" (click)="disconnect()"
+            class="px-3 py-1 text-xs font-medium text-white uppercase rounded-full bg-red-400 hover:bg-red-300 cursor-pointer">
+            {{ 'xray.disconnect' | t: undefined : ('' | i18nVersion) }}
+          </button>
+          <button *ngIf="(status$ | async)?.nodeId !== pin.pin.ID || !(status$ | async)?.connected" type="button" (click)="connect(pin)"
+            class="px-3 py-1 text-xs font-medium text-white uppercase rounded-full bg-blue hover:bg-blue cursor-pointer">
+            {{ 'xray.connectTo' | t: { node: pin.pin.Name }: ('' | i18nVersion) }}
+          </button>
+        </div>
       </section>
 
       <section class="flex-1 min-h-0">
