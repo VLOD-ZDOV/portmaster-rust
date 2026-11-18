@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/pm-dsd",
+    "crates/pm-models",
     "crates/pm-record",
     "crates/pm-proxy",
     "crates/pm-query",
@@ -51,6 +52,7 @@ members = [
 ]
 exclude = [
     "desktop/tauri/src-tauri",
+    "desktop/rust-ui",
 ]
 
 [workspace.package]

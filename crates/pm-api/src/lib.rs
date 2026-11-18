@@ -1092,6 +1092,10 @@ pub async fn serve(api: Arc<Api>, listener: tokio::net::TcpListener) -> std::io:
             database_ws::DB_API_PATH,
             axum::routing::get(database_ws::database_ws_upgrade),
         )
+        .route(
+            "/v1/database/ws",
+            axum::routing::get(database_ws::database_ws_upgrade),
+        )
         .route("/assets/{*path}", axum::routing::get(ui::serve_assets))
         .route(
             "/ui/modules/{module}",

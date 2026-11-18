@@ -1,0 +1,5 @@
+/target
+/dist
+/.trunk
+.trunk-lock
+style/output.css

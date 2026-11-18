@@ -1,0 +1,32 @@
+[package]
+name = "pm-rust-ui"
+version = "0.1.0"
+edition = "2021"
+description = "Native Leptos CSR User Interface for Portmaster"
+license = "GPL-3.0-only"
+publish = false
+
+[workspace]
+
+[dependencies]
+pm-models = { path = "../../crates/pm-models" }
+leptos = { version = "0.8.23", features = ["csr"] }
+wasm-bindgen = "0.2.130"
+wasm-bindgen-futures = "0.4.50"
+gloo-net = { version = "0.6.0", features = ["websocket"] }
+futures = "0.3.31"
+js-sys = "0.3.84"
+web-sys = { version = "0.3.107", features = [
+    "WebSocket",
+    "MessageEvent",
+    "BinaryType",
+    "CloseEvent",
+    "ErrorEvent",
+    "Window",
+    "Location",
+    "Performance",
+    "console",
+] }
+console_error_panic_hook = "0.1.7"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
