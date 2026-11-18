@@ -103,6 +103,16 @@ export class AppComponent implements OnInit, AfterViewInit {
     (window as any).portapi = portapi;
   }
 
+  exitApp(e: Event) {
+    e.stopPropagation();
+    this.integration.exitApp();
+  }
+
+  shutdownApp(e: Event) {
+    e.stopPropagation();
+    this.exitService.shutdownPortmaster();
+  }
+
   onSideDashChange(state: 'expanded' | 'collapsed' | 'force-overlay') {
     if (state === 'force-overlay') {
       state = 'expanded';

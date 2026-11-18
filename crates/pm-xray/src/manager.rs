@@ -225,7 +225,16 @@ impl XrayManager {
         state.exit_longitude = None;
 
         match self.adapter.spawn(&binary_path, &config) {
-            Ok(child) => {
+            Ok(mut child) => {
+                // If child process exits immediately (e.g. invalid config or port conflict), catch it early
+                std::thread::sleep(std::time::Duration::from_millis(60));
+                if let Ok(Some(exit_status)) = child.try_wait() {
+                    let err = format!("xray process exited immediately with status {exit_status}");
+                    tracing::error!(%err, "xray: startup failed");
+                    state.state = ProcessState::Failed;
+                    state.error = Some(err.clone());
+                    return Err(Error::Process(err));
+                }
                 tracing::info!(pid = child.id(), config = %config.display(), "xray: process started");
                 state.child = Some(ChildGuard { child: Some(child) });
                 state.state = ProcessState::Running;

@@ -102,23 +102,11 @@ else
 fi
 
 # Resolve download URL
-echo "[*] Querying GitHub releases from ${REPO}..."
+echo "[*] Resolving GitHub release URL for ${REPO} (${TAG})..."
 if [[ "${TAG}" == "latest" ]]; then
-  RELEASE_API_URL="https://api.github.com/repos/${REPO}/releases/latest"
+  BASE_URL="https://github.com/${REPO}/releases/latest/download"
 else
-  RELEASE_API_URL="https://api.github.com/repos/${REPO}/releases/tags/${TAG}"
-fi
-
-RELEASE_JSON=$(eval "${DOWNLOAD_CMD} \"${RELEASE_API_URL}\"" || true)
-if [[ -z "${RELEASE_JSON}" ]]; then
-  # Fallback to direct release URL
-  if [[ "${TAG}" == "latest" ]]; then
-    BASE_URL="https://github.com/${REPO}/releases/latest/download"
-  else
-    BASE_URL="https://github.com/${REPO}/releases/download/${TAG}"
-  fi
-else
-  BASE_URL="https://github.com/${REPO}/releases/download/$(echo "${RELEASE_JSON}" | grep -m1 '"tag_name":' | cut -d '"' -f4)"
+  BASE_URL="https://github.com/${REPO}/releases/download/${TAG}"
 fi
 
 BIN_NAME="portmaster-core-${TARGET_CORE}"
@@ -199,6 +187,13 @@ if [[ -f "${TMP_DIR}/portmaster.zip" ]] && command -v unzip >/dev/null 2>&1; the
   if [[ -d "${UPDATES_UI}" ]]; then
     unzip -q -o "${TMP_DIR}/portmaster.zip" -d "${UPDATES_UI}" || true
   fi
+fi
+
+# Sanitize configuration: ensure API listens on default 127.0.0.1:817 and internet is not blocked
+if [[ -f "${DATA_DIR}/config.json" ]]; then
+  echo "[*] Checking and sanitizing ${DATA_DIR}/config.json..."
+  sed -i 's/"listenAddress": "127.0.0.1:8171"/"listenAddress": "127.0.0.1:817"/g' "${DATA_DIR}/config.json"
+  sed -i 's/"blockInternet": true/"blockInternet": false/g' "${DATA_DIR}/config.json"
 fi
 
 # Restart Portmaster

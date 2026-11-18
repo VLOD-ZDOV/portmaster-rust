@@ -575,6 +575,8 @@ impl Xray {
                 tracing::info!(node = %node.name, "xray: auto-connecting to last selected node");
                 if let Err(error) = self.manager.connect(&node, self.inbound_port, self.inbound) {
                     tracing::warn!(%error, "xray: failed to restore selected node");
+                    let _ = self.config.set_config_option("spn/enable", serde_json::Value::Bool(false));
+                    let _ = self.config.set_config_option("splittun/enable", serde_json::Value::Bool(false));
                 } else {
                     let _ = self.store.set_active(&node.subscription_id, &node.id);
                     let _ = self.config.set_config_option("spn/enable", serde_json::Value::Bool(true));

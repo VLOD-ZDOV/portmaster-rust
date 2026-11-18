@@ -60,7 +60,29 @@ fn stream_settings(profile: &ParsedProfile) -> Value {
     stream.insert("network".into(), json!(profile.network));
     stream.insert("security".into(), json!(security));
 
-    if security == "tls" || security == "reality" {
+    if security == "reality" {
+        let mut reality = Map::new();
+        reality.insert("show".into(), json!(false));
+        let server = if profile.sni.is_empty() {
+            profile.address.clone()
+        } else {
+            profile.sni.clone()
+        };
+        reality.insert("serverName".into(), json!(server));
+        if !profile.fingerprint.is_empty() {
+            reality.insert("fingerprint".into(), json!(profile.fingerprint));
+        }
+        if !profile.reality_public_key.is_empty() {
+            reality.insert("publicKey".into(), json!(profile.reality_public_key));
+        }
+        if !profile.reality_short_id.is_empty() {
+            reality.insert("shortId".into(), json!(profile.reality_short_id));
+        }
+        if !profile.reality_spider_x.is_empty() {
+            reality.insert("spiderX".into(), json!(profile.reality_spider_x));
+        }
+        stream.insert("realitySettings".into(), Value::Object(reality));
+    } else if security == "tls" {
         let mut tls = Map::new();
         let server = if profile.sni.is_empty() {
             profile.address.clone()
@@ -312,6 +334,9 @@ pub fn generate_config_with_stats(
     let profile = parse_link(&node.raw_config)?;
     if profile.address.is_empty() || profile.port == 0 {
         return Err(Error::Config("node has no usable server address".into()));
+    }
+    if profile.security == "reality" && profile.reality_public_key.is_empty() {
+        return Err(Error::Config("reality profile is missing required reality publicKey (pbk)".into()));
     }
     let is_wireguard = profile.protocol == Protocol::Wireguard;
     let mut outbounds = Vec::new();

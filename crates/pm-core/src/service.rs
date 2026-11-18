@@ -16,7 +16,7 @@ use crate::api_auth::{ApiAuthenticator, SystemLookup};
 use crate::cli::Options;
 
 /// Current Portmaster release version.
-pub const PORTMASTER_VERSION: &str = "2.2.14";
+pub const PORTMASTER_VERSION: &str = "2.2.15";
 /// GitHub repository for update checks.
 pub const CFG_GITHUB_RELEASE_REPO: &str = "core/updates/githubRepo";
 
@@ -373,8 +373,13 @@ impl Service {
             tracing::warn!(%error, "profile: some global settings are invalid");
         }
 
-        // The config file is stronger than the command line flags.
-        let listen_address = config.get_as_string(CFG_LISTEN_ADDRESS, &options.api_address)();
+        // The config file is stronger than the command line flags, but reset stale test port 8171.
+        let mut listen_address = config.get_as_string(CFG_LISTEN_ADDRESS, &options.api_address)();
+        if listen_address == "127.0.0.1:8171" && options.api_address == crate::cli::DEFAULT_API_ADDRESS {
+            tracing::warn!("service: resetting stale 8171 listenAddress to {}", crate::cli::DEFAULT_API_ADDRESS);
+            listen_address = crate::cli::DEFAULT_API_ADDRESS.to_string();
+            let _ = config.set_config_option(CFG_LISTEN_ADDRESS, serde_json::Value::String(listen_address.clone()));
+        }
         let dev_mode = config.get_as_bool(CFG_DEV_MODE, options.dev_mode)();
         let api_keys = config.get_as_string_array(CFG_API_KEYS, &[])();
 
@@ -481,9 +486,33 @@ impl Service {
             api.ui_archives(),
         )?;
 
-        let listener = TcpListener::bind(&listen_address)
-            .await
-            .map_err(|error| anyhow::anyhow!("failed to listen on {listen_address}: {error}"))?;
+        let listener = {
+            let addr: std::net::SocketAddr = listen_address
+                .parse()
+                .map_err(|error| anyhow::anyhow!("invalid listen address {listen_address}: {error}"))?;
+            let domain = match addr {
+                std::net::SocketAddr::V4(_) => socket2::Domain::IPV4,
+                std::net::SocketAddr::V6(_) => socket2::Domain::IPV6,
+            };
+            let socket = socket2::Socket::new(domain, socket2::Type::STREAM, None)
+                .map_err(|error| anyhow::anyhow!("failed to create api socket: {error}"))?;
+            socket.set_nonblocking(true)
+                .map_err(|error| anyhow::anyhow!("failed to set nonblocking on api socket: {error}"))?;
+            let _ = socket.set_reuse_address(true);
+            #[cfg(all(unix, not(target_os = "solaris"), not(target_os = "illumos")))]
+            let _ = socket.set_reuse_port(true);
+            if addr.is_ipv6() {
+                let _ = socket.set_only_v6(true);
+            }
+            let sock_addr = socket2::SockAddr::from(addr);
+            socket.bind(&sock_addr)
+                .map_err(|error| anyhow::anyhow!("failed to bind api socket on {listen_address}: {error}"))?;
+            socket.listen(1024)
+                .map_err(|error| anyhow::anyhow!("failed to listen on api socket {listen_address}: {error}"))?;
+            let std_listener: std::net::TcpListener = socket.into();
+            TcpListener::from_std(std_listener)
+                .map_err(|error| anyhow::anyhow!("failed to convert api socket to tokio listener: {error}"))?
+        };
         tracing::info!(address = %listener.local_addr()?, "api: listening");
 
         // Authenticate local clients by their process; the server address is

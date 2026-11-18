@@ -86,6 +86,10 @@ pub(crate) struct ParsedProfile {
     pub hy_obfs_password: String,
     pub hy_pin: String,
     pub hy_mport: String,
+    /// Reality parameters for VLESS / Trojan over Reality.
+    pub reality_public_key: String,
+    pub reality_short_id: String,
+    pub reality_spider_x: String,
     /// Present for `wireguard://` links.
     pub wireguard: Option<WireGuardProfile>,
 }
@@ -264,6 +268,9 @@ fn default_profile(protocol: Protocol, name: &str) -> ParsedProfile {
         hy_obfs_password: String::new(),
         hy_pin: String::new(),
         hy_mport: String::new(),
+        reality_public_key: String::new(),
+        reality_short_id: String::new(),
+        reality_spider_x: String::new(),
         wireguard: None,
     }
 }
@@ -305,6 +312,27 @@ fn apply_stream_params(profile: &mut ParsedProfile, params: &BTreeMap<String, St
     }
     if let Some(header_type) = params.get("headertype") {
         profile.header_type = header_type.clone();
+    }
+    if let Some(pbk) = params
+        .get("pbk")
+        .or_else(|| params.get("publickey"))
+        .or_else(|| params.get("public_key"))
+    {
+        profile.reality_public_key = pbk.clone();
+    }
+    if let Some(sid) = params
+        .get("sid")
+        .or_else(|| params.get("shortid"))
+        .or_else(|| params.get("short_id"))
+    {
+        profile.reality_short_id = sid.clone();
+    }
+    if let Some(spx) = params
+        .get("spx")
+        .or_else(|| params.get("spiderx"))
+        .or_else(|| params.get("spider_x"))
+    {
+        profile.reality_spider_x = spx.clone();
     }
     if let Some(service_name) = params
         .get("servicename")

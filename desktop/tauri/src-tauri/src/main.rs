@@ -326,16 +326,17 @@ fn main() {
                 // there's no need to handle that case here.
                 if let WindowEvent::CloseRequested { api, .. } = event {
                     debug!(
-                        "window (label={}) close request received, forwarding to user-interface.",
+                        "window (label={}) close request received, hiding to tray.",
                         label
                     );
 
-                    // Manually save the window state on close attempt. 
-                    // This ensures the state is saved since we prevent the close event.
+                    // Manually save the window state on close attempt.
                     let _ = handle.save_window_state(WINDOW_STATE_FLAGS_TO_SAVE);
 
                     api.prevent_close();
                     if let Some(window) = handle.get_webview_window(label.as_str()) {
+                        // Immediately hide the window so the user experiences an instant, reliable close to tray.
+                        let _ = window.hide();
                         let result = window.emit("exit-requested", "");
                         if let Err(err) = result {
                             error!("failed to emit event: {}", err);

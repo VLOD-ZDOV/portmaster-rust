@@ -10,6 +10,7 @@ name = "portmaster-core-rs"
 path = "src/main.rs"
 
 [dependencies]
+socket2 = { version = "0.6.5", features = ["all"] }
 axum.workspace = true
 http.workspace = true
 pm-apprise = { path = "../pm-apprise" }

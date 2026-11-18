@@ -132,3 +132,19 @@ fn config_supports_http_inbound_and_writes_to_disk() {
     assert_eq!(written, config);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn config_generates_reality_settings_with_public_key() {
+    let raw = "vless://3a17ce52-4547-45aa-9820-a7d03ad5faca@real.embrofree.org:443?encryption=none&type=tcp&security=reality&sni=cdn.jsdelivr.net&fp=firefox&pbk=wfp4jyEksrozyS739zqIsNXySoqeEVtaQlVmeNeLp28&sid=1234abcd#RealityNode";
+    let config = generate_config(&node(raw), 10808, InboundProtocol::Socks).unwrap();
+
+    let outbound = &config["outbounds"][0];
+    assert_eq!(outbound["streamSettings"]["security"], "reality");
+    assert!(outbound["streamSettings"].get("tlsSettings").is_none());
+    let reality = &outbound["streamSettings"]["realitySettings"];
+    assert_eq!(reality["show"], false);
+    assert_eq!(reality["serverName"], "cdn.jsdelivr.net");
+    assert_eq!(reality["fingerprint"], "firefox");
+    assert_eq!(reality["publicKey"], "wfp4jyEksrozyS739zqIsNXySoqeEVtaQlVmeNeLp28");
+    assert_eq!(reality["shortId"], "1234abcd");
+}

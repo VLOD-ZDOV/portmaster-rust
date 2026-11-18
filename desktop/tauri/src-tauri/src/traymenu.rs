@@ -313,20 +313,7 @@ pub fn setup_tray_menu(
         .menu(&menu)
         .on_menu_event(move |app, event| match event.id().as_ref() {
             EXIT_UI_KEY => {
-                let handle = app.clone();
-                app.dialog()
-                    .message("This does not stop the Portmaster system service")
-                    .title("Do you really want to quit the user interface?")
-                    .buttons(MessageDialogButtons::OkCancelCustom(
-                        "Yes, exit".to_owned(),
-                        "No".to_owned(),
-                    ))
-                    .show(move |answer| {
-                        if answer {
-                            // let _ = handle.emit("exit-requested", "");
-                            handle.exit(0);
-                        }
-                    });
+                app.exit(0);
             }
             OPEN_KEY => {
                 let _ = open_window(app);
@@ -358,6 +345,11 @@ pub fn setup_tray_menu(
             }
             SHUTDOWN_KEY => {
                 app.portmaster().trigger_shutdown();
+                let handle = app.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
+                    handle.exit(0);
+                });
             }
             SYSTEM_THEME_KEY => update_icon_theme(app, dark_light::Mode::Unspecified),
             DARK_THEME_KEY => update_icon_theme(app, dark_light::Mode::Dark),
