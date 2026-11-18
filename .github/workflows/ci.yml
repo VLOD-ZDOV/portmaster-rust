@@ -178,7 +178,7 @@ jobs:
               $sum "$f" > "$f.sha256"
             fi
           done
-          CORE_VER=$(grep 'PORTMASTER_VERSION' ../crates/pm-core/src/service.rs | cut -d '"' -f 2)
+          CORE_VER=$(grep 'pub const PORTMASTER_VERSION' ../crates/pm-core/src/service.rs | cut -d '"' -f 2)
           echo "RELEASE_VERSION=${CORE_VER:-2.2.11}" >> $GITHUB_ENV
 
       - name: Publish GitHub Release
