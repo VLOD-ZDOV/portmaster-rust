@@ -454,6 +454,16 @@ impl SplitTunnelProfiles for CoreProfiles {
     }
 
     fn use_split_tun(&self, process: &Process) -> bool {
+        // Exclude xray process from split tunneling to prevent self-looping
+        if process.exec_name == "xray"
+            || process.exec_name == "xray-rust"
+            || process.name == "xray"
+            || process.name == "xray-rust"
+            || process.path.contains("xray")
+        {
+            return false;
+        }
+
         let splittun_enabled = self.config.get_as_bool("splittun/enable", false)();
         let spn_enabled = self.config.get_as_bool("spn/enable", false)();
         if !splittun_enabled && !spn_enabled {

@@ -367,6 +367,7 @@ export const ru: Record<string, string> = {
   "app.automatic": "Автоматически",
   "app.enableSPNUse": "Подключитесь к Xray, чтобы активировать маршрутизацию через VPN.",
   "app.useSPN": "VPN (Xray)",
+  "app.useVPN": "Маршрутизация через VPN",
   "app.splitTunnel": "Раздельный туннель",
   "app.enableSplitTun": "Включите раздельный туннель, чтобы использовать.",
   "app.splitInterfering": "Настройки, которые могут мешать раздельному туннелю:",
@@ -836,10 +837,10 @@ export const ru: Record<string, string> = {
   "cfg.history/enable.desc": "Сохранять соединения в локальной базе данных для последующего просмотра.",
   "cfg.history/keep.name": "Срок хранения истории (дни)",
   "cfg.history/keep.desc": "Сколько дней хранить сетевую историю на устройстве (0 — бессрочно).",
-  "cfg.splittun/use.name": "Раздельное туннелирование",
-  "cfg.splittun/use.desc": "Направлять определенный трафик через отдельный сетевой интерфейс или upstream прокси.",
+  "cfg.splittun/use.name": "Маршрутизировать приложение через туннель",
+  "cfg.splittun/use.desc": "Направлять трафик этого приложения через настроенный прокси или VPN (Xray).",
   "cfg.splittun/proxy.name": "Прокси раздельного туннеля",
-  "cfg.splittun/proxy.desc": "Адрес прокси-сервера (socks5://, http://) для перенаправления сетевого трафика.",
+  "cfg.splittun/proxy.desc": "Адрес прокси. При подключении Xray настраивается автоматически (socks5://127.0.0.1:1080).",
   "cfg.splittun/networkInterface.name": "Сетевой интерфейс раздельного туннеля",
   "cfg.splittun/networkInterface.desc": "Сетевой интерфейс для раздельного туннелирования (Ethernet, Wi-Fi и т.д.).",
 
@@ -877,6 +878,10 @@ export const ru: Record<string, string> = {
   // --- DNS Quick Settings Presets ---
   "qs.dns.allDot": "Все основные (DoT: Cloudflare, Quad9, AdGuard, Google)",
   "qs.dns.allDoh": "Все основные (DoH: Cloudflare, Quad9, AdGuard, Google)",
+  "qs.dns.allPlain": "Обычные DNS без шифрования (Cloudflare, Google, Quad9)",
+  "qs.dns.yandexPlain": "Яндекс DNS (Обычный)",
+  "qs.dns.yandexSafeDot": "Яндекс DNS Безопасный (DoT)",
+  "qs.dns.yandexSafeDoh": "Яндекс DNS Безопасный (DoH)",
   "qs.dns.cloudflareDot": "Cloudflare (DoT)",
   "qs.dns.cloudflareDoh": "Cloudflare (DoH)",
   "qs.dns.cloudflareMalwareDot": "Cloudflare Защита от угроз (DoT)",
@@ -970,8 +975,8 @@ export const ru: Record<string, string> = {
   "cfg.core/metrics/instance.desc": "Уникальный анонимный идентификатор для группировки метрик.",
 
   // --- Split Tunnel & Routing Settings ---
-  "cfg.splittun/enable.name": "Включить раздельное туннелирование",
-  "cfg.splittun/enable.desc": "Активация модуля перенаправления выбранных приложений в туннели.",
+  "cfg.splittun/enable.name": "Раздельное туннелирование (Split Tunnel)",
+  "cfg.splittun/enable.desc": "Движок выборочной маршрутизации: направляет через VPN (Xray) только выбранные вами приложения, оставляя игры (CS2) и системный трафик напрямую с минимальным пингом.",
   "cfg.splittun/usagePolicy.name": "Правила раздельного туннеля",
   "cfg.splittun/usagePolicy.desc": "Правила разделения трафика для доменов, сетей и протоколов.",
   "cfg.spn/exitHubPolicy.name": "Правила выбора выходного узла",

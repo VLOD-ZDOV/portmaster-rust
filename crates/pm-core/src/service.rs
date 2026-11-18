@@ -1227,15 +1227,15 @@ impl Service {
         intel_worker.abort();
         list_watcher.abort();
         broadcasts_worker.abort();
+        if let Err(error) = self.firewall.stop().await {
+            tracing::warn!(%error, "filter: failed to stop interception");
+        }
+        self.interop_env.set_interception_started(false);
         self.split_proxies.stop();
         self.xray.stop();
         self.compat.stop();
         self.stop_dns_monitor();
         self.control.shutdown().await;
-        if let Err(error) = self.firewall.stop().await {
-            tracing::warn!(%error, "filter: failed to stop interception");
-        }
-        self.interop_env.set_interception_started(false);
         self.dns.shutdown().await;
         self.metrics.stop_and_join().await;
         databases.shutdown()?;

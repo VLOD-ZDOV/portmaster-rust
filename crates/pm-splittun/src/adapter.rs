@@ -93,6 +93,14 @@ impl SplitTunnelEnv for SplitTunnelEnvAdapter {
         let Some(process) = conn.process.as_ref() else {
             return false;
         };
+        if process.exec_name == "xray"
+            || process.exec_name == "xray-rust"
+            || process.name == "xray"
+            || process.name == "xray-rust"
+            || process.path.contains("xray")
+        {
+            return false;
+        }
         if !self.profiles.use_split_tun(process) {
             return false;
         }

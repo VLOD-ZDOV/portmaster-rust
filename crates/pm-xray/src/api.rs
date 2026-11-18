@@ -246,12 +246,15 @@ pub fn register_api(xray: &Arc<Xray>, api: &Api) -> pm_api::Result<()> {
             }
             let payload: ConnectRequest = request.body_json()?;
             let node = connect.store.get_node(&payload.node_id).map_err(crate::Error::api)?;
+            let rules = connect.routing_rules();
+            let custom_rules = if rules.is_empty() { None } else { Some(rules.as_slice()) };
             connect
                 .manager
-                .connect(
+                .connect_with_rules(
                     &node,
                     payload.inbound_port.unwrap_or(connect.inbound_port),
                     connect.inbound,
+                    custom_rules,
                 )
                 .map_err(crate::Error::api)?;
             connect

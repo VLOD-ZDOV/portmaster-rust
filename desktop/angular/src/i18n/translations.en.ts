@@ -367,6 +367,7 @@ export const en: Record<string, string> = {
   "app.automatic": "Automatic",
   "app.enableSPNUse": "Connect to Xray to enable VPN routing.",
   "app.useSPN": "VPN (Xray)",
+  "app.useVPN": "Route through VPN",
   "app.splitTunnel": "Split Tunnel",
   "app.enableSplitTun": "Enable Split Tunneling to use.",
   "app.splitInterfering": "Settings that may interfere with Split Tunnel:",
@@ -836,10 +837,10 @@ export const en: Record<string, string> = {
   "cfg.history/enable.desc": "Save connections in a database on disk in order to view and search them later.",
   "cfg.history/keep.name": "Keep Network History (Days)",
   "cfg.history/keep.desc": "Specify how many days the network history data should be kept.",
-  "cfg.splittun/use.name": "Use Split Tunnel",
-  "cfg.splittun/use.desc": "Route specific traffic through a different network interface or upstream proxy.",
+  "cfg.splittun/use.name": "Route App Through Split Tunnel",
+  "cfg.splittun/use.desc": "Direct this app's network traffic through the configured proxy or VPN (Xray).",
   "cfg.splittun/proxy.name": "Split Tunnel Proxy",
-  "cfg.splittun/proxy.desc": "Relay Split Tunnel traffic through a proxy server.",
+  "cfg.splittun/proxy.desc": "Proxy endpoint. Managed automatically when Xray connects (socks5://127.0.0.1:1080).",
   "cfg.splittun/networkInterface.name": "Split Tunnel Network Interface",
   "cfg.splittun/networkInterface.desc": "Specify the network interface to route Split Tunnel traffic through.",
 
@@ -877,6 +878,10 @@ export const en: Record<string, string> = {
   // --- DNS Quick Settings Presets ---
   "qs.dns.allDot": "All Primary (DoT: Cloudflare, Quad9, AdGuard, Google)",
   "qs.dns.allDoh": "All Primary (DoH: Cloudflare, Quad9, AdGuard, Google)",
+  "qs.dns.allPlain": "Plain DNS (Cloudflare, Google, Quad9)",
+  "qs.dns.yandexPlain": "Yandex DNS (Plain)",
+  "qs.dns.yandexSafeDot": "Yandex DNS Safe (DoT)",
+  "qs.dns.yandexSafeDoh": "Yandex DNS Safe (DoH)",
   "qs.dns.cloudflareDot": "Cloudflare (DoT)",
   "qs.dns.cloudflareDoh": "Cloudflare (DoH)",
   "qs.dns.cloudflareMalwareDot": "Cloudflare Malware Protection (DoT)",
@@ -970,8 +975,8 @@ export const en: Record<string, string> = {
   "cfg.core/metrics/instance.desc": "Unique anonymous instance identifier for metrics.",
 
   // --- Split Tunnel & Routing Settings ---
-  "cfg.splittun/enable.name": "Enable Split Tunneling",
-  "cfg.splittun/enable.desc": "Activate module to route selected applications through separate tunnels.",
+  "cfg.splittun/enable.name": "Split Tunneling",
+  "cfg.splittun/enable.desc": "Selective routing engine: routes designated apps through VPN (Xray) while keeping latency-sensitive apps (CS2, games) direct at full speed.",
   "cfg.splittun/usagePolicy.name": "Split Tunnel Rules",
   "cfg.splittun/usagePolicy.desc": "Rules for splitting traffic by domain, network, or protocol.",
   "cfg.spn/exitHubPolicy.name": "Exit Node Rules",

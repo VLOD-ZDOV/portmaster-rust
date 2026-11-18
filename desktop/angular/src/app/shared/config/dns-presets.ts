@@ -22,6 +22,15 @@ export const DNS_PRESETS: QuickSetting<string[]>[] = [
     Action: 'replace',
   },
   {
+    Name: 'qs.dns.allPlain',
+    Value: [
+      '1.1.1.1',
+      '8.8.8.8',
+      '9.9.9.9',
+    ],
+    Action: 'replace',
+  },
+  {
     Name: 'qs.dns.cloudflareDot',
     Value: [
       'dot://cloudflare-dns.com?ip=1.1.1.1&name=Cloudflare',
@@ -144,6 +153,30 @@ export const DNS_PRESETS: QuickSetting<string[]>[] = [
     Name: 'qs.dns.appliedPrivacyDoh',
     Value: [
       'https://doh.applied-privacy.net/query?ip=146.255.56.98&name=AppliedPrivacy',
+    ],
+    Action: 'replace',
+  },
+  {
+    Name: 'qs.dns.yandexPlain',
+    Value: [
+      '77.88.8.8',
+      '77.88.8.1',
+    ],
+    Action: 'replace',
+  },
+  {
+    Name: 'qs.dns.yandexSafeDot',
+    Value: [
+      'dot://safe.dns.yandex.net?ip=77.88.8.88&name=YandexSafe',
+      'dot://safe.dns.yandex.net?ip=77.88.8.2&name=YandexSafe',
+    ],
+    Action: 'replace',
+  },
+  {
+    Name: 'qs.dns.yandexSafeDoh',
+    Value: [
+      'https://safe.dns.yandex.net/dns-query?ip=77.88.8.88&name=YandexSafe',
+      'https://safe.dns.yandex.net/dns-query?ip=77.88.8.2&name=YandexSafe',
     ],
     Action: 'replace',
   },

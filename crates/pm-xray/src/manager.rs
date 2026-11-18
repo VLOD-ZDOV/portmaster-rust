@@ -10,7 +10,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, RwLock};
 use std::thread;
 
-use crate::config::{write_config_with_stats, InboundProtocol};
+use crate::config::{write_config_full, InboundProtocol};
 use crate::model::{ProcessState, XrayNode, XrayStatus};
 use crate::{Error, Result};
 
@@ -61,10 +61,12 @@ impl ChildHandle for SystemChild {
 
 impl ProcessAdapter for SystemProcessAdapter {
     fn spawn(&self, binary: &str, config: &Path) -> std::result::Result<Box<dyn ChildHandle>, String> {
+        let asset_dir = config.parent().unwrap_or_else(|| Path::new("."));
         let mut child = Command::new(binary)
             .arg("run")
             .arg("-config")
             .arg(config)
+            .env("XRAY_LOCATION_ASSET", asset_dir)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -198,50 +200,67 @@ impl XrayManager {
 
     /// Connects to `node`, replacing any running process (restart on change).
     pub fn connect(&self, node: &XrayNode, inbound_port: u16, inbound: InboundProtocol) -> Result<()> {
+        self.connect_with_rules(node, inbound_port, inbound, None)
+    }
+
+    pub fn connect_with_rules(
+        &self,
+        node: &XrayNode,
+        inbound_port: u16,
+        inbound: InboundProtocol,
+        rules: Option<&[String]>,
+    ) -> Result<()> {
         let binary_path = self.binary();
         if binary_path.is_empty() {
             return Err(Error::Process(
                 "xray binary is not configured or was not found".into(),
             ));
         }
-        let config = write_config_with_stats(
+        let config = write_config_full(
             &self.data_dir,
             node,
             inbound_port,
             inbound,
             self.stats_port,
+            rules,
         )?;
-        let mut state = self.inner.lock().expect("lock poisoned");
-        state.stop_child();
-        state.state = ProcessState::Starting;
-        state.node = Some(node.clone());
-        state.error = None;
-        state.inbound_port = inbound_port;
-        state.inbound = inbound;
-        state.inbound_address = None;
-        state.exit_ip = None;
-        state.exit_country = None;
-        state.exit_latitude = None;
-        state.exit_longitude = None;
+
+        {
+            let mut state = self.inner.lock().expect("lock poisoned");
+            state.stop_child();
+            state.state = ProcessState::Starting;
+            state.node = Some(node.clone());
+            state.error = None;
+            state.inbound_port = inbound_port;
+            state.inbound = inbound;
+            state.inbound_address = None;
+            state.exit_ip = None;
+            state.exit_country = None;
+            state.exit_latitude = None;
+            state.exit_longitude = None;
+        }
 
         match self.adapter.spawn(&binary_path, &config) {
             Ok(mut child) => {
-                // If child process exits immediately (e.g. invalid config or port conflict), catch it early
+                // If child process exits immediately (e.g. invalid config or port conflict), catch it early without holding the lock
                 std::thread::sleep(std::time::Duration::from_millis(60));
                 if let Ok(Some(exit_status)) = child.try_wait() {
                     let err = format!("xray process exited immediately with status {exit_status}");
                     tracing::error!(%err, "xray: startup failed");
+                    let mut state = self.inner.lock().expect("lock poisoned");
                     state.state = ProcessState::Failed;
                     state.error = Some(err.clone());
                     return Err(Error::Process(err));
                 }
                 tracing::info!(pid = child.id(), config = %config.display(), "xray: process started");
+                let mut state = self.inner.lock().expect("lock poisoned");
                 state.child = Some(ChildGuard { child: Some(child) });
                 state.state = ProcessState::Running;
                 state.inbound_address = Some(format!("127.0.0.1:{inbound_port}"));
                 Ok(())
             }
             Err(error) => {
+                let mut state = self.inner.lock().expect("lock poisoned");
                 state.state = ProcessState::Failed;
                 state.error = Some(error.clone());
                 Err(Error::Process(error))
@@ -319,6 +338,12 @@ impl XrayManager {
             exit_latitude: state.exit_latitude,
             exit_longitude: state.exit_longitude,
         }
+    }
+
+    /// Returns the PID of the running Xray child process, if any.
+    pub fn active_pid(&self) -> Option<u32> {
+        let state = self.inner.lock().ok()?;
+        state.child.as_ref().and_then(|g| g.child.as_ref()).map(|c| c.id())
     }
 
     /// Probes the real external exit IP through Xray's local inbound proxy.

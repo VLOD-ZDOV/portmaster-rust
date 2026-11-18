@@ -308,6 +308,67 @@ fn outbound_settings(profile: &ParsedProfile) -> Result<Value> {
     Ok(settings)
 }
 
+/// Parses high-level routing rules (e.g. from `xray/rules` or `spn/usagePolicy`) into Xray field rules.
+///
+/// Supports:
+/// - `+ geoip:ru` or `- geoip:ru` (route via VPN or direct bypass)
+/// - `+ geosite:google` or `- geosite:google`
+/// - `- geosite:category-ads-all` (blocked via blackhole)
+/// - `- LAN` or `- Localhost` (routed to `geoip:private` direct)
+/// - `+ 1.2.3.4/24` or `- 1.2.3.4/24`
+/// - `+ domain.com` or `- domain.com`
+pub fn parse_routing_rules(raw_rules: &[String]) -> Vec<Value> {
+    let mut rules = Vec::new();
+    for rule in raw_rules {
+        let rule = rule.trim();
+        if rule.is_empty() || rule.starts_with('#') {
+            continue;
+        }
+        let (action, rest) = if let Some(stripped) = rule.strip_prefix('+') {
+            ("proxy", stripped.trim_start())
+        } else if let Some(stripped) = rule.strip_prefix('-') {
+            ("direct", stripped.trim_start())
+        } else {
+            ("proxy", rule)
+        };
+        let target = rest.split_whitespace().next().unwrap_or("").trim();
+        if target.is_empty() {
+            continue;
+        }
+        if target.starts_with("geoip:") || target.contains('/') || target.parse::<std::net::IpAddr>().is_ok() {
+            rules.push(json!({
+                "type": "field",
+                "outboundTag": action,
+                "ip": [target]
+            }));
+        } else if target.eq_ignore_ascii_case("LAN") || target.eq_ignore_ascii_case("Localhost") {
+            rules.push(json!({
+                "type": "field",
+                "outboundTag": action,
+                "ip": ["geoip:private"]
+            }));
+        } else if target.starts_with("geosite:") {
+            let outbound_tag = if action == "direct" && target.contains("category-ads") {
+                "block"
+            } else {
+                action
+            };
+            rules.push(json!({
+                "type": "field",
+                "outboundTag": outbound_tag,
+                "domain": [target]
+            }));
+        } else {
+            rules.push(json!({
+                "type": "field",
+                "outboundTag": action,
+                "domain": [target]
+            }));
+        }
+    }
+    rules
+}
+
 /// Builds the full Xray JSON configuration for a node without a stats API.
 pub fn generate_config(
     node: &XrayNode,
@@ -328,6 +389,17 @@ pub fn generate_config_with_stats(
     inbound: InboundProtocol,
     stats_port: u16,
 ) -> Result<Value> {
+    generate_config_full(node, inbound_port, inbound, stats_port, None)
+}
+
+/// Builds the full Xray JSON configuration for a node including optional custom routing rules.
+pub fn generate_config_full(
+    node: &XrayNode,
+    inbound_port: u16,
+    inbound: InboundProtocol,
+    stats_port: u16,
+    rules: Option<&[String]>,
+) -> Result<Value> {
     if inbound_port == 0 {
         return Err(Error::Config("inbound port must not be zero".into()));
     }
@@ -340,11 +412,6 @@ pub fn generate_config_with_stats(
     }
     let is_wireguard = profile.protocol == Protocol::Wireguard;
     let mut outbounds = Vec::new();
-    if is_wireguard {
-        // A WireGuard tunnel needs an explicit route; keep a freedom outbound
-        // as the xray-rs WireGuard example does.
-        outbounds.push(json!({ "tag": "direct", "protocol": "freedom", "settings": {} }));
-    }
     let mut outbound = Map::new();
     outbound.insert("tag".into(), json!("proxy"));
     outbound.insert("protocol".into(), json!(profile.protocol.as_str()));
@@ -354,7 +421,14 @@ pub fn generate_config_with_stats(
     if !is_wireguard {
         outbound.insert("streamSettings".into(), stream_settings(&profile));
     }
-    outbounds.push(Value::Object(outbound));
+    if is_wireguard {
+        outbounds.push(json!({ "tag": "direct", "protocol": "freedom", "settings": {} }));
+        outbounds.push(Value::Object(outbound));
+    } else {
+        outbounds.push(Value::Object(outbound));
+        outbounds.push(json!({ "tag": "direct", "protocol": "freedom", "settings": {} }));
+    }
+    outbounds.push(json!({ "tag": "block", "protocol": "blackhole", "settings": {} }));
 
     let inbound_settings = match inbound {
         InboundProtocol::Socks => json!({ "auth": "noauth", "udp": true }),
@@ -374,6 +448,12 @@ pub fn generate_config_with_stats(
             "rules": [],
         },
     });
+
+    let mut routing_rules = Vec::new();
+    if let Some(custom) = rules {
+        routing_rules.extend(parse_routing_rules(custom));
+    }
+
     if is_wireguard {
         let wg = profile.wireguard.as_ref().expect("checked above");
         let dns_servers: Vec<String> = if wg.dns.is_empty() {
@@ -386,12 +466,22 @@ pub fn generate_config_with_stats(
         };
         let mut routed = wg.allowed_ips.clone();
         routed.extend(dns_servers.iter().cloned());
-        config["routing"] = json!({
-            "domainStrategy": "IPOnDemand",
-            "rules": [{ "type": "field", "ip": routed, "outboundTag": "proxy" }],
-        });
+        routing_rules.push(json!({ "type": "field", "ip": routed, "outboundTag": "proxy" }));
         config["dns"] = json!({ "servers": dns_servers });
     }
+
+    let domain_strategy = if routing_rules.is_empty() {
+        "AsIs"
+    } else if is_wireguard {
+        "IPOnDemand"
+    } else {
+        "IPIfNonMatch"
+    };
+
+    config["routing"] = json!({
+        "domainStrategy": domain_strategy,
+        "rules": routing_rules,
+    });
     if stats_port != 0 {
         config["api"] = json!({
             "tag": "api",
@@ -426,6 +516,24 @@ pub fn write_config(
     write_config_with_stats(data_dir, node, inbound_port, inbound, 0)
 }
 
+/// Writes a generated config with custom routing rules into `data_dir/xray/xray-<node id>.json`
+pub fn write_config_full(
+    data_dir: &Path,
+    node: &XrayNode,
+    inbound_port: u16,
+    inbound: InboundProtocol,
+    stats_port: u16,
+    rules: Option<&[String]>,
+) -> Result<PathBuf> {
+    let directory = data_dir.join(CONFIG_DIR);
+    std::fs::create_dir_all(&directory).map_err(|error| Error::Config(error.to_string()))?;
+    let path = directory.join(format!("xray-{}.json", node.id));
+    let config = generate_config_full(node, inbound_port, inbound, stats_port, rules)?;
+    let text = serde_json::to_string_pretty(&config).map_err(|error| Error::Config(error.to_string()))?;
+    std::fs::write(&path, text).map_err(|error| Error::Config(error.to_string()))?;
+    Ok(path)
+}
+
 /// Like [`write_config`], but includes the gRPC stats API inbound.
 pub fn write_config_with_stats(
     data_dir: &Path,
@@ -434,13 +542,7 @@ pub fn write_config_with_stats(
     inbound: InboundProtocol,
     stats_port: u16,
 ) -> Result<PathBuf> {
-    let directory = data_dir.join(CONFIG_DIR);
-    std::fs::create_dir_all(&directory).map_err(|error| Error::Config(error.to_string()))?;
-    let path = directory.join(format!("xray-{}.json", node.id));
-    let config = generate_config_with_stats(node, inbound_port, inbound, stats_port)?;
-    let text = serde_json::to_string_pretty(&config).map_err(|error| Error::Config(error.to_string()))?;
-    std::fs::write(&path, text).map_err(|error| Error::Config(error.to_string()))?;
-    Ok(path)
+    write_config_full(data_dir, node, inbound_port, inbound, stats_port, None)
 }
 
 #[cfg(test)]

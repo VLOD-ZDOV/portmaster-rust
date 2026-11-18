@@ -227,7 +227,9 @@ async fn run(
                         Ok(info) => info,
                         Err(e) => {
                             tracing::warn!(queue = num, id, error = %e, "nfqueue: failed to parse payload");
-                            send_verdict(guard.get_inner_mut(), msg, Mark::Drop, num)?;
+                            if let Err(ve) = send_verdict(guard.get_inner_mut(), msg, Mark::Drop, num) {
+                                tracing::warn!(queue = num, id, error = %ve, "nfqueue: failed to send drop verdict for unparseable packet");
+                            }
                             continue;
                         }
                     };
@@ -246,7 +248,9 @@ async fn run(
                         }
                         Err(_) => {
                             tracing::warn!(queue = num, id, "nfqueue: failed to queue packet, dropping");
-                            send_verdict(guard.get_inner_mut(), msg, Mark::Drop, num)?;
+                            if let Err(ve) = send_verdict(guard.get_inner_mut(), msg, Mark::Drop, num) {
+                                tracing::warn!(queue = num, id, error = %ve, "nfqueue: failed to send drop verdict for unqueued packet");
+                            }
                         }
                     }
                 }

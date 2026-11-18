@@ -201,6 +201,20 @@ pub fn register_options(config: &Config) -> pm_config::Result<()> {
         );
     }
 
+    if config.option("xray/rules").is_err() {
+        let _ = config.register(
+            ConfigOption::new(
+                "Правила маршрутизации Xray",
+                "xray/rules",
+                "Правила для доменов, geoip/geosite категорий (например geoip:ru, geosite:category-ads-all), IP-сетей и портов: маршрутизировать через VPN (+) или пускать напрямую (-).",
+                pm_config::OPT_TYPE_STRING_ARRAY,
+                Value::Array(Vec::new()),
+            )
+            .with_expertise_level(pm_config::EXPERTISE_LEVEL_USER)
+            .with_annotation(pm_config::CATEGORY_ANNOTATION, json!("General")),
+        );
+    }
+
     Ok(())
 }
 
@@ -213,10 +227,10 @@ fn exists_in_path(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Resolves the binary path: explicit config, then the bin directory, then
+/// Resolves the binary path: explicit config, then data_dir/xray, then the bin directory, then
 /// PATH. Returns `None` when nothing is found so callers can warn instead of
 /// failing to start the core.
-fn resolve_binary(configured: &str, bin_dir: &Path) -> Option<String> {
+fn resolve_binary(configured: &str, data_dir: &Path, bin_dir: &Path) -> Option<String> {
     if !configured.is_empty() {
         let path = Path::new(configured);
         if path.is_absolute() || configured.contains('/') || configured.contains('\\') {
@@ -236,6 +250,15 @@ fn resolve_binary(configured: &str, bin_dir: &Path) -> Option<String> {
         if Path::new(known).is_file() {
             return Some(known.to_string());
         }
+    }
+    let xray_dir = data_dir.join("xray");
+    let candidate_in_xray = xray_dir.join(XRAY_BINARY_NAME);
+    if candidate_in_xray.is_file() {
+        return Some(candidate_in_xray.to_string_lossy().into_owned());
+    }
+    let candidate_xray_in_xray = xray_dir.join("xray");
+    if candidate_xray_in_xray.is_file() {
+        return Some(candidate_xray_in_xray.to_string_lossy().into_owned());
     }
     let candidate = bin_dir.join(XRAY_BINARY_NAME);
     if candidate.is_file() {
@@ -317,7 +340,7 @@ impl Xray {
                 b
             }
         };
-        let binary = resolve_binary(&configured_binary, &bin_dir).unwrap_or_default();
+        let binary = resolve_binary(&configured_binary, &data_dir, &bin_dir).unwrap_or_default();
         let inbound_port = config
             .get_as_int(CFG_XRAY_INBOUND_PORT, i64::from(DEFAULT_INBOUND_PORT))()
             .clamp(1, u16::MAX as i64) as u16;
@@ -474,23 +497,13 @@ impl Xray {
             Error::Process(format!("'{inner_binary_name}' binary not found inside {asset_name}"))
         })?;
 
-        // Determine destination: prefer bin_dir, fallback to data_dir/bin
-        let candidate_bin = self.bin_dir.join(target_binary_name);
-        let write_primary = std::fs::create_dir_all(&self.bin_dir)
-            .and_then(|_| std::fs::write(&candidate_bin, &binary_data));
-
-        let final_path = match write_primary {
-            Ok(_) => candidate_bin,
-            Err(_) => {
-                let fallback_dir = self.data_dir.join("bin");
-                std::fs::create_dir_all(&fallback_dir)
-                    .map_err(|e| Error::Process(format!("failed to create dir {}: {e}", fallback_dir.display())))?;
-                let fallback_file = fallback_dir.join(target_binary_name);
-                std::fs::write(&fallback_file, &binary_data)
-                    .map_err(|e| Error::Process(format!("failed to write binary {}: {e}", fallback_file.display())))?;
-                fallback_file
-            }
-        };
+        // Determine destination: consolidate everything into data_dir/xray
+        let xray_dir = self.data_dir.join("xray");
+        std::fs::create_dir_all(&xray_dir)
+            .map_err(|e| Error::Process(format!("failed to create dir {}: {e}", xray_dir.display())))?;
+        let final_path = xray_dir.join(target_binary_name);
+        std::fs::write(&final_path, &binary_data)
+            .map_err(|e| Error::Process(format!("failed to write binary {}: {e}", final_path.display())))?;
 
         #[cfg(unix)]
         {
@@ -499,14 +512,10 @@ impl Xray {
         }
 
         if let Some(geoip) = geoip_bytes {
-            if let Some(parent) = final_path.parent() {
-                let _ = std::fs::write(parent.join("geoip.dat"), geoip);
-            }
+            let _ = std::fs::write(xray_dir.join("geoip.dat"), geoip);
         }
         if let Some(geosite) = geosite_bytes {
-            if let Some(parent) = final_path.parent() {
-                let _ = std::fs::write(parent.join("geosite.dat"), geosite);
-            }
+            let _ = std::fs::write(xray_dir.join("geosite.dat"), geosite);
         }
 
         let path_str = final_path.to_string_lossy().into_owned();
@@ -546,6 +555,20 @@ impl Xray {
             }
         }
         status
+    }
+
+    /// Returns the PID of the active Xray child process, if running.
+    pub fn active_pid(&self) -> Option<u32> {
+        self.manager.active_pid()
+    }
+
+    /// Returns configured Xray routing rules (merging `xray/rules` and `spn/usagePolicy`).
+    pub fn routing_rules(&self) -> Vec<String> {
+        let mut rules = self.config.get_as_string_array("xray/rules", &[])();
+        if rules.is_empty() {
+            rules = self.config.get_as_string_array("spn/usagePolicy", &[])();
+        }
+        rules
     }
 
     /// Refreshes subscriptions and returns the number of discovered nodes.
@@ -592,7 +615,9 @@ impl Xray {
         match self.store.get_node(&node_id) {
             Ok(node) => {
                 tracing::info!(node = %node.name, "xray: auto-connecting to last selected node");
-                if let Err(error) = self.manager.connect(&node, self.inbound_port, self.inbound) {
+                let rules = self.routing_rules();
+                let custom_rules = if rules.is_empty() { None } else { Some(rules.as_slice()) };
+                if let Err(error) = self.manager.connect_with_rules(&node, self.inbound_port, self.inbound, custom_rules) {
                     tracing::warn!(%error, "xray: failed to restore selected node");
                     let _ = self.config.set_config_option("spn/enable", serde_json::Value::Bool(false));
                     let _ = self.config.set_config_option("splittun/enable", serde_json::Value::Bool(false));

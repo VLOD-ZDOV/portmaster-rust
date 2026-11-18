@@ -212,6 +212,14 @@ impl SubscriptionFetcher for HttpFetcher {
 }
 
 fn extract_direct_links(text: &str, out: &mut Vec<String>, seen: &mut HashSet<String>) {
+    if text.contains("[Interface]") && text.contains("[Peer]") {
+        let b64 = STANDARD.encode(text.as_bytes());
+        let link = format!("wireguard://{b64}#WireGuard");
+        if !seen.contains(&link) {
+            seen.insert(link.clone());
+            out.push(link);
+        }
+    }
     let bytes = text.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -422,6 +430,43 @@ fn parse_outbound_object(
                     out.push(link);
                 }
             }
+            "wireguard" => {
+                let priv_key = ob_map
+                    .get("private_key")
+                    .or_else(|| ob_map.get("secret_key"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let pub_key = ob_map
+                    .get("peer_public_key")
+                    .or_else(|| ob_map.get("public_key"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                if !priv_key.is_empty() && !pub_key.is_empty() {
+                    let mut params = Vec::new();
+                    params.push(format!("publickey={pub_key}"));
+                    if let Some(psk) = ob_map.get("pre_shared_key").or_else(|| ob_map.get("preshared_key")).and_then(|v| v.as_str()) {
+                        if !psk.is_empty() {
+                            params.push(format!("presharedkey={psk}"));
+                        }
+                    }
+                    if let Some(local_addr) = ob_map.get("local_address") {
+                        if let Some(arr) = local_addr.as_array() {
+                            let ips: Vec<_> = arr.iter().filter_map(|v| v.as_str()).collect();
+                            if !ips.is_empty() {
+                                params.push(format!("address={}", ips.join(",")));
+                            }
+                        } else if let Some(s) = local_addr.as_str() {
+                            params.push(format!("address={s}"));
+                        }
+                    }
+                    let query = params.join("&");
+                    let link = format!("wireguard://{priv_key}@{server}:{port}?{query}#{}", url_encode(final_tag));
+                    if !seen.contains(&link) {
+                        seen.insert(link.clone());
+                        out.push(link);
+                    }
+                }
+            }
             _ => {}
         }
         return;
@@ -565,6 +610,40 @@ fn parse_outbound_object(
                         let final_tag = if tag.is_empty() { address } else { tag };
                         let cred = STANDARD.encode(format!("{method}:{password}"));
                         let link = format!("ss://{cred}@{address}:{port}#{}", url_encode(final_tag));
+                        if !seen.contains(&link) {
+                            seen.insert(link.clone());
+                            out.push(link);
+                        }
+                    }
+                }
+            }
+            "wireguard" => {
+                let secret_key = settings.and_then(|s| s.get("secretKey")).and_then(|v| v.as_str()).unwrap_or_default();
+                let peers = settings.and_then(|s| s.get("peers")).and_then(|v| v.as_array());
+                if !secret_key.is_empty() && peers.is_some() {
+                    for peer in peers.unwrap() {
+                        let endpoint = peer.get("endpoint").and_then(|v| v.as_str()).unwrap_or_default();
+                        let pub_key = peer.get("publicKey").and_then(|v| v.as_str()).unwrap_or_default();
+                        if endpoint.is_empty() || pub_key.is_empty() {
+                            continue;
+                        }
+                        let mut params = Vec::new();
+                        params.push(format!("publickey={pub_key}"));
+                        if let Some(psk) = peer.get("preSharedKey").and_then(|v| v.as_str()) {
+                            if !psk.is_empty() {
+                                params.push(format!("presharedkey={psk}"));
+                            }
+                        }
+                        if let Some(addr) = settings.and_then(|s| s.get("address")) {
+                            if let Some(arr) = addr.as_array() {
+                                let ips: Vec<_> = arr.iter().filter_map(|v| v.as_str()).collect();
+                                if !ips.is_empty() {
+                                    params.push(format!("address={}", ips.join(",")));
+                                }
+                            }
+                        }
+                        let final_tag = if tag.is_empty() { endpoint } else { tag };
+                        let link = format!("wireguard://{secret_key}@{endpoint}?{}#{}", params.join("&"), url_encode(final_tag));
                         if !seen.contains(&link) {
                             seen.insert(link.clone());
                             out.push(link);

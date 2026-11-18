@@ -776,6 +776,72 @@ fn wg_list(fields: &WgFields, key: &str) -> Vec<String> {
 }
 
 fn parse_wireguard(body: &str, name: Option<String>) -> Result<ParsedProfile, ParseError> {
+    if body.contains('@') {
+        let (authority, query) = body.split_once('?').unwrap_or((body, ""));
+        let (userinfo, endpoint_str) = split_userinfo(authority);
+        let secret_key = userinfo
+            .map(|u| percent_decode(&u))
+            .ok_or_else(|| ParseError::Field("privatekey", "missing userinfo private key".into()))?;
+        let (address, port) = split_endpoint(endpoint_str, 51820)?;
+        let endpoint = format!("{address}:{port}");
+        let params = query_params(query);
+        let public_key = params
+            .get("publickey")
+            .or_else(|| params.get("public_key"))
+            .or_else(|| params.get("pbk"))
+            .cloned()
+            .ok_or_else(|| ParseError::Syntax("WireGuard URL needs publickey parameter".into()))?;
+        let pre_shared_key = params
+            .get("presharedkey")
+            .or_else(|| params.get("preshared_key"))
+            .or_else(|| params.get("psk"))
+            .cloned()
+            .unwrap_or_default();
+        let addresses = params
+            .get("address")
+            .or_else(|| params.get("ip"))
+            .map(|v| v.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect())
+            .unwrap_or_else(|| vec!["10.0.0.2/32".to_string()]);
+        let allowed_ips = params
+            .get("allowedips")
+            .or_else(|| params.get("allowed_ips"))
+            .map(|v| v.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect())
+            .unwrap_or_else(|| vec!["0.0.0.0/0".to_string(), "::/0".to_string()]);
+        let dns = params
+            .get("dns")
+            .map(|v| v.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect())
+            .unwrap_or_default();
+        let mtu = params
+            .get("mtu")
+            .and_then(|v| v.parse::<u16>().ok())
+            .unwrap_or(1420);
+        let keep_alive = params
+            .get("persistentkeepalive")
+            .or_else(|| params.get("keepalive"))
+            .or_else(|| params.get("keep_alive"))
+            .and_then(|v| v.parse::<u16>().ok())
+            .unwrap_or(25);
+
+        let mut profile = default_profile(
+            Protocol::Wireguard,
+            &name.unwrap_or_else(|| "WireGuard".into()),
+        );
+        profile.address = address;
+        profile.port = port;
+        profile.wireguard = Some(WireGuardProfile {
+            secret_key,
+            public_key,
+            pre_shared_key,
+            endpoint,
+            allowed_ips,
+            addresses,
+            dns,
+            mtu,
+            keep_alive,
+        });
+        return Ok(profile);
+    }
+
     // Panels encode the whole wg-quick file as Base64 in the link body; accept
     // a percent-encoded plain file as a fallback.
     let decoded = decode_base64(body).unwrap_or_else(|| percent_decode(body).into_bytes());
@@ -824,6 +890,42 @@ pub(crate) fn parse_link(raw: &str) -> Result<ParsedProfile, ParseError> {
     let raw = raw.trim();
     if raw.is_empty() {
         return Err(ParseError::Syntax("empty profile".into()));
+    }
+    if raw.contains("[Interface]") && raw.contains("[Peer]") {
+        let (interface, peers) = wg_fields(raw)?;
+        let secret_key = wg_one(&interface, "privatekey");
+        if secret_key.is_empty() {
+            return Err(ParseError::Field("privatekey", "missing".into()));
+        }
+        let peer = &peers[0];
+        let public_key = wg_one(peer, "publickey");
+        let endpoint = wg_one(peer, "endpoint");
+        if public_key.is_empty() || endpoint.is_empty() {
+            return Err(ParseError::Syntax("WireGuard peer needs PublicKey and Endpoint".into()));
+        }
+        let (address, port) = split_endpoint(&endpoint, 0)?;
+        let mtu = wg_one(&interface, "mtu")
+            .parse::<u16>()
+            .unwrap_or(1420);
+        let keep_alive = match wg_one(peer, "persistentkeepalive").to_ascii_lowercase().as_str() {
+            "off" => 0,
+            value => value.parse::<u16>().unwrap_or(0),
+        };
+        let mut profile = default_profile(Protocol::Wireguard, "WireGuard");
+        profile.address = address;
+        profile.port = port;
+        profile.wireguard = Some(WireGuardProfile {
+            secret_key,
+            public_key,
+            pre_shared_key: wg_one(peer, "presharedkey"),
+            endpoint,
+            allowed_ips: wg_list(peer, "allowedips"),
+            addresses: wg_list(&interface, "address"),
+            dns: wg_list(&interface, "dns"),
+            mtu,
+            keep_alive,
+        });
+        return Ok(profile);
     }
     let (scheme, body) = raw
         .split_once("://")
