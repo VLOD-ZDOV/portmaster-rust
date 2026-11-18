@@ -250,6 +250,8 @@ fn main() {
             portmaster::commands::set_state,
             portmaster::commands::should_show,
             portmaster::commands::should_handle_prompts,
+            portmaster::commands::exit_ui,
+            portmaster::commands::shutdown_app,
             commands::tauri_http::send_tauri_http_request,
             commands::open_dir::open_dir,
         ])
@@ -337,10 +339,6 @@ fn main() {
                     if let Some(window) = handle.get_webview_window(label.as_str()) {
                         // Immediately hide the window so the user experiences an instant, reliable close to tray.
                         let _ = window.hide();
-                        let result = window.emit("exit-requested", "");
-                        if let Err(err) = result {
-                            error!("failed to emit event: {}", err);
-                        }
                     } else {
                         error!("window was None");
                     }

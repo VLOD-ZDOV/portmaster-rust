@@ -185,3 +185,23 @@ pub fn start_service<R: Runtime>(window: Window<R>, response_id: String) -> Resu
 
     Ok(cloned)
 }
+
+#[tauri::command]
+pub fn exit_ui<R: Runtime>(app: tauri::AppHandle<R>) {
+    log::info!("[tauri] exit_ui invoked from frontend, terminating UI process");
+    app.exit(0);
+}
+
+#[tauri::command]
+pub fn shutdown_app<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    portmaster: State<'_, PortmasterInterface<R>>,
+) {
+    log::info!("[tauri] shutdown_app invoked from frontend");
+    portmaster.trigger_shutdown();
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+        handle.exit(0);
+    });
+}

@@ -110,7 +110,11 @@ export class AppComponent implements OnInit, AfterViewInit {
 
   shutdownApp(e: Event) {
     e.stopPropagation();
-    this.exitService.shutdownPortmaster();
+    if (this.integration instanceof TauriIntegrationService) {
+      (this.integration as TauriIntegrationService).shutdownApp();
+    } else {
+      this.exitService.shutdownPortmaster();
+    }
   }
 
   onSideDashChange(state: 'expanded' | 'collapsed' | 'force-overlay') {
@@ -212,7 +216,7 @@ export class AppComponent implements OnInit, AfterViewInit {
     this.sideDashOpen.next(this.sideDashStatus !== 'collapsed')
 
     if (this.integration instanceof TauriIntegrationService) {
-      let tauri = this.integration;
+      const tauri = this.integration;
 
       tauri.shouldShow()
         .then(show => {

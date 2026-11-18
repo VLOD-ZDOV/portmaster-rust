@@ -191,7 +191,7 @@ fn matching_errors_fail_and_denials_keep_the_verdict() {
 }
 
 #[test]
-fn udp_is_blocked_when_an_upstream_proxy_is_set() {
+fn udp_with_proxy_bypasses_proxy_to_preserve_gaming_and_voice() {
     let mut conn = connection();
     conn.ip_protocol = protocol::UDP;
     let env = FakeEnv {
@@ -201,11 +201,7 @@ fn udp_is_blocked_when_an_upstream_proxy_is_set() {
 
     check_split_tunneling(&mut conn, &env);
 
-    assert_eq!(conn.verdict, Verdict::Block);
-    assert_eq!(
-        conn.reason.msg,
-        "UDP cannot be relayed through the Split Tunnel proxy"
-    );
+    assert_eq!(conn.verdict, Verdict::Accept);
 }
 
 #[test]

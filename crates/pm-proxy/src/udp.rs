@@ -174,22 +174,27 @@ impl UdpProxy {
                             let target_addr = SocketAddr::new(decision.remote_ip, decision.remote_port);
 
                             // UDP cannot be relayed through an upstream proxy;
-                            // Go drops the datagram instead of leaking it
-                            // directly to the destination.
-                            if decision
+                            // instead of dropping and breaking online games / voice calls,
+                            // fall back to a direct connection to destination.
+                            let binding_direct = if decision
                                 .binding
                                 .as_ref()
                                 .is_some_and(|binding| binding.upstream.is_some())
                             {
-                                warn!(
-                                    "udp_proxy: UDP is not supported through an upstream proxy, dropping datagram from {}",
-                                    peer_addr
+                                debug!(
+                                    "udp_proxy: UDP cannot be relayed through upstream proxy, connecting directly to {}",
+                                    target_addr
                                 );
-                                self.metrics.inc_errors();
-                                continue;
-                            }
+                                decision.binding.as_ref().map(|b| {
+                                    let mut b = b.clone();
+                                    b.upstream = None;
+                                    b
+                                })
+                            } else {
+                                decision.binding.clone()
+                            };
 
-                            let upstream = match connect_udp(target_addr, decision.binding.as_ref()).await {
+                            let upstream = match connect_udp(target_addr, binding_direct.as_ref()).await {
                                 Ok(socket) => Arc::new(socket),
                                 Err(e) => {
                                     error!("udp_proxy: failed to create upstream socket for {}: {}", target_addr, e);

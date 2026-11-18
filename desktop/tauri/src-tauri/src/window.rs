@@ -211,24 +211,20 @@ pub fn do_after_main_window_created() {
 /// If the Portmaster API is unreachable and there's no main window yet, we show the
 /// splash-screen window.
 pub fn open_window(app: &AppHandle) -> Result<WebviewWindow> {
-    if app.portmaster().is_reachable() {
-        match app.get_webview_window("main") {
-            Some(win) => {
-                if let Ok(true) = win.is_minimized() {
-                    let _ = win.unminimize();
-                }
-                app.portmaster().show_window();
-                let _ = win.show();
-                let _ = win.set_focus();
-                set_window_icon(&win);
-                Ok(win)
-            }
-            None => {
-                app.portmaster().show_window();
-
-                create_main_window(app)
-            }
+    if let Some(win) = app.get_webview_window("main") {
+        if let Ok(true) = win.is_minimized() {
+            let _ = win.unminimize();
         }
+        app.portmaster().show_window();
+        let _ = win.show();
+        let _ = win.set_focus();
+        set_window_icon(&win);
+        return Ok(win);
+    }
+
+    if app.portmaster().is_reachable() {
+        app.portmaster().show_window();
+        create_main_window(app)
     } else {
         debug!("Show splash screen");
         create_splash_window(app)

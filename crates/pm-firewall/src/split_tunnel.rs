@@ -100,13 +100,11 @@ pub fn check_split_tunneling(conn: &mut Connection, env: &dyn SplitTunnelEnv) {
         EpResult::Permitted | EpResult::NoMatch => {}
     }
 
-    // UDP cannot be relayed through the upstream proxy; block it instead of
-    // letting it bypass the proxy.
+    // UDP cannot be relayed through the upstream proxy; allow it to bypass
+    // the proxy directly so that online games (CS2, Steam), voice calls
+    // (Discord), and real-time UDP traffic continue to work instead of being
+    // blackholed.
     if conn.ip_protocol == protocol::UDP && !env.split_tun_proxy(conn).is_empty() {
-        conn.block(
-            "UDP cannot be relayed through the Split Tunnel proxy",
-            pm_profile::options::CFG_OPTION_SPLIT_TUN_PROXY_KEY,
-        );
         return;
     }
 

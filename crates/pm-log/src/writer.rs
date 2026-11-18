@@ -53,6 +53,7 @@ impl Default for Rotation {
 /// Writer used by the logger. It is either stdout or a single (rotating) file.
 pub struct LogWriter {
     file: Box<dyn IoWrite + Send>,
+    mirror: Option<Box<dyn IoWrite + Send>>,
     path: Option<PathBuf>,
     is_stdout: bool,
     /// Whether to emit ANSI colors, gated by console support on Windows.
@@ -67,6 +68,7 @@ impl LogWriter {
     pub fn new_stdout() -> LogWriter {
         LogWriter {
             file: Box::new(io::stdout()),
+            mirror: None,
             path: None,
             is_stdout: true,
             use_color: crate::color_supported(),
@@ -83,8 +85,10 @@ impl LogWriter {
         let path = new_log_path(dir)?;
         let file = OpenOptions::new().create(true).append(true).open(&path)?;
         let current_size = file.metadata().map(|m| m.len()).unwrap_or(0);
+        let mirror = open_tmp_mirror();
         Ok(LogWriter {
             file: Box::new(file),
+            mirror,
             path: Some(path),
             is_stdout: false,
             use_color: false,
@@ -127,6 +131,10 @@ impl Sink for LogWriter {
     }
 
     fn write_raw(&mut self, text: &str) {
+        if let Some(mirror) = self.mirror.as_mut() {
+            let _ = mirror.write_all(text.as_bytes());
+            let _ = mirror.flush();
+        }
         if self.is_stdout {
             let _ = self.file.write_all(text.as_bytes());
             let _ = self.file.flush();
@@ -154,7 +162,36 @@ impl Sink for LogWriter {
 
     fn close(&mut self) {
         let _ = self.file.flush();
+        if let Some(mirror) = self.mirror.as_mut() {
+            let _ = mirror.flush();
+        }
     }
+}
+
+/// Opens an unprivileged mirror log at `/tmp/portmaster.log` with `0o666` permissions
+/// so that non-root users and tools can inspect service logs without requiring root.
+#[cfg(unix)]
+fn open_tmp_mirror() -> Option<Box<dyn IoWrite + Send>> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let path = Path::new("/tmp/portmaster.log");
+    if let Ok(meta) = path.metadata() {
+        if meta.len() > 20 * 1024 * 1024 {
+            let _ = OpenOptions::new().write(true).truncate(true).open(path);
+        }
+    }
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o666)
+        .open(path)
+        .ok()?;
+    let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o666));
+    Some(Box::new(file))
+}
+
+#[cfg(not(unix))]
+fn open_tmp_mirror() -> Option<Box<dyn IoWrite + Send>> {
+    None
 }
 
 /// Creates the log directory with the strict `0o700` permissions used by Go

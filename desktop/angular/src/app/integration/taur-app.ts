@@ -90,26 +90,22 @@ export class TauriIntegrationService implements IntegrationService {
       .then(info => info.icon_dataurl)
   }
 
-  exitApp(): Promise<void> {
-    // we have two options here:
-    //  - close(): close the native tauri window and release all resources of it.
-    //             this has the disadvantage that if the user re-opens the window,
-    //             it will take slightly longer because angular need to re-bootstrap
-    //             the application.
-    //
-    //             IMPORTANT: the angular application will automatically launch prompt
-    //             windows via the tauri window interface. If we would call close(),
-    //             those prompts wouldn't work anymore because the angular app would not
-    //             be running in the background.
-    //
-    //  - hide(): just set the window visibility to false. The advantage is that angular
-    //            is still running and interacting with portmaster but it also means that
-    //            we waste some system resources due to tauri window objects and the angular
-    //            application.
+  async exitApp(): Promise<void> {
+    try {
+      await invoke("exit_ui");
+    } catch (err) {
+      console.warn("exit_ui invoke failed, falling back to getCurrentWindow().hide()", err);
+      getCurrentWindow().hide();
+    }
+  }
 
-    getCurrentWindow().hide()
-
-    return Promise.resolve();
+  async shutdownApp(): Promise<void> {
+    try {
+      await invoke("shutdown_app");
+    } catch (err) {
+      console.warn("shutdown_app invoke failed, falling back to exitApp()", err);
+      await this.exitApp();
+    }
   }
 
   // Tauri specific functions that are not defined in the IntegrationService interface.

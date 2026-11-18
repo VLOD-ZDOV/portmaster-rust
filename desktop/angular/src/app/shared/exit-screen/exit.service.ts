@@ -1,4 +1,4 @@
-import { IntegrationService } from './../../integration/integration';
+import { TauriIntegrationService } from 'src/app/integration/taur-app';
 import { Injectable, inject } from '@angular/core';
 import { PortapiService } from '@safing/portmaster-api';
 import { SfngDialogService } from '@safing/ui';
@@ -136,11 +136,16 @@ export class ExitService {
       ]
     })
       .onAction('shutdown', () => {
+        if (this.integration instanceof TauriIntegrationService) {
+          (this.integration as TauriIntegrationService).shutdownApp();
+          return;
+        }
         this.portapi.shutdownPortmaster()
           .subscribe(this.uai.httpObserver(
             'Shutting Down ...',
             'Failed to Shut Down',
-          ))
+          ));
+        setTimeout(() => this.integration.exitApp(), 1500);
       })
   }
 }

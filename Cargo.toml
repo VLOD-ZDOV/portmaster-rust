@@ -49,6 +49,9 @@ members = [
     "crates/pm-winkext",
     "crates/pm-winplatform",
 ]
+exclude = [
+    "desktop/tauri/src-tauri",
+]
 
 [workspace.package]
 edition = "2021"
