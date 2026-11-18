@@ -45,7 +45,23 @@ impl TcpProxy {
         decider: SharedDecider,
         config: TcpProxyConfig,
     ) -> io::Result<Self> {
-        let listener = TcpListener::bind(addr).await?;
+        let domain = match addr {
+            SocketAddr::V4(_) => socket2::Domain::IPV4,
+            SocketAddr::V6(_) => socket2::Domain::IPV6,
+        };
+        let socket = socket2::Socket::new(domain, socket2::Type::STREAM, None)?;
+        socket.set_nonblocking(true)?;
+        let _ = socket.set_reuse_address(true);
+        #[cfg(all(unix, not(target_os = "solaris"), not(target_os = "illumos")))]
+        let _ = socket.set_reuse_port(true);
+        if addr.is_ipv6() {
+            let _ = socket.set_only_v6(true);
+        }
+        let sock_addr = socket2::SockAddr::from(addr);
+        socket.bind(&sock_addr)?;
+        socket.listen(1024)?;
+        let std_listener: std::net::TcpListener = socket.into();
+        let listener = TcpListener::from_std(std_listener)?;
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         Ok(Self {
             listener,

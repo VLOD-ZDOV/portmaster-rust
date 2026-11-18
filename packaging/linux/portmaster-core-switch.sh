@@ -151,6 +151,8 @@ EOF
 [Service]
 ExecStart=
 ExecStart=${RUST_BIN} --bin-dir=${BIN_DIR} --data-dir=${DATA_DIR} --log-dir=${DATA_DIR}/log --log=\${LOGLEVEL}
+RestartForceExitStatus=23
+RestartSec=1
 EOF
 	if [[ -f ${UI_DROPIN} && -d ${PILOT_WEB} ]]; then
 		mkdir -p "${PILOT_DEST_DIR}"

@@ -176,6 +176,8 @@ if [[ "${TARGET_CORE}" == "rs" ]]; then
 [Service]
 ExecStart=
 ExecStart=${TARGET_BIN_PATH}
+RestartForceExitStatus=23
+RestartSec=1
 EOF
     systemctl daemon-reload || true
   fi

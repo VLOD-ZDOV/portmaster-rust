@@ -32,6 +32,7 @@ pub struct Options {
     pub push_metrics: String,
     pub print_version: bool,
     pub help: bool,
+    pub recover_iptables: bool,
 }
 
 impl Default for Options {
@@ -52,6 +53,7 @@ impl Default for Options {
             push_metrics: String::new(),
             print_version: false,
             help: false,
+            recover_iptables: false,
         }
     }
 }
@@ -95,6 +97,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
             "--push-metrics" => options.push_metrics = value(&name)?,
             "--version" => options.print_version = true,
             "--help" | "-h" => options.help = true,
+            "--recover-iptables" | "recover-iptables" => options.recover_iptables = true,
             other => return Err(format!("unknown flag: {other}")),
         }
     }
@@ -226,5 +229,13 @@ mod tests {
     fn invalid_flags_are_rejected() {
         assert!(parse(args(&["--nope"])).is_err());
         assert!(parse(args(&["--data-dir"])).is_err());
+    }
+
+    #[test]
+    fn recover_iptables_flag_and_command_are_accepted() {
+        let opt1 = parse(args(&["--recover-iptables"])).unwrap();
+        assert!(opt1.recover_iptables);
+        let opt2 = parse(args(&["recover-iptables"])).unwrap();
+        assert!(opt2.recover_iptables);
     }
 }

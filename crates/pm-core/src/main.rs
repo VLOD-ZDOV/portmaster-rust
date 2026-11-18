@@ -29,6 +29,20 @@ fn main() -> ExitCode {
         println!("{}", cli::help());
         return ExitCode::SUCCESS;
     }
+    if options.recover_iptables {
+        #[cfg(target_os = "linux")]
+        {
+            use pm_interception::iptables::{self, Cmd};
+            if let Err(error) = iptables::deactivate(&Cmd::v4(), iptables::ONCE, iptables::V4_CHAINS) {
+                eprintln!("failed to clean up IPv4 iptables: {error}");
+            }
+            if let Err(error) = iptables::deactivate(&Cmd::v6(), iptables::ONCE, iptables::V6_CHAINS) {
+                eprintln!("failed to clean up IPv6 iptables: {error}");
+            }
+            println!("iptables rules recovered");
+        }
+        return ExitCode::SUCCESS;
+    }
 
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()

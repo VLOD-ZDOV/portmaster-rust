@@ -243,3 +243,21 @@ async fn ipv6_proxies_follow_the_environment() {
     assert!(proxies.udp6_addr().is_some());
     proxies.stop();
 }
+
+#[tokio::test]
+async fn dual_stack_same_port_binds_successfully() {
+    let dummy = std::net::TcpListener::bind("127.0.0.1:0").expect("get free port");
+    let free_port = dummy.local_addr().expect("addr").port();
+    drop(dummy);
+
+    let proxies = Proxies::new();
+    let queue = Arc::new(RequestQueue::new());
+    proxies
+        .start_on(free_port, queue, &FakeEnv { ipv6: true })
+        .await
+        .expect("start with same port on both ipv4 and ipv6");
+    assert!(proxies.is_ready());
+    assert_eq!(proxies.tcp4_addr().unwrap().port(), free_port);
+    assert_eq!(proxies.tcp6_addr().unwrap().port(), free_port);
+    proxies.stop();
+}
