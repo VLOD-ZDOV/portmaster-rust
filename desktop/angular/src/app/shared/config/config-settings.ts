@@ -51,6 +51,7 @@ const OBSOLETE_SETTINGS = new Set([
   'spn/routingAlgorithm',
   'spn/transitHubPolicy',
   'spn/exitHubPolicy',
+  'spn/enable',
 ]);
 
 interface Category {

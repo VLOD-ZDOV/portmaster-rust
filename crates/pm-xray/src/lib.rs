@@ -133,13 +133,13 @@ pub fn register_options(config: &Config) -> pm_config::Result<()> {
     )?;
     config.register(
         ConfigOption::new(
-            "Служба ядра Xray",
+            "Модуль Xray",
             CFG_XRAY_ENABLE,
             "Включение интеграции и фонового процесса Xray для проксирования.",
             pm_config::OPT_TYPE_BOOL,
             Value::Bool(true),
         )
-        .with_expertise_level(pm_config::EXPERTISE_LEVEL_USER)
+        .with_expertise_level(pm_config::EXPERTISE_LEVEL_DEVELOPER)
         .with_annotation(pm_config::CATEGORY_ANNOTATION, json!("General")),
     )?;
     config.register(
@@ -190,13 +190,13 @@ pub fn register_options(config: &Config) -> pm_config::Result<()> {
     if config.option("spn/enable").is_err() {
         let _ = config.register(
             ConfigOption::new(
-                "Маршрутизация Xray",
+                "Состояние VPN (Xray)",
                 "spn/enable",
-                "Глобальное включение маршрутизации сетевого трафика через Xray.",
+                "Внутренний флаг активности VPN-подключения через Xray.",
                 pm_config::OPT_TYPE_BOOL,
                 Value::Bool(false),
             )
-            .with_expertise_level(pm_config::EXPERTISE_LEVEL_USER)
+            .with_expertise_level(pm_config::EXPERTISE_LEVEL_DEVELOPER)
             .with_annotation(pm_config::CATEGORY_ANNOTATION, json!("General")),
         );
     }
