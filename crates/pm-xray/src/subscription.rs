@@ -22,6 +22,7 @@ pub const XRAY_DB: &str = "xray";
 const SUBSCRIPTION_PREFIX: &str = "subscription:";
 const NODE_PREFIX: &str = "node:";
 const ACTIVE_KEY: &str = "active";
+const LAST_NODE_KEY: &str = "last_node";
 
 const USER_AGENTS: &[&str] = &[
     "v2rayN/6.40",
@@ -899,12 +900,19 @@ impl SubscriptionStore {
     }
 
     pub fn set_active(&self, subscription_id: &str, node_id: &str) -> Result<()> {
+        let val = format!("{subscription_id}:{node_id}");
         let record = Record::from_typed(
             Key::new(XRAY_DB, ACTIVE_KEY),
             Meta::default(),
-            &format!("{subscription_id}:{node_id}"),
+            &val,
         )?;
-        Ok(self.db.put_new(record)?)
+        let _ = self.db.put(record);
+        let last_rec = Record::from_typed(
+            Key::new(XRAY_DB, LAST_NODE_KEY),
+            Meta::default(),
+            &val,
+        )?;
+        Ok(self.db.put(last_rec)?)
     }
 
     fn active_raw(&self) -> Option<String> {
@@ -917,6 +925,15 @@ impl SubscriptionStore {
     pub fn active_node_id(&self) -> Option<String> {
         self.active_raw()
             .and_then(|value| value.split_once(':').map(|(_, node)| node.to_string()))
+    }
+
+    pub fn last_node_id(&self) -> Option<String> {
+        self.db
+            .get(&full_key(LAST_NODE_KEY))
+            .ok()
+            .and_then(|record| record.decode::<String>().ok())
+            .and_then(|value| value.split_once(':').map(|(_, node)| node.to_string()))
+            .or_else(|| self.active_node_id())
     }
 
     pub fn clear_active(&self) {

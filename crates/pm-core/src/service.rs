@@ -16,7 +16,7 @@ use crate::api_auth::{ApiAuthenticator, SystemLookup};
 use crate::cli::Options;
 
 /// Current Portmaster release version.
-pub const PORTMASTER_VERSION: &str = "2.2.12";
+pub const PORTMASTER_VERSION: &str = "2.2.13";
 /// GitHub repository for update checks.
 pub const CFG_GITHUB_RELEASE_REPO: &str = "core/updates/githubRepo";
 
@@ -1104,8 +1104,13 @@ impl Service {
             }
         });
 
-        // Start the split tunnel proxies when the module is enabled.
-        if self.config.get_as_bool("splittun/enable", false)() {
+        // Start the split tunnel proxies when split tunneling or Xray routing is enabled.
+        let proxies_wanted = {
+            let splittun_on = self.config.get_as_bool("splittun/enable", false)();
+            let spn_on = self.config.get_as_bool("spn/enable", false)();
+            splittun_on || spn_on
+        };
+        if proxies_wanted {
             if let Err(error) = self
                 .split_proxies
                 .start(self.split_queue.clone(), self.system_interfaces.as_ref())
@@ -1114,6 +1119,37 @@ impl Service {
                 tracing::error!(%error, "splittun: failed to start proxies");
             }
         }
+
+        // Dynamically manage split proxies lifecycle on config changes
+        let proxies_dyn = Arc::clone(&self.split_proxies);
+        let queue_dyn = Arc::clone(&self.split_queue);
+        let ifaces_dyn = Arc::clone(&self.system_interfaces);
+        let config_dyn = Arc::clone(&self.config);
+        let mut config_rx = self.config.subscribe_changes();
+        let stop_token_dyn = self.stop_token.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = stop_token_dyn.cancelled() => break,
+                    event = config_rx.recv() => {
+                        if event.is_err() {
+                            continue;
+                        }
+                        let splittun_on = config_dyn.get_as_bool("splittun/enable", false)();
+                        let spn_on = config_dyn.get_as_bool("spn/enable", false)();
+                        let wanted = splittun_on || spn_on;
+                        let running = proxies_dyn.is_ready();
+                        if wanted && !running {
+                            if let Err(err) = proxies_dyn.start(queue_dyn.clone(), ifaces_dyn.as_ref()).await {
+                                tracing::error!(%err, "splittun: failed to start dynamic proxies");
+                            }
+                        } else if !wanted && running {
+                            proxies_dyn.stop();
+                        }
+                    }
+                }
+            }
+        });
 
         // The netquery feed must run regardless of interception state.
         self.firewall.start_netquery_feed();

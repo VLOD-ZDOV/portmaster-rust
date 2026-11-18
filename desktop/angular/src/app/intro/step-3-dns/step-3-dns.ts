@@ -49,7 +49,7 @@ export class Step3DNSComponent implements Step, OnInit {
       return [];
     }
 
-    let val = this.setting.Annotations["safing/portbase:ui:quick-setting"];
+    const val = this.setting.Annotations["safing/portbase:ui:quick-setting"];
     if (val === undefined) {
       return [];
     }

@@ -47,6 +47,12 @@ import {
 import { subsystems, SubsystemWithExpertise } from './subsystems'
 import { I18nService } from 'src/i18n';
 
+const OBSOLETE_SETTINGS = new Set([
+  'spn/routingAlgorithm',
+  'spn/transitHubPolicy',
+  'spn/exitHubPolicy',
+]);
+
 interface Category {
   name: string;
   settings: Setting[];
@@ -297,7 +303,7 @@ export class ConfigSettingsViewComponent
     const subsys = this.subsystems.find(
       (subsys) => s.Key === subsys.ToggleOptionKey
     );
-    if (!!subsys) {
+    if (subsys) {
       // trigger a reload of the page as we now might need to show more
       // settings.
       this.onSettingsChange.next(this.onSettingsChange.getValue());
@@ -358,6 +364,9 @@ export class ConfigSettingsViewComponent
           });
 
           settings.forEach((setting) => {
+            if (OBSOLETE_SETTINGS.has(setting.Key)) {
+              return;
+            }
             let pushed = false;
             this.subsystems.forEach((subsys) => {
               const prefix = subsys.ConfigKeySpace.slice('config:'.length);
@@ -437,11 +446,11 @@ export class ConfigSettingsViewComponent
               subsys.hasUserDefinedValues = hasUserDefinedValues;
 
               let toggleOption: Setting | undefined = undefined;
-              for (let c of categories) {
+              for (const c of categories) {
                 toggleOption = c.settings.find(
                   (s) => s.Key === subsys.ToggleOptionKey
                 );
-                if (!!toggleOption) {
+                if (toggleOption) {
                   // Determine the effective enabled state: per-app value takes
                   // priority, then the globally-configured value (GlobalDefault),
                   // and finally the hardcoded DefaultValue.
@@ -543,7 +552,7 @@ export class ConfigSettingsViewComponent
   private intersectionCallback() {
     // search our parents for the element that's scrollable
     let elem: HTMLElement = this.elementRef.nativeElement;
-    while (!!elem) {
+    while (elem) {
       if (elem.scrollTop > 0) {
         break;
       }
@@ -558,8 +567,8 @@ export class ConfigSettingsViewComponent
     }
 
     // get the elements offset to page-top
-    var offsetTop = 0;
-    if (!!elem) {
+    let offsetTop = 0;
+    if (elem) {
       const viewRect = elem.getBoundingClientRect();
       offsetTop = viewRect.top;
     }
@@ -601,7 +610,7 @@ export class ConfigSettingsViewComponent
    * @param id The ID of the anchor element to scroll to.
    */
   scrollTo(id: string, cat?: Category) {
-    if (!!cat) {
+    if (cat) {
       cat.collapsed = false;
     }
     document.getElementById(id)?.scrollIntoView({

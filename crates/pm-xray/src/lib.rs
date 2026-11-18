@@ -49,6 +49,8 @@ pub use subscription::{HttpFetcher, SubscriptionFetcher, SubscriptionStore, XRAY
 pub const CFG_XRAY_BINARY: &str = "core/xrayBinary";
 /// Whether the Xray integration is enabled.
 pub const CFG_XRAY_ENABLE: &str = "xray/enable";
+/// Whether Xray automatically reconnects to the last server on startup.
+pub const CFG_XRAY_AUTO_CONNECT: &str = "xray/autoConnect";
 /// Local SOCKS/HTTP port exposed by Xray.
 pub const CFG_XRAY_INBOUND_PORT: &str = "xray/inboundPort";
 /// Local inbound protocol: `socks` or `http`.
@@ -135,7 +137,18 @@ pub fn register_options(config: &Config) -> pm_config::Result<()> {
             CFG_XRAY_ENABLE,
             "Включение интеграции и фонового процесса Xray для проксирования.",
             pm_config::OPT_TYPE_BOOL,
-            Value::Bool(false),
+            Value::Bool(true),
+        )
+        .with_expertise_level(pm_config::EXPERTISE_LEVEL_USER)
+        .with_annotation(pm_config::CATEGORY_ANNOTATION, json!("General")),
+    )?;
+    config.register(
+        ConfigOption::new(
+            "Автоподключение Xray",
+            CFG_XRAY_AUTO_CONNECT,
+            "Автоматически восстанавливать подключение к последнему серверу Xray при запуске Portmaster.",
+            pm_config::OPT_TYPE_BOOL,
+            Value::Bool(true),
         )
         .with_expertise_level(pm_config::EXPERTISE_LEVEL_USER)
         .with_annotation(pm_config::CATEGORY_ANNOTATION, json!("General")),
@@ -539,12 +552,8 @@ impl Xray {
         }
     }
 
-    /// Starts the service: restores the last selected node when one exists.
+    /// Starts the service: restores the last selected node when one exists and auto-connect is enabled.
     pub fn start(&self) {
-        if !self.enabled {
-            tracing::info!("xray: integration is disabled");
-            return;
-        }
         if !self.manager.binary_available() {
             tracing::warn!(
                 binary = XRAY_BINARY_NAME,
@@ -552,13 +561,28 @@ impl Xray {
             );
             return;
         }
-        let Some(node_id) = self.store.active_node_id() else {
+        let auto_connect = self.config.get_as_bool(CFG_XRAY_AUTO_CONNECT, true)();
+        if !auto_connect {
+            tracing::info!("xray: auto-connect is disabled in settings");
+            return;
+        }
+        let Some(node_id) = self.store.last_node_id() else {
+            tracing::info!("xray: no previous active node found to restore");
             return;
         };
         match self.store.get_node(&node_id) {
             Ok(node) => {
+                tracing::info!(node = %node.name, "xray: auto-connecting to last selected node");
                 if let Err(error) = self.manager.connect(&node, self.inbound_port, self.inbound) {
                     tracing::warn!(%error, "xray: failed to restore selected node");
+                } else {
+                    let _ = self.store.set_active(&node.subscription_id, &node.id);
+                    let _ = self.config.set_config_option("spn/enable", serde_json::Value::Bool(true));
+                    let _ = self.config.set_config_option("splittun/enable", serde_json::Value::Bool(true));
+                    let _ = self.config.set_config_option(
+                        "splittun/proxy",
+                        serde_json::Value::String(format!("socks5://127.0.0.1:{}", self.inbound_port)),
+                    );
                 }
             }
             Err(error) => tracing::warn!(%error, "xray: stored active node is gone"),

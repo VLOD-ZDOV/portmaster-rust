@@ -6,21 +6,17 @@
     {{ 'app.useSPN' | t: undefined : ('' | i18nVersion) }}
   </span>
 
-  <span *ngIf="!canUse" routerLink="/xray" class="cursor-pointer text-tertiary hover:underline">
-    {{ 'app.getPro' | t: undefined : ('' | i18nVersion) }}
-  </span>
-
-  <sfng-toggle *ngIf="canUse && spnDisabled === false"
+  <sfng-toggle *ngIf="spnDisabled === false"
     [ngModel]="currentValue" (ngModelChange)="updateUseSpn($event)">
   </sfng-toggle>
 
-  <span *ngIf="canUse && spnDisabled === true"
+  <span *ngIf="spnDisabled === true"
     routerLink="/xray" class="cursor-pointer text-tertiary hover:underline"
     [sfng-tooltip]="'app.enableSPNUse' | t: undefined : ('' | i18nVersion)">
       {{ 'common.disabled' | t: undefined : ('' | i18nVersion) }}
   </span>
 
-  <ng-template *ngIf="canUse && spnDisabled === null">
+  <ng-template *ngIf="spnDisabled === null">
     <fa-icon icon="spinner" [spin]="true"></fa-icon>
   </ng-template>
 

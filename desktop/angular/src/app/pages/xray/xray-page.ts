@@ -59,11 +59,12 @@ export class XrayPageComponent implements OnInit, OnDestroy {
     if (!this.selectedCountry) {
       return this.pins;
     }
-    return this.pins.filter(pin => pin.entity.Country === this.selectedCountry);
+    const target = this.selectedCountry.toUpperCase();
+    return this.pins.filter(pin => (pin.entity.Country || '').toUpperCase() === target);
   }
 
   get countries(): string[] {
-    return Array.from(new Set(this.pins.map(pin => pin.entity.Country).filter(Boolean))).sort();
+    return Array.from(new Set(this.pins.map(pin => (pin.entity.Country || '').toUpperCase()).filter(Boolean))).sort();
   }
 
   constructor(
@@ -124,15 +125,23 @@ export class XrayPageComponent implements OnInit, OnDestroy {
   }
 
   private onCountryClick(event: CountryEvent): void {
-    const wasSelected = this.selectedCountry === event.countryCode;
-    this.selectedCountry = wasSelected ? null : event.countryCode;
+    if (!event?.countryCode) {
+      return;
+    }
+    const code = event.countryCode.toUpperCase();
+    this.selectedCountry = code;
 
-    if (!wasSelected) {
-      const countryPins = this.pins.filter(pin => pin.entity.Country === event.countryCode);
-      if (countryPins.length > 0) {
-        this.selectPin(countryPins[0]);
-        this.connect(countryPins[0]);
-      }
+    // Highlight country path on SVG
+    if (this.mapRef?.worldGroup) {
+      this.mapRef.worldGroup.selectAll<SVGPathElement, any>('path')
+        .classed('selected', (d: any) => (d?.properties?.iso_a2 || '').toUpperCase() === code);
+    }
+
+    const countryPins = this.pins.filter(pin => (pin.entity.Country || '').toUpperCase() === code);
+    if (countryPins.length > 0) {
+      const targetPin = countryPins[0];
+      this.selectPin(targetPin);
+      this.connect(targetPin);
     }
     this.cdr.markForCheck();
   }
@@ -166,11 +175,25 @@ export class XrayPageComponent implements OnInit, OnDestroy {
       .append('circle')
       .attr('class', 'marker')
       .style('cursor', 'pointer')
-      .on('click', (_event: MouseEvent, pin: MapPin) => this.selectPin(pin));
+      .on('click', (_event: MouseEvent, pin: MapPin) => {
+        this.selectPin(pin);
+        this.connect(pin);
+      });
 
-    const withNodes = new Set(pins.map(pin => pin.entity.Country));
-    ref.worldGroup.selectAll<SVGPathElement, any>('path')
-      .attr('has-nodes', (d: any) => withNodes.has(d?.properties?.iso_a2));
+    const withNodes = new Set(pins.map(pin => (pin.entity.Country || '').toUpperCase()).filter(Boolean));
+    const activeCountry = (this.pins.find(p => p.isExit)?.entity.Country || '').toUpperCase();
+
+    if (ref.worldGroup) {
+      ref.worldGroup.selectAll<SVGPathElement, any>('path')
+        .attr('has-nodes', (d: any) => {
+          const code = (d?.properties?.iso_a2 || '').toUpperCase();
+          return withNodes.has(code);
+        })
+        .attr('in-use', (d: any) => {
+          const code = (d?.properties?.iso_a2 || '').toUpperCase();
+          return activeCountry !== '' && code === activeCountry;
+        });
+    }
 
     this.positionPins();
   }
@@ -197,6 +220,15 @@ export class XrayPageComponent implements OnInit, OnDestroy {
       .attr('selected', pin => String(pin.pin.ID === this.selectedPinId));
 
     group.selectAll<SVGCircleElement, MapPin>('circle').attr('r', radius);
+
+    const activeCountry = (this.pins.find(p => p.isExit)?.entity.Country || '').toUpperCase();
+    if (ref.worldGroup) {
+      ref.worldGroup.selectAll<SVGPathElement, any>('path')
+        .attr('in-use', (d: any) => {
+          const code = (d?.properties?.iso_a2 || '').toUpperCase();
+          return activeCountry !== '' && code === activeCountry;
+        });
+    }
   }
 
   // ---- Actions -------------------------------------------------------------
