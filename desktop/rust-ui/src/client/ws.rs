@@ -8,7 +8,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures::channel::{mpsc, oneshot};
-use futures::lock::Mutex as AsyncMutex;
+use futures::future::select;
+use futures::pin_mut;
 use futures::{SinkExt, StreamExt};
 use gloo_net::websocket::futures::WebSocket;
 use gloo_net::websocket::Message;
@@ -59,14 +60,14 @@ impl ConnectionState {
     }
 }
 
-type SubCallback = Box<dyn Fn(PortApiFrame) + Send + Sync + 'static>;
+type SubCallback = Arc<dyn Fn(PortApiFrame) + Send + Sync + 'static>;
 
 /// Shared state of active in-flight requests and subscriptions.
 #[derive(Default)]
 struct ClientInner {
     pending_oneshot: HashMap<String, oneshot::Sender<PortApiFrame>>,
     pending_query_stream: HashMap<String, (Vec<PortApiFrame>, oneshot::Sender<Vec<PortApiFrame>>)>,
-    subscriptions: HashMap<String, SubCallback>,
+    subscriptions: HashMap<String, (String, SubCallback)>,
 }
 
 /// The reactive PortAPI client instance.
@@ -96,7 +97,11 @@ impl PortApiClient {
                 if let Some(window) = web_sys::window() {
                     let loc = window.location();
                     if let Ok(host) = loc.host() {
-                        if !host.is_empty() && (host.ends_with(":817") || host == "127.0.0.1:817" || host == "localhost:817") {
+                        let is_allowed_host = host == "127.0.0.1:817"
+                            || host == "localhost:817"
+                            || host.starts_with("127.0.0.1:")
+                            || host.starts_with("localhost:");
+                        if is_allowed_host {
                             let proto = if loc.protocol().unwrap_or_default() == "https:" { "wss:" } else { "ws:" };
                             return format!("{}//{}/api/database/v1", proto, host);
                         }
@@ -129,12 +134,12 @@ impl PortApiClient {
     }
 
     /// Background task that maintains connection, sends frames, and handles incoming messages.
-    fn start_connection_loop(&self, outgoing_rx: mpsc::UnboundedReceiver<String>) {
+    fn start_connection_loop(&self, mut outgoing_rx: mpsc::UnboundedReceiver<String>) {
         let url = (*self.url).clone();
         let set_state = self.set_state;
         let set_ping = self.set_ping;
         let inner = Arc::clone(&self.inner);
-        let shared_rx = Arc::new(AsyncMutex::new(outgoing_rx));
+        let tx = self.tx.clone();
 
         spawn_local(async move {
             let mut backoff_ms = 500u64;
@@ -147,47 +152,71 @@ impl PortApiClient {
                         set_state.set(ConnectionState::Connected);
                         backoff_ms = 500;
 
+                        // Re-subscribe active subscriptions on the newly established connection
+                        let resend_msgs: Vec<String> = {
+                            let inner_guard = inner.lock().expect("lock client inner");
+                            inner_guard
+                                .subscriptions
+                                .values()
+                                .map(|(wire, _)| wire.clone())
+                                .collect()
+                        };
+                        for msg in resend_msgs {
+                            let _ = tx.unbounded_send(msg);
+                        }
+
                         let (mut ws_sink, mut ws_stream) = ws.split();
 
                         // Loop reading outgoing frames and writing to WS
-                        let rx_clone = Arc::clone(&shared_rx);
-                        let _writer_task = spawn_local({
-                            async move {
-                                let mut rx = rx_clone.lock().await;
-                                while let Some(text) = rx.next().await {
-                                    if ws_sink.send(Message::Text(text)).await.is_err() {
+                        let writer_fut = async {
+                            while let Some(text) = outgoing_rx.next().await {
+                                if ws_sink.send(Message::Text(text)).await.is_err() {
+                                    break;
+                                }
+                            }
+                        };
+
+                        // Read incoming messages from WebSocket
+                        let inner_reader = Arc::clone(&inner);
+                        let reader_fut = async {
+                            while let Some(msg) = ws_stream.next().await {
+                                match msg {
+                                    Ok(Message::Text(text)) => {
+                                        if let Ok(frame) = PortApiFrame::parse(&text) {
+                                            Self::dispatch_frame(&inner_reader, frame);
+                                        }
+                                    }
+                                    Ok(Message::Bytes(bytes)) => {
+                                        if let Ok(text) = String::from_utf8(bytes) {
+                                            if let Ok(frame) = PortApiFrame::parse(&text) {
+                                                Self::dispatch_frame(&inner_reader, frame);
+                                            }
+                                        }
+                                    }
+                                    Err(_) => {
                                         break;
                                     }
                                 }
                             }
-                        });
+                        };
 
-                        // Read incoming messages from WebSocket
-                        while let Some(msg) = ws_stream.next().await {
-                            match msg {
-                                Ok(Message::Text(text)) => {
-                                    if let Ok(frame) = PortApiFrame::parse(&text) {
-                                        Self::dispatch_frame(&inner, frame);
-                                    }
-                                }
-                                Ok(Message::Bytes(bytes)) => {
-                                    if let Ok(text) = String::from_utf8(bytes) {
-                                        if let Ok(frame) = PortApiFrame::parse(&text) {
-                                            Self::dispatch_frame(&inner, frame);
-                                        }
-                                    }
-                                }
-                                Err(_) => {
-                                    break;
-                                }
-                            }
-                        }
+                        pin_mut!(writer_fut);
+                        pin_mut!(reader_fut);
 
-                        let _ = _writer_task;
+                        // Concurrently run reader and writer until either disconnects or encounters an error.
+                        // Dropping select terminates both futures and safely releases all resources without leaking tasks or locks.
+                        let _ = select(writer_fut, reader_fut).await;
                     }
                     Err(_) => {
                         // Failed to open socket
                     }
+                }
+
+                // Cleanup broken requests and notify waiters of socket disconnection
+                {
+                    let mut inner_guard = inner.lock().expect("lock client inner");
+                    inner_guard.pending_oneshot.clear();
+                    inner_guard.pending_query_stream.clear();
                 }
 
                 set_state.set(ConnectionState::Reconnecting);
@@ -214,7 +243,9 @@ impl PortApiClient {
         if let Some((records, _sender)) = inner.pending_query_stream.get_mut(&frame.id) {
             match frame.msg_type.as_str() {
                 reply_types::OK => {
-                    records.push(frame);
+                    if records.len() < 10_000 {
+                        records.push(frame);
+                    }
                     return;
                 }
                 reply_types::DONE | reply_types::ERROR => {
@@ -230,7 +261,10 @@ impl PortApiClient {
         }
 
         // 3. Check for subscriptions (upd, new, del)
-        if let Some(cb) = inner.subscriptions.get(&frame.id) {
+        // Extract callback and drop mutex lock before invoking callback to prevent deadlocks
+        let cb = inner.subscriptions.get(&frame.id).map(|(_, cb)| cb.clone());
+        drop(inner);
+        if let Some(cb) = cb {
             cb(frame);
         }
     }
@@ -293,13 +327,16 @@ impl PortApiClient {
     {
         let op_id = self.next_op_id("sub");
         let req = PortApiRequest::sub(&op_id, query);
+        let wire = req.to_wire();
 
         {
             let mut inner = self.inner.lock().expect("lock inner");
-            inner.subscriptions.insert(op_id.clone(), Box::new(callback));
+            inner
+                .subscriptions
+                .insert(op_id.clone(), (wire.clone(), Arc::new(callback)));
         }
 
-        self.send_raw(req.to_wire());
+        self.send_raw(wire);
         op_id
     }
 
@@ -310,13 +347,16 @@ impl PortApiClient {
     {
         let op_id = self.next_op_id("qsub");
         let req = PortApiRequest::qsub(&op_id, query);
+        let wire = req.to_wire();
 
         {
             let mut inner = self.inner.lock().expect("lock inner");
-            inner.subscriptions.insert(op_id.clone(), Box::new(callback));
+            inner
+                .subscriptions
+                .insert(op_id.clone(), (wire.clone(), Arc::new(callback)));
         }
 
-        self.send_raw(req.to_wire());
+        self.send_raw(wire);
         op_id
     }
 

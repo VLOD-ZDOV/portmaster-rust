@@ -166,6 +166,7 @@ pub fn AppSwitcher() -> impl IntoView {
                     let query = filter_query.get().to_lowercase();
                     let tab = active_tab.get();
                     let list = profiles.get();
+                    let conns = state.connections.get();
 
                     let filtered: Vec<_> = list
                         .into_iter()
@@ -182,7 +183,17 @@ pub fn AppSwitcher() -> impl IntoView {
                         .filter(|p| {
                             // Tab filter
                             match tab.as_str() {
-                                "active" => p.count_alive_connections() > 0,
+                                "active" => {
+                                    let has_live = conns.iter().any(|c| {
+                                        c.active && (
+                                            c.profile_id == p.id
+                                                || c.profile_id.ends_with(&format!("/{}", p.id))
+                                                || c.profile_name.eq_ignore_ascii_case(&p.name)
+                                                || (!p.id.is_empty() && c.profile_name.to_lowercase().contains(&p.id.to_lowercase()))
+                                        )
+                                    });
+                                    p.count_alive_connections() > 0 || has_live
+                                }
                                 "vpn" => p.route_via_vpn(),
                                 "blocked" => p.default_action() == "block",
                                 _ => true,
@@ -209,11 +220,31 @@ pub fn AppSwitcher() -> impl IntoView {
                             let is_vpn = p.route_via_vpn();
                             let default_action = p.default_action();
                             let is_blocked = default_action == "block";
-                            let conn_count = p.count_alive_connections();
+
+                            let (live_recv, live_sent, live_active) = {
+                                let mut r = 0u64;
+                                let mut s = 0u64;
+                                let mut a = 0usize;
+                                for c in &conns {
+                                    if c.profile_id == p.id
+                                        || c.profile_id.ends_with(&format!("/{}", p.id))
+                                        || c.profile_name.eq_ignore_ascii_case(&p.name)
+                                        || (!p.id.is_empty() && c.profile_name.to_lowercase().contains(&p.id.to_lowercase()))
+                                    {
+                                        r = r.saturating_add(c.bytes_received);
+                                        s = s.saturating_add(c.bytes_sent);
+                                        if c.active {
+                                            a += 1;
+                                        }
+                                    }
+                                }
+                                (r, s, a)
+                            };
+                            let conn_count = p.count_alive_connections().max(live_active as u64);
                             let (bytes_recv, bytes_sent) = if let Some(s) = p.stats {
-                                (s.bytes_received, s.bytes_sent)
+                                (s.bytes_received.max(live_recv), s.bytes_sent.max(live_sent))
                             } else {
-                                (0, 0)
+                                (live_recv, live_sent)
                             };
                             let has_config_changes = p.config.is_some();
 

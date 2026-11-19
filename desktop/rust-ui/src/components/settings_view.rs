@@ -234,7 +234,7 @@ fn SettingRow(setting: Setting) -> impl IntoView {
                 {match setting.opt_type {
                     // 1. Bool Toggle
                     OptionType::Bool => {
-                        let cur_val = setting.value.as_ref().and_then(|v| v.as_bool()).unwrap_or(false);
+                        let cur_val = setting.effective_value().as_bool().unwrap_or(false);
                         let k = key_save.clone();
                         let s = state_save.clone();
                         let next_val = !cur_val;
@@ -257,7 +257,7 @@ fn SettingRow(setting: Setting) -> impl IntoView {
                     // 2. String (Dropdown if possible values exist, else input)
                     OptionType::String => {
                         if !setting.possible_values.is_empty() {
-                            let cur_val = setting.value.as_ref().and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let cur_val = setting.effective_value().as_str().unwrap_or("").to_string();
                             let k = key_save.clone();
                             let s = state_save.clone();
 
@@ -281,7 +281,7 @@ fn SettingRow(setting: Setting) -> impl IntoView {
                                 </select>
                             }.into_any()
                         } else {
-                            let cur_val = setting.value.as_ref().and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let cur_val = setting.effective_value().as_str().unwrap_or("").to_string();
                             let k = key_save.clone();
                             let s = state_save.clone();
 
@@ -301,7 +301,7 @@ fn SettingRow(setting: Setting) -> impl IntoView {
 
                     // 3. Int Number Input
                     OptionType::Int => {
-                        let cur_val = setting.value.as_ref().and_then(|v| v.as_i64()).unwrap_or(0);
+                        let cur_val = setting.effective_value().as_i64().unwrap_or(0);
                         let k = key_save.clone();
                         let s = state_save.clone();
 
@@ -322,9 +322,8 @@ fn SettingRow(setting: Setting) -> impl IntoView {
                     // 4. String Array (Rule lists / multiple strings)
                     OptionType::StringArray => {
                         let items: Vec<String> = setting
-                            .value
-                            .as_ref()
-                            .and_then(|v| v.as_array())
+                            .effective_value()
+                            .as_array()
                             .map(|arr| {
                                 arr.iter().filter_map(|val| val.as_str().map(|s| s.to_string())).collect()
                             })

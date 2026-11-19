@@ -541,10 +541,17 @@ impl AppState {
         client.qsub("netquery/data/", move |frame| {
             if let Ok(conn) = frame.parse_data::<ConnectionRecord>() {
                 let c_clone = conn.clone();
+                let mut prev_sent = 0u64;
+                let mut prev_recv = 0u64;
+                let mut is_new = false;
+
                 live_set_conns.update(|list| {
                     if let Some(pos) = list.iter().position(|c| c.id == conn.id) {
+                        prev_sent = list[pos].bytes_sent;
+                        prev_recv = list[pos].bytes_received;
                         list[pos] = conn;
                     } else {
+                        is_new = true;
                         list.insert(0, conn);
                         if list.len() > 500 {
                             list.truncate(500);
@@ -558,10 +565,32 @@ impl AppState {
                     } else {
                         c_clone.profile_id.clone()
                     };
-                    if let Some(p) = profs.iter_mut().find(|p| p.id == prof_id || p.id == c_clone.profile_id || p.name.eq_ignore_ascii_case(&c_clone.profile_name)) {
-                        let stats = p.stats.get_or_insert_with(Default::default);
+                    let p = if let Some(p) = profs.iter_mut().find(|p| p.id == prof_id || p.id == c_clone.profile_id || p.name.eq_ignore_ascii_case(&c_clone.profile_name)) {
+                        p
+                    } else {
+                        let mut new_p = AppProfile::new(prof_id, &c_clone.profile_name);
+                        if let Some((src, _)) = c_clone.profile_id.split_once('/') {
+                            new_p.source = src.to_string();
+                        }
+                        profs.push(new_p);
+                        profs.last_mut().unwrap()
+                    };
+
+                    let stats = p.stats.get_or_insert_with(Default::default);
+                    if is_new {
+                        if c_clone.active {
+                            stats.connections_count = stats.connections_count.saturating_add(1);
+                        }
+                        if c_clone.is_blocked() {
+                            stats.blocked_count = stats.blocked_count.saturating_add(1);
+                        }
                         stats.bytes_sent = stats.bytes_sent.saturating_add(c_clone.bytes_sent);
                         stats.bytes_received = stats.bytes_received.saturating_add(c_clone.bytes_received);
+                    } else {
+                        let delta_sent = c_clone.bytes_sent.saturating_sub(prev_sent);
+                        let delta_recv = c_clone.bytes_received.saturating_sub(prev_recv);
+                        stats.bytes_sent = stats.bytes_sent.saturating_add(delta_sent);
+                        stats.bytes_received = stats.bytes_received.saturating_add(delta_recv);
                     }
                 });
             }

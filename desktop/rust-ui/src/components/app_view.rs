@@ -84,10 +84,53 @@ pub fn AppDetailView(app_id: String) -> impl IntoView {
                 let monogram = display_name.chars().next().unwrap_or('A').to_uppercase().to_string();
                 let conn_count = p.count_alive_connections();
 
+                let conns = connections.get();
+                let app_id_curr = app_id.clone();
+                let app_name_curr = display_name_match.clone();
+                let app_conns_summary: Vec<_> = conns
+                    .iter()
+                    .filter(|c| {
+                        c.profile_id == app_id_curr
+                            || c.profile_id.ends_with(&format!("/{}", app_id_curr))
+                            || c.profile_name.eq_ignore_ascii_case(&app_name_curr)
+                            || (!app_id_curr.is_empty() && c.profile_name.to_lowercase().contains(&app_id_curr.to_lowercase()))
+                    })
+                    .collect();
+
+                let mut conn_recv = 0u64;
+                let mut conn_sent = 0u64;
+                let mut conn_alive = 0usize;
+                let mut conn_blocked = 0usize;
+                for c in &app_conns_summary {
+                    conn_recv = conn_recv.saturating_add(c.bytes_received);
+                    conn_sent = conn_sent.saturating_add(c.bytes_sent);
+                    if c.active {
+                        conn_alive += 1;
+                    }
+                    if c.is_blocked() {
+                        conn_blocked += 1;
+                    }
+                }
+
                 let (alive_conns, blocked_pct, bytes_recv, bytes_sent) = if let Some(s) = p.stats {
-                    (s.connections_count, s.blocked_percent(), s.bytes_received, s.bytes_sent)
+                    let r = s.bytes_received.max(conn_recv);
+                    let sent = s.bytes_sent.max(conn_sent);
+                    let alive = if s.connections_count > 0 { s.connections_count } else { conn_alive as u64 };
+                    let pct = if s.connections_count > 0 {
+                        s.blocked_percent()
+                    } else if !app_conns_summary.is_empty() {
+                        (conn_blocked as f64 / app_conns_summary.len() as f64) * 100.0
+                    } else {
+                        0.0
+                    };
+                    (alive, pct, r, sent)
                 } else {
-                    (conn_count, 0.0, 0, 0)
+                    let pct = if !app_conns_summary.is_empty() {
+                        (conn_blocked as f64 / app_conns_summary.len() as f64) * 100.0
+                    } else {
+                        0.0
+                    };
+                    ((conn_alive as u64).max(conn_count), pct, conn_recv, conn_sent)
                 };
 
                 let state_vpn = state.clone();
@@ -323,6 +366,8 @@ pub fn AppDetailView(app_id: String) -> impl IntoView {
                                                             {app_conns.into_iter().map(|c| {
                                                                 let dot_class = if c.is_permitted() {
                                                                     "w-2.5 h-2.5 rounded-full bg-[#1de966] inline-block"
+                                                                } else if c.verdict == "ask" {
+                                                                    "w-2.5 h-2.5 rounded-full bg-[#e9d81d] inline-block"
                                                                 } else {
                                                                     "w-2.5 h-2.5 rounded-full bg-[#e01d1d] inline-block"
                                                                 };
@@ -336,7 +381,14 @@ pub fn AppDetailView(app_id: String) -> impl IntoView {
                                                                 view! {
                                                                     <tr class="hover:bg-[#222222] transition-colors">
                                                                         <td class="py-2 px-3 text-center">
-                                                                            <span class=dot_class></span>
+                                                                            <div class="flex items-center justify-center space-x-1">
+                                                                                <span class=dot_class title=c.verdict.clone()></span>
+                                                                                {if c.active {
+                                                                                    view! { <span class="w-1.5 h-1.5 rounded-full bg-[#1de966] animate-pulse" title="Active"></span> }.into_any()
+                                                                                } else {
+                                                                                    view! { <span/> }.into_any()
+                                                                                }}
+                                                                            </div>
                                                                         </td>
                                                                         <td class="py-2 px-3 font-medium text-white">
                                                                             <div>{domain}</div>

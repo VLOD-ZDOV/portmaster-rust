@@ -282,7 +282,7 @@ pub fn MonitorPanel() -> impl IntoView {
                                         let domain_display = c.domain.clone().unwrap_or_else(|| c.remote_ip.clone());
                                         let remote_dest = format!("{}:{}", c.remote_ip, c.remote_port);
                                         let country_display = c.country.clone().unwrap_or_else(|| "Local".to_string());
-                                        let total_bytes = c.bytes_sent + c.bytes_received;
+                                        let total_bytes = c.bytes_sent.saturating_add(c.bytes_received);
                                         let bytes_str = if total_bytes == 0 {
                                             "0 B".to_string()
                                         } else if total_bytes < 1024 {
