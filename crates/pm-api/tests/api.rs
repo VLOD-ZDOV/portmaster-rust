@@ -351,6 +351,15 @@ fn cors_and_preflight() {
     assert_eq!(response.status, 403);
     assert_eq!(response.body_string(), "Cross-Origin Request Denied.\n");
 
+    // DNS rebinding matching Host and Origin is denied.
+    let response = api.handle(
+        Request::new("GET", "/api/v1/endpoints")
+            .with_host("evil.example:817")
+            .with_header("origin", "http://evil.example:817"),
+    );
+    assert_eq!(response.status, 403);
+    assert_eq!(response.body_string(), "Cross-Origin Request Denied.\n");
+
     // Browser extensions are allowed.
     let response = api.handle(
         Request::new("GET", "/api/v1/endpoints")

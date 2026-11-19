@@ -90,32 +90,40 @@ impl Message {
     ///
     /// Mirrors Go `ParseMessage`: record frames (`ok`/`upd`/`new`) need four
     /// fields, `del`/`error`/`warning` need three, `done`/`success` need two.
+    /// For error/warning messages, delimiters within the error message are preserved.
     pub fn parse(data: &[u8]) -> Result<Message> {
-        let parts: Vec<&[u8]> = data.splitn(4, |&byte| byte == SEPARATOR).collect();
-        if parts.len() < 2 {
-            return Err(Error::MalformedMessage);
-        }
+        let mut iter = data.splitn(3, |&byte| byte == SEPARATOR);
+        let op_id_bytes = iter.next().ok_or(Error::MalformedMessage)?;
+        let msg_type_bytes = iter.next().ok_or(Error::MalformedMessage)?;
+        let rest = iter.next();
 
-        let op_id = String::from_utf8_lossy(parts[0]).into_owned();
-        let msg_type = String::from_utf8_lossy(parts[1]).into_owned();
+        let op_id = String::from_utf8_lossy(op_id_bytes).into_owned();
+        let msg_type = String::from_utf8_lossy(msg_type_bytes).into_owned();
         let mut message = Message::new(op_id, msg_type);
 
         match message.msg_type.as_str() {
             msg::OK | msg::UPDATE_RECORD | msg::NEW => {
-                if parts.len() != 4 {
+                let Some(rest) = rest else {
                     return Err(Error::MalformedMessage);
-                }
-                message.key = String::from_utf8_lossy(parts[2]).into_owned();
-                message.raw_value = parts[3].to_vec();
+                };
+                let mut rest_iter = rest.splitn(2, |&byte| byte == SEPARATOR);
+                let key_bytes = rest_iter.next().ok_or(Error::MalformedMessage)?;
+                let val_bytes = rest_iter.next().ok_or(Error::MalformedMessage)?;
+                message.key = String::from_utf8_lossy(key_bytes).into_owned();
+                message.raw_value = val_bytes.to_vec();
             }
             msg::DEL | msg::WARNING | msg::ERROR => {
-                if parts.len() != 3 {
+                let Some(rest) = rest else {
                     return Err(Error::MalformedMessage);
-                }
-                message.key = String::from_utf8_lossy(parts[2]).into_owned();
+                };
+                message.key = String::from_utf8_lossy(rest).into_owned();
             }
             msg::DONE | msg::SUCCESS => {}
-            _ => {}
+            _ => {
+                if let Some(rest) = rest {
+                    message.key = String::from_utf8_lossy(rest).into_owned();
+                }
+            }
         }
 
         Ok(message)
@@ -126,12 +134,23 @@ impl Message {
     /// A value is dumped with the DSD JSON format byte (`J`) prefix, just like
     /// Go `dsd.Dump(value, dsd.JSON)`.
     pub fn pack(&self) -> Result<Vec<u8>> {
+        // Disallow separator or newlines in op_id and key to prevent frame injection/corruption.
+        if self.op_id.as_bytes().iter().any(|&b| b == SEPARATOR || b == b'\n' || b == b'\r') {
+            return Err(Error::MalformedMessage);
+        }
+        if self.key.as_bytes().iter().any(|&b| b == SEPARATOR || b == b'\n' || b == b'\r') {
+            return Err(Error::MalformedMessage);
+        }
+
         let mut out = Vec::with_capacity(64);
         out.extend_from_slice(self.op_id.as_bytes());
         out.push(SEPARATOR);
         out.extend_from_slice(self.msg_type.as_bytes());
 
         if self.key.is_empty() {
+            if !self.raw_value.is_empty() || self.value.is_some() {
+                return Err(Error::MalformedMessage);
+            }
             return Ok(out);
         }
 
@@ -256,5 +275,44 @@ mod tests {
         assert!(Message::parse(b"127|error").is_err());
         // Unknown types are accepted, like the Go implementation.
         assert!(Message::parse(b"127|whatever|payload").is_ok());
+    }
+
+    #[test]
+    fn error_and_warning_frames_support_embedded_delimiters() {
+        let error = Message::parse(b"127|error|invalid format: expected a|b|c").unwrap();
+        assert_eq!(error.msg_type, msg::ERROR);
+        assert_eq!(error.key, "invalid format: expected a|b|c");
+        assert!(error.is_error());
+
+        let warning = Message::parse(b"127|warning|notice: key|subset is deprecated").unwrap();
+        assert_eq!(warning.msg_type, msg::WARNING);
+        assert_eq!(warning.key, "notice: key|subset is deprecated");
+
+        let del = Message::parse(b"127|del|key/with|embedded|pipes").unwrap();
+        assert_eq!(del.msg_type, msg::DEL);
+        assert_eq!(del.key, "key/with|embedded|pipes");
+    }
+
+    #[test]
+    fn pack_rejects_delimiters_and_empty_key_with_value() {
+        // Separator in op_id
+        let msg = Message::request("1|2", msg::GET, "key", None);
+        assert!(msg.pack().is_err());
+
+        // Newline in op_id
+        let msg = Message::request("1\n2", msg::GET, "key", None);
+        assert!(msg.pack().is_err());
+
+        // Separator in key
+        let msg = Message::request("1", msg::GET, "key|inject", None);
+        assert!(msg.pack().is_err());
+
+        // Newline in key
+        let msg = Message::request("1", msg::GET, "key\ninject", None);
+        assert!(msg.pack().is_err());
+
+        // Empty key with payload is rejected
+        let msg = Message::request("1", msg::CREATE, "", Some(serde_json::json!({"a": 1})));
+        assert!(msg.pack().is_err());
     }
 }

@@ -800,33 +800,81 @@ fn effective_method(request: &Request) -> Option<(&'static str, bool)> {
     }
 }
 
+fn is_trusted_host(host: &str) -> bool {
+    let host_trimmed = host.trim().trim_end_matches('/');
+    let hostname = if host_trimmed.starts_with('[') {
+        if let Some(end_bracket) = host_trimmed.find(']') {
+            &host_trimmed[1..end_bracket]
+        } else {
+            host_trimmed
+        }
+    } else if let Some((h, port)) = host_trimmed.rsplit_once(':') {
+        if port.bytes().all(|b| b.is_ascii_digit()) {
+            h
+        } else {
+            host_trimmed
+        }
+    } else {
+        host_trimmed
+    };
+
+    if hostname.eq_ignore_ascii_case("localhost")
+        || hostname.to_ascii_lowercase().ends_with(".localhost")
+    {
+        return true;
+    }
+
+    if let Ok(ip) = hostname.parse::<std::net::IpAddr>() {
+        return ip.is_loopback();
+    }
+
+    false
+}
+
 /// Checks whether a cross-origin request may access the API.
+///
+/// Prevents DNS rebinding and cross-site attacks by validating that the origin
+/// and host are strictly trusted local/loopback interfaces or trusted extensions.
 pub(crate) fn origin_allowed(origin: &str, host: &str, dev_mode: bool) -> bool {
     let parsed = origin.split_once("://");
     let Some((scheme, rest)) = parsed else {
         return false;
     };
-    let origin_host = rest.trim_end_matches('/');
-    let origin_hostname = origin_host
-        .rsplit_once(':')
-        .map(|(host, port)| {
-            if port.bytes().all(|b| b.is_ascii_digit()) {
-                host
-            } else {
-                origin_host
-            }
-        })
-        .unwrap_or(origin_host);
 
-    if scheme == "chrome-extension" {
+    if scheme == "chrome-extension" || scheme == "moz-extension" || scheme == "tauri" {
         return true;
     }
-    if origin_host == host || origin_hostname == host {
+
+    let origin_host = rest.trim_end_matches('/');
+    let origin_hostname = if origin_host.starts_with('[') {
+        if let Some(end_bracket) = origin_host.find(']') {
+            &origin_host[1..end_bracket]
+        } else {
+            origin_host
+        }
+    } else if let Some((h, port)) = origin_host.rsplit_once(':') {
+        if port.bytes().all(|b| b.is_ascii_digit()) {
+            h
+        } else {
+            origin_host
+        }
+    } else {
+        origin_host
+    };
+
+    let origin_trusted = is_trusted_host(origin_hostname);
+    let host_trusted = is_trusted_host(host);
+
+    // Both Origin and Host must be trusted loopback/localhost domains or IPs
+    if origin_trusted && host_trusted {
         return true;
     }
-    if dev_mode && (origin_hostname == "127.0.0.1" || origin_hostname == "localhost") {
+
+    // In dev mode, allow if origin is trusted loopback even if Host is generic
+    if dev_mode && origin_trusted {
         return true;
     }
+
     false
 }
 

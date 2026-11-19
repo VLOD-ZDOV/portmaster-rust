@@ -39,6 +39,10 @@ pub enum BloomError {
     UnexpectedVersion(u8),
     #[error("rings must have the same m/k parameters")]
     MismatchedParameters,
+    #[error("invalid size: {0}")]
+    InvalidSize(u64),
+    #[error("invalid hash rounds: {0}")]
+    InvalidHash(u64),
 }
 
 /// A bloom filter, byte-compatible with Go's `ring.Ring`.
@@ -101,21 +105,34 @@ impl Ring {
         &self.bits
     }
 
+    /// Maximum allowed hash rounds to prevent CPU DoS attacks.
+    pub const MAX_HASH_ROUNDS: u64 = 64;
+
     /// Adds the data to the filter.
     pub fn add(&mut self, data: &[u8]) {
+        if self.size == 0 || self.hash == 0 || self.bits.is_empty() {
+            return;
+        }
         let hash = generate_multi_hash(data);
         for round in 0..self.hash {
             let index = get_round(hash, round) % self.size;
-            self.bits[(index / 8) as usize] |= 1 << (index % 8);
+            let byte_idx = (index / 8) as usize;
+            if byte_idx < self.bits.len() {
+                self.bits[byte_idx] |= 1 << (index % 8);
+            }
         }
     }
 
     /// Returns whether the data may be in the filter.
     pub fn test(&self, data: &[u8]) -> bool {
+        if self.size == 0 || self.hash == 0 || self.bits.is_empty() {
+            return false;
+        }
         let hash = generate_multi_hash(data);
         for round in 0..self.hash {
             let index = get_round(hash, round) % self.size;
-            if self.bits[(index / 8) as usize] & (1 << (index % 8)) == 0 {
+            let byte_idx = (index / 8) as usize;
+            if byte_idx >= self.bits.len() || self.bits[byte_idx] & (1 << (index % 8)) == 0 {
                 return false;
             }
         }
@@ -159,8 +176,30 @@ impl Ring {
 
         let size = u64::from_be_bytes(data[1..9].try_into().expect("slice length"));
         let hash = u64::from_be_bytes(data[9..17].try_into().expect("slice length"));
-        let mut bits = vec![0; (size / 8 + 1) as usize];
+
+        // Reject size == 0 (prevents division by zero in add/test)
+        if size == 0 {
+            return Err(BloomError::InvalidSize(size));
+        }
+
+        // Limit hash rounds (prevents CPU DoS in loops up to 2^64 iterations)
+        if hash == 0 || hash > Self::MAX_HASH_ROUNDS {
+            return Err(BloomError::InvalidHash(hash));
+        }
+
         let available = &data[17..];
+        // Calculate required bytes and check against available data length before allocating
+        // to prevent OOM attacks (e.g. size = 2^63)
+        let required_bytes = match (size / 8).checked_add(1) {
+            Some(n) if n <= usize::MAX as u64 => n as usize,
+            _ => return Err(BloomError::InvalidSize(size)),
+        };
+
+        if available.len() < required_bytes {
+            return Err(BloomError::IncorrectLength(data.len()));
+        }
+
+        let mut bits = vec![0; required_bytes];
         let length = bits.len().min(available.len());
         bits[..length].copy_from_slice(&available[..length]);
 
@@ -496,5 +535,54 @@ mod tests {
         let other = ScopedBloom::with_sizes(100, 10, 5, 20, 20);
         bloom.replace_with(other);
         assert!(!bloom.test("domain", "example.com."));
+    }
+
+    #[test]
+    fn unmarshal_binary_security_checks() {
+        // Version = 1, size = 0 (divide by zero attack)
+        let mut zero_size = vec![1u8];
+        zero_size.extend_from_slice(&0u64.to_be_bytes());
+        zero_size.extend_from_slice(&10u64.to_be_bytes());
+        zero_size.extend_from_slice(&[0u8; 10]);
+        assert_eq!(
+            Ring::unmarshal_binary(&zero_size).unwrap_err(),
+            BloomError::InvalidSize(0)
+        );
+
+        // Huge size with tiny payload (OOM attack)
+        let mut huge_size = vec![1u8];
+        huge_size.extend_from_slice(&(1u64 << 62).to_be_bytes());
+        huge_size.extend_from_slice(&10u64.to_be_bytes());
+        huge_size.extend_from_slice(&[0u8; 10]);
+        assert!(matches!(
+            Ring::unmarshal_binary(&huge_size).unwrap_err(),
+            BloomError::IncorrectLength(_)
+        ));
+
+        // Hash rounds = 0
+        let mut zero_hash = vec![1u8];
+        zero_hash.extend_from_slice(&100u64.to_be_bytes());
+        zero_hash.extend_from_slice(&0u64.to_be_bytes());
+        zero_hash.extend_from_slice(&[0u8; 20]);
+        assert_eq!(
+            Ring::unmarshal_binary(&zero_hash).unwrap_err(),
+            BloomError::InvalidHash(0)
+        );
+
+        // Hash rounds > 64 (CPU DoS attack)
+        let mut excessive_hash = vec![1u8];
+        excessive_hash.extend_from_slice(&100u64.to_be_bytes());
+        excessive_hash.extend_from_slice(&1000u64.to_be_bytes());
+        excessive_hash.extend_from_slice(&[0u8; 20]);
+        assert_eq!(
+            Ring::unmarshal_binary(&excessive_hash).unwrap_err(),
+            BloomError::InvalidHash(1000)
+        );
+
+        // Valid roundtrip works as expected
+        let ring = Ring::init(100, 0.01).unwrap();
+        let bytes = ring.marshal_binary();
+        let unmarshaled = Ring::unmarshal_binary(&bytes).unwrap();
+        assert_eq!(ring, unmarshaled);
     }
 }

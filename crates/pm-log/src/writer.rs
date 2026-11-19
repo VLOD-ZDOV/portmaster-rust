@@ -170,22 +170,81 @@ impl Sink for LogWriter {
 
 /// Opens an unprivileged mirror log at `/tmp/portmaster.log` with `0o666` permissions
 /// so that non-root users and tools can inspect service logs without requiring root.
+///
+/// Uses `O_NOFOLLOW` and descriptor-based metadata/permissions checks (`fstat`/`fchmod`)
+/// to prevent symlink-based local privilege escalation (LPE / CWE-59) in `/tmp`.
 #[cfg(unix)]
 fn open_tmp_mirror() -> Option<Box<dyn IoWrite + Send>> {
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
     let path = Path::new("/tmp/portmaster.log");
-    if let Ok(meta) = path.metadata() {
-        if meta.len() > 20 * 1024 * 1024 {
-            let _ = OpenOptions::new().write(true).truncate(true).open(path);
+
+    // If an existing entry at the path is a symlink or special file, safely unlink it.
+    if let Ok(sym_meta) = path.symlink_metadata() {
+        if sym_meta.file_type().is_symlink() || !sym_meta.is_file() {
+            let _ = fs::remove_file(path);
         }
     }
-    let file = OpenOptions::new()
+
+    // Open with O_NOFOLLOW to ensure we never follow a symlink.
+    let open_res = OpenOptions::new()
+        .write(true)
         .create(true)
         .append(true)
+        .custom_flags(libc::O_NOFOLLOW)
         .mode(0o666)
-        .open(path)
-        .ok()?;
-    let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o666));
+        .open(path);
+
+    let file = match open_res {
+        Ok(f) => f,
+        Err(_) => {
+            // If opening failed (e.g. symlink collision race), unlink and create anew.
+            let _ = fs::remove_file(path);
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .custom_flags(libc::O_NOFOLLOW)
+                .mode(0o666)
+                .open(path)
+                .ok()?
+        }
+    };
+
+    // Verify the open file descriptor via fstat (File::metadata).
+    let meta = file.metadata().ok()?;
+    if !meta.is_file() || meta.nlink() > 1 {
+        return None;
+    }
+
+    let current_uid = nix::unistd::geteuid().as_raw();
+    let file = if current_uid == 0 && meta.uid() != 0 {
+        // If running as root and file was owned by another user, replace with root-owned file.
+        drop(file);
+        let _ = fs::remove_file(path);
+        let fresh = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .mode(0o666)
+            .open(path)
+            .ok()?;
+        let fresh_meta = fresh.metadata().ok()?;
+        if !fresh_meta.is_file() || fresh_meta.uid() != 0 || fresh_meta.nlink() > 1 {
+            return None;
+        }
+        fresh
+    } else {
+        file
+    };
+
+    // Safely truncate large log file on the open descriptor (avoids path re-open TOCTOU).
+    if let Ok(m) = file.metadata() {
+        if m.len() > 20 * 1024 * 1024 {
+            let _ = file.set_len(0);
+        }
+    }
+
+    // Safely set permissions on the open descriptor (fchmod).
+    let _ = file.set_permissions(fs::Permissions::from_mode(0o666));
     Some(Box::new(file))
 }
 
@@ -369,5 +428,30 @@ mod tests {
         assert!(dir.join("new.log").exists());
         assert!(dir.join("subdir").exists());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn open_tmp_mirror_handles_symlink_safely() {
+        let path = Path::new("/tmp/portmaster.log");
+        let canary = std::env::temp_dir().join(format!("pm_canary_{}.txt", std::process::id()));
+        let _ = fs::write(&canary, b"canary data");
+
+        // Simulate an attacker creating a symlink at /tmp/portmaster.log pointing to canary
+        let _ = fs::remove_file(path);
+        let _ = std::os::unix::fs::symlink(&canary, path);
+
+        let mirror = open_tmp_mirror();
+        assert!(mirror.is_some());
+
+        // Verify the canary was not overwritten or chmod'ed
+        assert_eq!(fs::read(&canary).unwrap(), b"canary data");
+        // Verify /tmp/portmaster.log is now a real file, not a symlink
+        let meta = path.symlink_metadata().unwrap();
+        assert!(!meta.file_type().is_symlink());
+        assert!(meta.is_file());
+
+        let _ = fs::remove_file(path);
+        let _ = fs::remove_file(&canary);
     }
 }

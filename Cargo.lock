@@ -1770,6 +1770,8 @@ dependencies = [
 name = "pm-log"
 version = "0.1.0"
 dependencies = [
+ "libc",
+ "nix 0.31.3",
  "pm-winplatform",
  "tracing",
  "tracing-subscriber",
