@@ -4,7 +4,7 @@ use leptos::prelude::*;
 use pm_models::connection::ConnectionRecord;
 use pm_models::profile::AppProfile;
 use pm_models::settings::{ExpertiseLevel, OptionType, Setting, SettingAnnotations};
-use pm_models::xray::{ProcessState, TrafficStatus, XrayNode, XrayStatus};
+use pm_models::xray::{ProcessState, XrayNode, XrayStatus};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::client::PortApiClient;
@@ -107,131 +107,10 @@ impl AppState {
         let (is_paused, set_paused) = signal(false);
         let (pause_until, set_pause_until) = signal(None);
 
-        let initial_notifications = vec![
-            AppNotification {
-                id: "notif-1".to_string(),
-                title: "Core Service Online".to_string(),
-                message: "Portmaster v1.0 engine started and listening on 127.0.0.1:817".to_string(),
-                level: "info",
-                time: "Just now",
-            },
-            AppNotification {
-                id: "notif-2".to_string(),
-                title: "Tracker Blocked".to_string(),
-                message: "Blocked 14 outbound connections to telemetry endpoints".to_string(),
-                level: "warning",
-                time: "2m ago",
-            },
-        ];
-        let (notifications, set_notifications) = signal(initial_notifications);
-
-        // Initial mock/seed nodes for instant interactivity
-        let initial_nodes = vec![
-            XrayNode {
-                id: "node-nl-01".to_string(),
-                subscription_id: "sub-main".to_string(),
-                name: "Amsterdam Fast #1".to_string(),
-                country_code: "NL".to_string(),
-                country_name: "Netherlands".to_string(),
-                protocol: "vless".to_string(),
-                address: "amsterdam.fastproxy.net".to_string(),
-                port: 443,
-                ping_ms: Some(28),
-            },
-            XrayNode {
-                id: "node-de-01".to_string(),
-                subscription_id: "sub-main".to_string(),
-                name: "Frankfurt Core #2".to_string(),
-                country_code: "DE".to_string(),
-                country_name: "Germany".to_string(),
-                protocol: "vless".to_string(),
-                address: "frankfurt.coreproxy.net".to_string(),
-                port: 443,
-                ping_ms: Some(34),
-            },
-            XrayNode {
-                id: "node-ch-01".to_string(),
-                subscription_id: "sub-main".to_string(),
-                name: "Zurich Privacy Shield".to_string(),
-                country_code: "CH".to_string(),
-                country_name: "Switzerland".to_string(),
-                protocol: "trojan".to_string(),
-                address: "zurich.safeproxy.ch".to_string(),
-                port: 443,
-                ping_ms: Some(42),
-            },
-            XrayNode {
-                id: "node-us-01".to_string(),
-                subscription_id: "sub-main".to_string(),
-                name: "New York East #1".to_string(),
-                country_code: "US".to_string(),
-                country_name: "United States".to_string(),
-                protocol: "vmess".to_string(),
-                address: "ny.eastproxy.io".to_string(),
-                port: 8443,
-                ping_ms: Some(95),
-            },
-            XrayNode {
-                id: "node-jp-01".to_string(),
-                subscription_id: "sub-main".to_string(),
-                name: "Tokyo Ultra Fast".to_string(),
-                country_code: "JP".to_string(),
-                country_name: "Japan".to_string(),
-                protocol: "hysteria".to_string(),
-                address: "tokyo.fastproxy.jp".to_string(),
-                port: 443,
-                ping_ms: Some(180),
-            },
-        ];
-
-        let initial_status = XrayStatus {
-            enabled: true,
-            connected: true,
-            state: ProcessState::Running,
-            node_id: Some("node-nl-01".to_string()),
-            node_name: Some("Amsterdam Fast #1".to_string()),
-            country: Some("NL".to_string()),
-            traffic: Some(TrafficStatus {
-                uplink: 1024 * 1024 * 42,
-                downlink: 1024 * 1024 * 238,
-            }),
-            exit_ip: Some("194.36.191.12".to_string()),
-            exit_country: Some("NL".to_string()),
-            ..Default::default()
-        };
-
-        // Seed initial applications
-        let mut initial_profiles = Vec::new();
-
-        let mut tg = AppProfile::new("telegram", "Telegram Desktop");
-        tg.presentation_path = "/usr/bin/telegram-desktop".to_string();
-        tg.set_route_via_vpn(true);
-        tg.set_default_action("permit");
-        initial_profiles.push(tg);
-
-        let mut ff = AppProfile::new("firefox", "Mozilla Firefox");
-        ff.presentation_path = "/usr/bin/firefox".to_string();
-        ff.set_route_via_vpn(true);
-        ff.set_default_action("permit");
-        initial_profiles.push(ff);
-
-        let mut discord = AppProfile::new("discord", "Discord");
-        discord.presentation_path = "/usr/bin/discord".to_string();
-        discord.set_route_via_vpn(false);
-        discord.set_default_action("permit");
-        initial_profiles.push(discord);
-
-        let mut steam = AppProfile::new("steam", "Steam");
-        steam.presentation_path = "/usr/bin/steam".to_string();
-        steam.set_route_via_vpn(false);
-        steam.set_default_action("permit");
-        initial_profiles.push(steam);
-
-        let mut term = AppProfile::new("terminal", "Alacritty Terminal");
-        term.presentation_path = "/usr/bin/alacritty".to_string();
-        term.set_route_via_vpn(false);
-        term.set_default_action("ask");
-        initial_profiles.push(term);
+        let (notifications, set_notifications) = signal(Vec::<AppNotification>::new());
+        let (xray_nodes, set_xray_nodes) = signal(Vec::<XrayNode>::new());
+        let (xray_status, set_xray_status) = signal(XrayStatus::default());
+        let (profiles, set_profiles) = signal(Vec::<AppProfile>::new());
 
         // Seed initial representative settings across subsystems
         let initial_settings = vec![
@@ -455,155 +334,8 @@ impl AppState {
             },
         ];
 
-        let initial_connections = vec![
-            ConnectionRecord {
-                id: "conn-1".to_string(),
-                domain: Some("safing.io".to_string()),
-                remote_ip: "104.26.10.155".to_string(),
-                remote_port: 443,
-                protocol: "TCP".to_string(),
-                direction: "outbound".to_string(),
-                scope: "Internet".to_string(),
-                country: Some("US".to_string()),
-                country_name: Some("United States".to_string()),
-                profile_id: "firefox".to_string(),
-                profile_name: "Mozilla Firefox".to_string(),
-                verdict: "permit".to_string(),
-                verdict_reason: "Default Filter Action: Permit".to_string(),
-                as_owner: Some("Cloudflare, Inc. (AS13335)".to_string()),
-                bytes_sent: 4120,
-                bytes_received: 38940,
-                time_ago: "5s ago".to_string(),
-                active: true,
-            },
-            ConnectionRecord {
-                id: "conn-2".to_string(),
-                domain: Some("incoming.telemetry.mozilla.org".to_string()),
-                remote_ip: "34.117.237.249".to_string(),
-                remote_port: 443,
-                protocol: "TCP".to_string(),
-                direction: "outbound".to_string(),
-                scope: "Internet".to_string(),
-                country: Some("US".to_string()),
-                country_name: Some("United States".to_string()),
-                profile_id: "firefox".to_string(),
-                profile_name: "Mozilla Firefox".to_string(),
-                verdict: "block".to_string(),
-                verdict_reason: "Blocklist: Privacy & Telemetry Filter".to_string(),
-                as_owner: Some("Google LLC (AS15169)".to_string()),
-                bytes_sent: 0,
-                bytes_received: 0,
-                time_ago: "18s ago".to_string(),
-                active: false,
-            },
-            ConnectionRecord {
-                id: "conn-3".to_string(),
-                domain: Some("gateway.discord.gg".to_string()),
-                remote_ip: "162.159.130.233".to_string(),
-                remote_port: 443,
-                protocol: "TCP".to_string(),
-                direction: "outbound".to_string(),
-                scope: "Internet".to_string(),
-                country: Some("US".to_string()),
-                country_name: Some("United States".to_string()),
-                profile_id: "discord".to_string(),
-                profile_name: "Discord".to_string(),
-                verdict: "permit".to_string(),
-                verdict_reason: "Rule: Permit Discord Services".to_string(),
-                as_owner: Some("Cloudflare, Inc. (AS13335)".to_string()),
-                bytes_sent: 18450,
-                bytes_received: 125600,
-                time_ago: "42s ago".to_string(),
-                active: true,
-            },
-            ConnectionRecord {
-                id: "conn-4".to_string(),
-                domain: Some("dns.quad9.net".to_string()),
-                remote_ip: "9.9.9.9".to_string(),
-                remote_port: 853,
-                protocol: "DoT".to_string(),
-                direction: "outbound".to_string(),
-                scope: "Internet".to_string(),
-                country: Some("CH".to_string()),
-                country_name: Some("Switzerland".to_string()),
-                profile_id: "core".to_string(),
-                profile_name: "Portmaster Secure DNS".to_string(),
-                verdict: "permit".to_string(),
-                verdict_reason: "Secure DNS Upstream Resolver".to_string(),
-                as_owner: Some("Quad9 Foundation (AS19281)".to_string()),
-                bytes_sent: 2450,
-                bytes_received: 8900,
-                time_ago: "1m ago".to_string(),
-                active: true,
-            },
-            ConnectionRecord {
-                id: "conn-5".to_string(),
-                domain: Some("149.154.167.51".to_string()),
-                remote_ip: "149.154.167.51".to_string(),
-                remote_port: 443,
-                protocol: "TCP".to_string(),
-                direction: "outbound".to_string(),
-                scope: "Internet".to_string(),
-                country: Some("NL".to_string()),
-                country_name: Some("Netherlands".to_string()),
-                profile_id: "telegram".to_string(),
-                profile_name: "Telegram Desktop".to_string(),
-                verdict: "permit".to_string(),
-                verdict_reason: "Default Filter Action: Permit".to_string(),
-                as_owner: Some("Telegram Messenger Inc. (AS62041)".to_string()),
-                bytes_sent: 65400,
-                bytes_received: 842100,
-                time_ago: "3m ago".to_string(),
-                active: true,
-            },
-            ConnectionRecord {
-                id: "conn-6".to_string(),
-                domain: Some("analytics.google.com".to_string()),
-                remote_ip: "142.250.180.206".to_string(),
-                remote_port: 443,
-                protocol: "TCP".to_string(),
-                direction: "outbound".to_string(),
-                scope: "Internet".to_string(),
-                country: Some("US".to_string()),
-                country_name: Some("United States".to_string()),
-                profile_id: "chromium".to_string(),
-                profile_name: "Chromium Browser".to_string(),
-                verdict: "block".to_string(),
-                verdict_reason: "EasyList: Advertising & Tracker Block".to_string(),
-                as_owner: Some("Google LLC (AS15169)".to_string()),
-                bytes_sent: 0,
-                bytes_received: 0,
-                time_ago: "5m ago".to_string(),
-                active: false,
-            },
-            ConnectionRecord {
-                id: "conn-7".to_string(),
-                domain: Some("router.local".to_string()),
-                remote_ip: "192.168.1.1".to_string(),
-                remote_port: 80,
-                protocol: "TCP".to_string(),
-                direction: "outbound".to_string(),
-                scope: "LAN".to_string(),
-                country: None,
-                country_name: None,
-                profile_id: "firefox".to_string(),
-                profile_name: "Mozilla Firefox".to_string(),
-                verdict: "permit".to_string(),
-                verdict_reason: "LAN Broadcast / Local Subnet".to_string(),
-                as_owner: Some("Private Network RFC1918".to_string()),
-                bytes_sent: 1200,
-                bytes_received: 4800,
-                time_ago: "8m ago".to_string(),
-                active: false,
-            },
-        ];
-
-        let (connections, set_connections) = signal(initial_connections);
-        let (pending_prompts, set_pending_prompts) = signal(1); // 1 pending connection asking user
-
-        let (xray_status, set_xray_status) = signal(initial_status);
-        let (xray_nodes, set_xray_nodes) = signal(initial_nodes);
-        let (profiles, set_profiles) = signal(initial_profiles);
+        let (connections, set_connections) = signal(Vec::<ConnectionRecord>::new());
+        let (pending_prompts, set_pending_prompts) = signal(0);
         let (settings, set_settings) = signal(initial_settings);
         let (is_busy, set_busy) = signal(false);
         let (filter_query, set_filter_query) = signal(String::new());
@@ -661,14 +393,121 @@ impl AppState {
         let client = self.client.clone();
         let set_profiles = self.set_profiles;
         let set_xray_status = self.set_xray_status;
+        let set_xray_nodes = self.set_xray_nodes;
         let set_settings = self.set_settings;
+        let set_connections = self.set_connections;
 
-        // Subscribe to profiles updates
+        let base_url = if let Some(window) = web_sys::window() {
+            let loc = window.location();
+            if let Ok(host) = loc.host() {
+                if !host.is_empty() && (host.ends_with(":817") || host == "127.0.0.1:817" || host == "localhost:817") {
+                    let proto = loc.protocol().unwrap_or_else(|_| "http:".to_string());
+                    format!("{}//{}", proto, host)
+                } else {
+                    "http://127.0.0.1:817".to_string()
+                }
+            } else {
+                "http://127.0.0.1:817".to_string()
+            }
+        } else {
+            "http://127.0.0.1:817".to_string()
+        };
+
+        // 1. Fetch real Xray Nodes from /api/v1/xray/nodes
+        let nodes_url = format!("{}/api/v1/xray/nodes", base_url);
+        spawn_local(async move {
+            if let Ok(resp) = gloo_net::http::Request::get(&nodes_url).send().await {
+                if let Ok(nodes) = resp.json::<Vec<XrayNode>>().await {
+                    set_xray_nodes.set(nodes);
+                }
+            }
+        });
+
+        // 2. Fetch real Xray Status from /api/v1/xray/status
+        let status_url = format!("{}/api/v1/xray/status", base_url);
+        spawn_local(async move {
+            if let Ok(resp) = gloo_net::http::Request::get(&status_url).send().await {
+                if let Ok(status) = resp.json::<XrayStatus>().await {
+                    set_xray_status.set(status);
+                }
+            }
+        });
+
+        // 3. Fetch real initial connections from /api/v1/netquery/query
+        let nq_url = format!("{}/api/v1/netquery/query", base_url);
+        let nq_set_conns = set_connections;
+        let nq_set_profiles = set_profiles;
+        spawn_local(async move {
+            let query_payload = serde_json::json!({
+                "databases": ["main"],
+                "select": [
+                    "id", "profile", "profile_name", "domain", "remote_ip", "remote_port",
+                    "ip_protocol", "direction", "scope", "country", "verdict",
+                    "bytes_sent", "bytes_received", "active"
+                ]
+            });
+            if let Ok(resp) = gloo_net::http::Request::post(&nq_url)
+                .header("Content-Type", "application/json")
+                .body(query_payload.to_string())
+                .unwrap()
+                .send()
+                .await
+            {
+                #[derive(serde::Deserialize)]
+                struct NqResponse {
+                    results: Option<Vec<ConnectionRecord>>,
+                }
+                if let Ok(nq) = resp.json::<NqResponse>().await {
+                    if let Some(mut conns) = nq.results {
+                        // Reverse so newest connections are on top
+                        conns.reverse();
+                        nq_set_conns.set(conns.clone());
+
+                        // Update or populate profiles bandwidth & active counts from real connections
+                        nq_set_profiles.update(|profs| {
+                            for c in &conns {
+                                let prof_id = if let Some((_, id)) = c.profile_id.split_once('/') {
+                                    id.to_string()
+                                } else {
+                                    c.profile_id.clone()
+                                };
+                                let target = if let Some(p) = profs.iter_mut().find(|p| p.id == prof_id || p.id == c.profile_id || p.name.eq_ignore_ascii_case(&c.profile_name)) {
+                                    p
+                                } else {
+                                    let mut new_p = AppProfile::new(prof_id, &c.profile_name);
+                                    if let Some((src, _)) = c.profile_id.split_once('/') {
+                                        new_p.source = src.to_string();
+                                    }
+                                    profs.push(new_p);
+                                    profs.last_mut().unwrap()
+                                };
+
+                                let stats = target.stats.get_or_insert_with(Default::default);
+                                if c.active {
+                                    stats.connections_count = stats.connections_count.saturating_add(1);
+                                }
+                                if c.is_blocked() {
+                                    stats.blocked_count = stats.blocked_count.saturating_add(1);
+                                }
+                                stats.bytes_sent = stats.bytes_sent.saturating_add(c.bytes_sent);
+                                stats.bytes_received = stats.bytes_received.saturating_add(c.bytes_received);
+                            }
+                        });
+                    }
+                }
+            }
+        });
+
+        // 4. Subscribe to profiles updates
         client.qsub("core:profiles/", move |frame| {
             if let Ok(profile) = frame.parse_data::<AppProfile>() {
                 set_profiles.update(|list| {
-                    if let Some(pos) = list.iter().position(|p| p.id == profile.id) {
-                        list[pos] = profile;
+                    if let Some(pos) = list.iter().position(|p| p.id == profile.id || p.name.eq_ignore_ascii_case(&profile.name)) {
+                        let mut updated = profile;
+                        if updated.stats.is_none() && list[pos].stats.is_some() {
+                            updated.stats = list[pos].stats;
+                        }
+                        list[pos] = updated;
                     } else {
                         list.push(profile);
                     }
@@ -676,7 +515,7 @@ impl AppState {
             }
         });
 
-        // Subscribe to settings updates
+        // 5. Subscribe to settings updates
         client.qsub("config:options/", move |frame| {
             if let Ok(setting) = frame.parse_data::<Setting>() {
                 set_settings.update(|list| {
@@ -689,10 +528,42 @@ impl AppState {
             }
         });
 
-        // Subscribe to Xray status updates
+        // 6. Subscribe to Xray status updates
         let _ = client.sub("xray/status", move |frame| {
             if let Ok(status) = frame.parse_data::<XrayStatus>() {
                 set_xray_status.set(status);
+            }
+        });
+
+        // 7. Subscribe to real-time connection events via netquery/data/
+        let live_set_conns = set_connections;
+        let live_set_profiles = set_profiles;
+        client.qsub("netquery/data/", move |frame| {
+            if let Ok(conn) = frame.parse_data::<ConnectionRecord>() {
+                let c_clone = conn.clone();
+                live_set_conns.update(|list| {
+                    if let Some(pos) = list.iter().position(|c| c.id == conn.id) {
+                        list[pos] = conn;
+                    } else {
+                        list.insert(0, conn);
+                        if list.len() > 500 {
+                            list.truncate(500);
+                        }
+                    }
+                });
+
+                live_set_profiles.update(|profs| {
+                    let prof_id = if let Some((_, id)) = c_clone.profile_id.split_once('/') {
+                        id.to_string()
+                    } else {
+                        c_clone.profile_id.clone()
+                    };
+                    if let Some(p) = profs.iter_mut().find(|p| p.id == prof_id || p.id == c_clone.profile_id || p.name.eq_ignore_ascii_case(&c_clone.profile_name)) {
+                        let stats = p.stats.get_or_insert_with(Default::default);
+                        stats.bytes_sent = stats.bytes_sent.saturating_add(c_clone.bytes_sent);
+                        stats.bytes_received = stats.bytes_received.saturating_add(c_clone.bytes_received);
+                    }
+                });
             }
         });
     }

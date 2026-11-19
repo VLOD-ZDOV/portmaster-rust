@@ -91,9 +91,14 @@ pub fn XrayPanel() -> impl IntoView {
                                 {move || {
                                     let s = xray_status.get();
                                     if s.connected {
-                                        let ip = s.exit_ip.unwrap_or_else(|| "104.26.10.155".to_string());
-                                        let ctry = s.exit_country.unwrap_or_else(|| "NL".to_string());
-                                        format!("Exit IP: {} ({}) • Encrypted tunnel active", ip, ctry)
+                                        if let Some(ip) = s.exit_ip {
+                                            let ctry = s.exit_country.unwrap_or_default();
+                                            format!("Exit IP: {} ({}) • Encrypted tunnel active", ip, ctry)
+                                        } else if let Some(node) = s.node_name {
+                                            format!("Connected via {} • Encrypted tunnel active", node)
+                                        } else {
+                                            "Connected • Encrypted tunnel active".to_string()
+                                        }
                                     } else {
                                         "Traffic connects directly without encryption tunnel.".to_string()
                                     }

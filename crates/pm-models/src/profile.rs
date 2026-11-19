@@ -69,13 +69,13 @@ fn default_local_source() -> String {
 /// Network activity stats for an application.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct AppStats {
-    #[serde(default)]
+    #[serde(alias = "ConnectionsCount", alias = "countAliveConnections", default)]
     pub connections_count: u64,
-    #[serde(default)]
+    #[serde(alias = "BlockedCount", alias = "countBlocked", default)]
     pub blocked_count: u64,
-    #[serde(default)]
+    #[serde(alias = "BytesSent", default)]
     pub bytes_sent: u64,
-    #[serde(default)]
+    #[serde(alias = "BytesReceived", default)]
     pub bytes_received: u64,
 }
 

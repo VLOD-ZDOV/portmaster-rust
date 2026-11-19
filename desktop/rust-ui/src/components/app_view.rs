@@ -7,6 +7,7 @@
 //! - 4 Tabs: Connections, Rules & Routing, App Settings Overrides, Details
 
 use leptos::prelude::*;
+use pm_models::connection::ConnectionRecord;
 
 use crate::state::AppState;
 
@@ -78,9 +79,16 @@ pub fn AppDetailView(app_id: String) -> impl IntoView {
                 let is_vpn = p.route_via_vpn();
                 let action = p.default_action().to_string();
                 let display_name = p.display_name().to_string();
+                let display_name_match = display_name.clone();
                 let path = if !p.presentation_path.is_empty() { p.presentation_path.clone() } else { p.source.clone() };
                 let monogram = display_name.chars().next().unwrap_or('A').to_uppercase().to_string();
                 let conn_count = p.count_alive_connections();
+
+                let (alive_conns, blocked_pct, bytes_recv, bytes_sent) = if let Some(s) = p.stats {
+                    (s.connections_count, s.blocked_percent(), s.bytes_received, s.bytes_sent)
+                } else {
+                    (conn_count, 0.0, 0, 0)
+                };
 
                 let state_vpn = state.clone();
                 let app_id_vpn = app_id.clone();
@@ -188,19 +196,23 @@ pub fn AppDetailView(app_id: String) -> impl IntoView {
                                 </div>
                             </div>
 
-                            // Right: Bandwidth Stats (Received / Sent)
-                            <div class="flex items-center space-x-3 flex-shrink-0">
-                                <div class="px-4 py-2.5 rounded bg-[#222222] border border-[#2c2c2c] text-center min-w-[100px]">
-                                    <div class="text-[10px] text-[#888888] uppercase font-medium">"Received"</div>
-                                    <div class="text-sm font-bold text-white font-mono mt-0.5">
-                                        {format!("{} KB", 48 + conn_count * 12)}
-                                    </div>
+                            // 4 Stat Cards matching Portmaster header (Connections, Blocked %, Received, Sent)
+                            <div class="flex flex-wrap items-center gap-3 flex-shrink-0">
+                                <div class="px-3.5 py-2 rounded bg-[#222222] border border-[#2c2c2c] text-center min-w-[80px]">
+                                    <div class="text-xs font-bold text-white font-mono">{alive_conns}</div>
+                                    <div class="text-[10px] text-[#888888]">"Connections"</div>
                                 </div>
-                                <div class="px-4 py-2.5 rounded bg-[#222222] border border-[#2c2c2c] text-center min-w-[100px]">
-                                    <div class="text-[10px] text-[#888888] uppercase font-medium">"Sent"</div>
-                                    <div class="text-sm font-bold text-white font-mono mt-0.5">
-                                        {format!("{} KB", 14 + conn_count * 4)}
-                                    </div>
+                                <div class="px-3.5 py-2 rounded bg-[#222222] border border-[#2c2c2c] text-center min-w-[80px]">
+                                    <div class="text-xs font-bold text-white font-mono">{format!("{:.0}%", blocked_pct)}</div>
+                                    <div class="text-[10px] text-[#888888]">"Blocked"</div>
+                                </div>
+                                <div class="px-3.5 py-2 rounded bg-[#222222] border border-[#2c2c2c] text-center min-w-[90px]">
+                                    <div class="text-xs font-bold text-[#1de966] font-mono">{ConnectionRecord::format_bytes(bytes_recv)}</div>
+                                    <div class="text-[10px] text-[#888888]">"Received"</div>
+                                </div>
+                                <div class="px-3.5 py-2 rounded bg-[#222222] border border-[#2c2c2c] text-center min-w-[90px]">
+                                    <div class="text-xs font-bold text-[#4e97fa] font-mono">{ConnectionRecord::format_bytes(bytes_sent)}</div>
+                                    <div class="text-[10px] text-[#888888]">"Sent"</div>
                                 </div>
                             </div>
                         </div>
@@ -263,10 +275,16 @@ pub fn AppDetailView(app_id: String) -> impl IntoView {
                                 // 1. Connections Tab
                                 AppTab::Connections => {
                                     let app_id_curr = app_id.clone();
+                                    let app_name_curr = display_name_match.clone();
                                     let conns = connections.get();
                                     let app_conns: Vec<_> = conns
                                         .into_iter()
-                                        .filter(|c| c.profile_id.eq_ignore_ascii_case(&app_id_curr) || c.profile_name.to_lowercase().contains(&app_id_curr.to_lowercase()))
+                                        .filter(|c| {
+                                            c.profile_id == app_id_curr
+                                                || c.profile_id.ends_with(&format!("/{}", app_id_curr))
+                                                || c.profile_name.eq_ignore_ascii_case(&app_name_curr)
+                                                || (!app_id_curr.is_empty() && c.profile_name.to_lowercase().contains(&app_id_curr.to_lowercase()))
+                                        })
                                         .collect();
 
                                     view! {
@@ -296,6 +314,7 @@ pub fn AppDetailView(app_id: String) -> impl IntoView {
                                                                 <th class="py-2.5 px-3">"Target"</th>
                                                                 <th class="py-2.5 px-3">"Location"</th>
                                                                 <th class="py-2.5 px-3">"Protocol"</th>
+                                                                <th class="py-2.5 px-3 text-right">"Traffic"</th>
                                                                 <th class="py-2.5 px-3 text-right">"Time"</th>
                                                                 <th class="py-2.5 px-3 text-right">"Actions"</th>
                                                             </tr>
@@ -328,6 +347,10 @@ pub fn AppDetailView(app_id: String) -> impl IntoView {
                                                                         </td>
                                                                         <td class="py-2 px-3 font-mono text-[11px] text-[#ababab]">
                                                                             {c.protocol}
+                                                                        </td>
+                                                                        <td class="py-2 px-3 text-right font-mono text-[11px] whitespace-nowrap">
+                                                                            <div class="text-[#1de966]">{format!("↓ {}", ConnectionRecord::format_bytes(c.bytes_received))}</div>
+                                                                            <div class="text-[#4e97fa]">{format!("↑ {}", ConnectionRecord::format_bytes(c.bytes_sent))}</div>
                                                                         </td>
                                                                         <td class="py-2 px-3 text-right text-[11px] text-[#888888]">
                                                                             {c.time_ago}

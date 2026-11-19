@@ -92,7 +92,18 @@ impl PortApiClient {
 
         let endpoint = ws_endpoint
             .map(|s| s.to_string())
-            .unwrap_or_else(|| format!("ws://127.0.0.1:817{}", DB_API_PATH_DEFAULT));
+            .unwrap_or_else(|| {
+                if let Some(window) = web_sys::window() {
+                    let loc = window.location();
+                    if let Ok(host) = loc.host() {
+                        if !host.is_empty() && (host.ends_with(":817") || host == "127.0.0.1:817" || host == "localhost:817") {
+                            let proto = if loc.protocol().unwrap_or_default() == "https:" { "wss:" } else { "ws:" };
+                            return format!("{}//{}/api/database/v1", proto, host);
+                        }
+                    }
+                }
+                format!("ws://127.0.0.1:817{}", DB_API_PATH_DEFAULT)
+            });
 
         let client = Self {
             url: Arc::new(endpoint),

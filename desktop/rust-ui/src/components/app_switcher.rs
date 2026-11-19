@@ -8,6 +8,7 @@
 //! - Seamless navigation to detailed AppDetailView
 
 use leptos::prelude::*;
+use pm_models::connection::ConnectionRecord;
 
 use crate::state::AppState;
 
@@ -209,6 +210,11 @@ pub fn AppSwitcher() -> impl IntoView {
                             let default_action = p.default_action();
                             let is_blocked = default_action == "block";
                             let conn_count = p.count_alive_connections();
+                            let (bytes_recv, bytes_sent) = if let Some(s) = p.stats {
+                                (s.bytes_received, s.bytes_sent)
+                            } else {
+                                (0, 0)
+                            };
                             let has_config_changes = p.config.is_some();
 
                             let state_vpn = state.clone();
@@ -260,6 +266,18 @@ pub fn AppSwitcher() -> impl IntoView {
                                             view! {
                                                 <span class="px-2 py-0.5 rounded bg-[#2c2c2c] text-[#1de966] text-[10px] font-mono font-medium">
                                                     {format!("{} conn", conn_count)}
+                                                </span>
+                                            }.into_any()
+                                        } else {
+                                            view! { <span/> }.into_any()
+                                        }}
+
+                                        // Transferred bytes badge (↓ recv, ↑ sent)
+                                        {if bytes_recv > 0 || bytes_sent > 0 {
+                                            view! {
+                                                <span class="px-2 py-0.5 rounded bg-[#222222] border border-[#2c2c2c] text-[10px] font-mono font-medium flex items-center space-x-1.5">
+                                                    <span class="text-[#1de966]">{format!("↓ {}", ConnectionRecord::format_bytes(bytes_recv))}</span>
+                                                    <span class="text-[#4e97fa]">{format!("↑ {}", ConnectionRecord::format_bytes(bytes_sent))}</span>
                                                 </span>
                                             }.into_any()
                                         } else {
