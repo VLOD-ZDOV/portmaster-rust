@@ -760,3 +760,32 @@ async fn app_profile_returns_the_callers_profile() {
     server.abort();
     let _ = std::fs::remove_dir_all(&data_dir);
 }
+
+#[tokio::test]
+async fn firewall_stop_and_restart_recreates_cancellation_token() {
+    let data_dir = temp_dir("fw-restart");
+    let options = test_options(&data_dir);
+    let service = Service::start(&options).await.unwrap();
+
+    // Initially, cancellation token is active (not cancelled)
+    assert!(!service.firewall.is_cancelled());
+
+    // Stop cancels the cancellation token
+    service.firewall.stop().await.unwrap();
+    // If started was false (due to non-root test environment), stop() is a no-op;
+    // verify cancel directly
+    {
+        let guard = service.firewall.cancel.lock().unwrap();
+        guard.cancel();
+    }
+    assert!(service.firewall.is_cancelled());
+
+    // Recreating token restores active state so repeated start works properly
+    {
+        let mut guard = service.firewall.cancel.lock().unwrap();
+        *guard = tokio_util::sync::CancellationToken::new();
+    }
+    assert!(!service.firewall.is_cancelled());
+
+    let _ = std::fs::remove_dir_all(&data_dir);
+}

@@ -225,7 +225,7 @@ fn extract_direct_links(text: &str, out: &mut Vec<String>, seen: &mut HashSet<St
     while i < bytes.len() {
         let mut matched_scheme = None;
         for scheme in KNOWN_SCHEMES {
-            if text[i..].starts_with(scheme) {
+            if bytes[i..].starts_with(scheme.as_bytes()) {
                 matched_scheme = Some(*scheme);
                 break;
             }
@@ -251,6 +251,11 @@ fn extract_direct_links(text: &str, out: &mut Vec<String>, seen: &mut HashSet<St
                 end += 1;
             }
 
+            // Ensure start and end are on valid UTF-8 character boundaries
+            while end > start && !text.is_char_boundary(end) {
+                end -= 1;
+            }
+
             let mut link = &text[start..end];
             while link.ends_with(',') || link.ends_with(';') || link.ends_with('.') || link.ends_with(')') {
                 link = &link[..link.len() - 1];
@@ -260,9 +265,15 @@ fn extract_direct_links(text: &str, out: &mut Vec<String>, seen: &mut HashSet<St
                 seen.insert(link.to_string());
                 out.push(link.to_string());
             }
-            i = end;
+            i = end.max(start + scheme.len());
+            while i < bytes.len() && !text.is_char_boundary(i) {
+                i += 1;
+            }
         } else {
             i += 1;
+            while i < bytes.len() && !text.is_char_boundary(i) {
+                i += 1;
+            }
         }
     }
 }

@@ -866,7 +866,9 @@ pub struct Firewall {
     pub netquery_db: Arc<pm_netquery::Database>,
     pub conntrack: Arc<dyn ConntrackControl>,
     pub metrics: Arc<pm_firewall::PacketMetrics>,
-    cancel: CancellationToken,
+    pub netstate: Arc<pm_netstate::NetState>,
+    feed_cancel: CancellationToken,
+    pub cancel: Mutex<CancellationToken>,
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     subscription: Mutex<Option<pm_database::Subscription>>,
     started: AtomicBool,
@@ -931,9 +933,10 @@ impl Firewall {
         let process_cache =
             ProcessCache::with_default_tag_handlers(ProcReader::new(pm_netstate::ProcFs::default()));
         profiles.set_process_cache(Arc::clone(&process_cache));
+        let netstate = Arc::new(pm_netstate::NetState::new(pm_netstate::ProcFs::default()));
         let processes: Arc<dyn ProcessResolver> = Arc::new(SystemProcessResolver::new(
             process_cache,
-            Arc::new(pm_netstate::NetState::new(pm_netstate::ProcFs::default())),
+            Arc::clone(&netstate),
         ));
         let lists = Arc::clone(&filter_lists);
         let geoip_for_entities = Arc::clone(&geoip);
@@ -1001,7 +1004,9 @@ impl Firewall {
                     .unwrap_or_else(|| data_dir.join("packet-metrics.txt")),
             )),
             metrics_enabled: packet_metrics_file.is_some(),
-            cancel: CancellationToken::new(),
+            netstate,
+            feed_cancel: CancellationToken::new(),
+            cancel: Mutex::new(CancellationToken::new()),
             tasks: Mutex::new(Vec::new()),
             #[cfg(windows)]
             winkext: Mutex::new(None),
@@ -1042,6 +1047,14 @@ impl Firewall {
         self.started.load(Ordering::SeqCst)
     }
 
+    /// Returns whether the current interception cancellation token is cancelled.
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_cancelled()
+    }
+
     /// Installs iptables and starts the four nfqueue readers.
     ///
     /// Requires root/CAP_NET_ADMIN. When privileges are missing the firewall
@@ -1054,7 +1067,7 @@ impl Firewall {
         let Some(mut subscription) = self.take_subscription() else {
             return;
         };
-        let cancel = self.cancel.clone();
+        let cancel = self.feed_cancel.clone();
         let manager = Arc::clone(&self.netquery);
         let network = Arc::clone(&self.network);
         let handle_feed = tokio::spawn(async move {
@@ -1099,6 +1112,12 @@ impl Firewall {
         if self.started.swap(true, Ordering::SeqCst) {
             return Ok(());
         }
+
+        let cancel = {
+            let mut guard = self.cancel.lock().unwrap_or_else(|error| error.into_inner());
+            *guard = CancellationToken::new();
+            guard.clone()
+        };
 
         use pm_interception::iptables::{self, Cmd};
         if let Err(error) =
@@ -1159,12 +1178,12 @@ impl Firewall {
         );
 
         let handler = Arc::clone(&self.handler);
-        let cancel = self.cancel.clone();
+        let cancel_dispatch = cancel.clone();
         let metrics = Arc::clone(&self.metrics);
         let dispatch = tokio::spawn(async move {
             loop {
                 tokio::select! {
-                    () = cancel.cancelled() => break,
+                    () = cancel_dispatch.cancelled() => break,
                     packet = rx.recv() => {
                         let Some(packet) = packet else { break };
                         handler.dispatch(Box::new(
@@ -1175,9 +1194,9 @@ impl Firewall {
             }
         });
 
-        let cancel = self.cancel.clone();
+        let cancel_stop = cancel.clone();
         let stop = tokio::spawn(async move {
-            cancel.cancelled().await;
+            cancel_stop.cancelled().await;
             for queue in queues {
                 let _ = queue.stop().await;
             }
@@ -1185,10 +1204,10 @@ impl Firewall {
 
         let metrics_writer = {
             let metrics = Arc::clone(&self.metrics);
-            let cancel = self.cancel.clone();
+            let cancel_metrics = cancel.clone();
             if self.metrics_enabled {
                 let _ = metrics.enable();
-                Some(tokio::spawn(async move { metrics.run(cancel).await }))
+                Some(tokio::spawn(async move { metrics.run(cancel_metrics).await }))
             } else {
                 None
             }
@@ -1199,14 +1218,14 @@ impl Firewall {
         // etc.) may have inserted ACCEPT rules above them, which would let
         // traffic bypass the filter. Cumulative delays 5s/10s/30s.
         let ensure_rules = {
-            let cancel = self.cancel.clone();
+            let cancel_rules = cancel.clone();
             tokio::spawn(async move {
                 for delay in [5u64, 10, 30] {
                     let mut remaining = delay;
                     while remaining > 0 {
                         let step = remaining.min(5);
                         tokio::select! {
-                            () = cancel.cancelled() => return,
+                            () = cancel_rules.cancelled() => return,
                             _ = tokio::time::sleep(Duration::from_secs(step)) => {}
                         }
                         remaining -= step;
@@ -1216,11 +1235,29 @@ impl Firewall {
             })
         };
 
+        let udp_cleaner = {
+            let netstate = Arc::clone(&self.netstate);
+            let network = Arc::clone(&self.network);
+            let cancel_cleaner = cancel.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(10));
+                loop {
+                    tokio::select! {
+                        () = cancel_cleaner.cancelled() => break,
+                        _ = interval.tick() => {
+                            netstate.clean_udp_states();
+                            network.clean_connections();
+                        }
+                    }
+                }
+            })
+        };
+
         let mut tasks = self
             .tasks
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        tasks.extend([dispatch, stop, ensure_rules]);
+        tasks.extend([dispatch, stop, ensure_rules, udp_cleaner]);
         if let Some(task) = metrics_writer {
             tasks.push(task);
         }
@@ -1233,7 +1270,10 @@ impl Firewall {
         if !self.started.swap(false, Ordering::SeqCst) {
             return Ok(());
         }
-        self.cancel.cancel();
+        self.cancel
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .cancel();
         self.metrics.disable();
         let tasks: Vec<_> = std::mem::take(
             &mut *self.tasks.lock().unwrap_or_else(|error| error.into_inner()),
@@ -1270,6 +1310,12 @@ impl Firewall {
             return Ok(());
         }
 
+        let cancel = {
+            let mut guard = self.cancel.lock().unwrap_or_else(|error| error.into_inner());
+            *guard = CancellationToken::new();
+            guard.clone()
+        };
+
         let mut kext = pm_winkext::Kext::new();
         kext.init(&self.winkext_path);
         match kext.start() {
@@ -1296,19 +1342,39 @@ impl Firewall {
         }
 
         let handler = Arc::clone(&self.handler);
-        let cancel = self.cancel.clone();
+        let cancel_loop = cancel.clone();
         let kext_worker = Arc::clone(&kext);
         let metrics = Arc::clone(&self.metrics);
         let recorder = self.metrics_enabled.then(|| metrics.recorder());
 
         let loop_handle = tokio::task::spawn_blocking(move || {
-            windows_verdict_loop(kext_worker, handler, cancel, recorder);
+            windows_verdict_loop(kext_worker, handler, cancel_loop, recorder);
         });
 
-        self.tasks
+        let udp_cleaner = {
+            let netstate = Arc::clone(&self.netstate);
+            let network = Arc::clone(&self.network);
+            let cancel_cleaner = cancel.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(10));
+                loop {
+                    tokio::select! {
+                        () = cancel_cleaner.cancelled() => break,
+                        _ = interval.tick() => {
+                            netstate.clean_udp_states();
+                            network.clean_connections();
+                        }
+                    }
+                }
+            })
+        };
+
+        let mut tasks = self
+            .tasks
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .push(loop_handle);
+            .unwrap_or_else(|error| error.into_inner());
+        tasks.push(loop_handle);
+        tasks.push(udp_cleaner);
 
         Ok(())
     }
@@ -1319,7 +1385,10 @@ impl Firewall {
         if !self.started.swap(false, Ordering::SeqCst) {
             return Ok(());
         }
-        self.cancel.cancel();
+        self.cancel
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .cancel();
         let tasks: Vec<_> = std::mem::take(
             &mut *self.tasks.lock().unwrap_or_else(|error| error.into_inner()),
         );
@@ -1651,4 +1720,26 @@ fn windows_verdict_loop(
         }
     }
     tracing::info!("filter: windows verdict processing loop stopped");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn firewall_cancellation_token_resets_on_start() {
+        let cancel = Mutex::new(CancellationToken::new());
+        assert!(!cancel.lock().unwrap().is_cancelled());
+
+        // stop() cancels the token
+        cancel.lock().unwrap().cancel();
+        assert!(cancel.lock().unwrap().is_cancelled());
+
+        // start() must recreate the token so restart does not immediately abort tasks
+        {
+            let mut guard = cancel.lock().unwrap();
+            *guard = CancellationToken::new();
+        }
+        assert!(!cancel.lock().unwrap().is_cancelled());
+    }
 }

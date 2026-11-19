@@ -714,3 +714,65 @@ fn storage_is_read_only() {
     let interface = databases.internal_interface();
     assert!(interface.delete("network:tree/1/ip/x").is_err());
 }
+
+#[test]
+fn concurrent_active_and_save_no_ab_ba_deadlock() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::thread;
+    use std::time::Duration;
+
+    let (setup, _) = with_network();
+    let net = Arc::clone(&setup.network);
+    let mut conns = Vec::new();
+    for port in 10000..10100 {
+        let shared = established(&setup, port, 6);
+        conns.push(shared);
+    }
+    let conns = Arc::new(conns);
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let mut handles = Vec::new();
+
+    // Reader thread: repeatedly calls active_connection_count() which iterates shards
+    // and checks conns
+    for _ in 0..2 {
+        let net_c = Arc::clone(&net);
+        let stop_c = Arc::clone(&stop);
+        handles.push(thread::spawn(move || {
+            let mut count = 0;
+            while !stop_c.load(Ordering::Relaxed) {
+                let _ = net_c.active_connection_count();
+                count += 1;
+            }
+            count
+        }));
+    }
+
+    // Writer thread: repeatedly modifies connections and calls save_locked
+    for _ in 0..2 {
+        let net_c = Arc::clone(&net);
+        let conns_c = Arc::clone(&conns);
+        let stop_c = Arc::clone(&stop);
+        handles.push(thread::spawn(move || {
+            let mut count = 0;
+            while !stop_c.load(Ordering::Relaxed) {
+                for shared in conns_c.iter() {
+                    let mut conn = shared.lock().unwrap();
+                    conn.ended = if count % 2 == 0 { 12345 } else { 0 };
+                    net_c.save_locked(&shared, &mut conn);
+                }
+                count += 1;
+            }
+            count
+        }));
+    }
+
+    // Run concurrently for 200 milliseconds under high contention
+    thread::sleep(Duration::from_millis(200));
+    stop.store(true, Ordering::Relaxed);
+
+    for handle in handles {
+        let count = handle.join().expect("thread panicked or deadlocked");
+        assert!(count > 0);
+    }
+}

@@ -712,9 +712,9 @@ impl HandlerCore {
             conn.save_when_finished = true;
         }
 
-        // Do not allow to circumvent the decision, e.g. accepting packets of a
-        // dropped connection.
-        let verdict = verdict.max(conn.verdict);
+        // Do not allow to circumvent the decision, e.g. accepting or rerouting packets of a
+        // dropped or blocked connection. Block and Drop always take absolute precedence.
+        let verdict = pm_network::merge_verdicts(verdict, conn.verdict);
 
         let permanent = conn.verdict_permanent;
         let pkt_verdict = match verdict {

@@ -21,6 +21,10 @@ pub const UDP_CONN_STATE_TTL: Duration = Duration::from_secs(72 * 3600);
 pub const UDP_CONN_STATE_SHORTENED_TTL: Duration = Duration::from_secs(3 * 3600);
 /// Soft limit of UDP connection states per socket.
 pub const AGGRESSIVE_CLEANING_THRESHOLD: usize = 256;
+/// Hard limit of UDP connection states per socket to prevent memory exhaustion DoS.
+pub const MAX_UDP_CONN_STATES_PER_SOCKET: usize = 512;
+/// Periodic clean interval for UDP connection states.
+pub const UDP_STATES_CLEAN_INTERVAL: Duration = Duration::from_secs(30);
 
 const MIN_DURATION_BETWEEN_TABLE_UPDATES: Duration = Duration::from_millis(10);
 const LOOKUP_TRIES: usize = 5;
@@ -135,6 +139,7 @@ struct UdpTable {
     binds: RwLock<Vec<Arc<BindInfo>>>,
     last_update: Mutex<Option<SystemTime>>,
     limiter: Mutex<Option<Instant>>,
+    last_clean: Mutex<Option<Instant>>,
     states: Mutex<UdpStates>,
 }
 
@@ -145,6 +150,7 @@ impl UdpTable {
             binds: RwLock::new(Vec::new()),
             last_update: Mutex::new(None),
             limiter: Mutex::new(None),
+            last_clean: Mutex::new(None),
             states: Mutex::new(HashMap::new()),
         }
     }
@@ -195,6 +201,24 @@ impl UdpTable {
     }
 
     fn get_direction(&self, bind: &BindInfo, packet: &PacketInfo) -> bool {
+        let should_clean = {
+            let mut lc = self.last_clean.lock().expect("lock poisoned");
+            match *lc {
+                Some(last) if last.elapsed() >= UDP_STATES_CLEAN_INTERVAL => {
+                    *lc = Some(Instant::now());
+                    true
+                }
+                None => {
+                    *lc = Some(Instant::now());
+                    false
+                }
+                _ => false,
+            }
+        };
+        if should_clean {
+            self.clean_states(SystemTime::now());
+        }
+
         let mut states = self.states.lock().expect("lock poisoned");
         let remotes = states.entry((bind.local.ip, bind.local.port)).or_default();
         let remote = (packet.remote_ip(), packet.remote_port());
@@ -204,6 +228,19 @@ impl UdpTable {
                 state.inbound
             }
             None => {
+                if remotes.len() >= MAX_UDP_CONN_STATES_PER_SOCKET {
+                    // Try to prune states past shortened TTL first
+                    let now = SystemTime::now();
+                    let threshold = now - UDP_CONN_STATE_SHORTENED_TTL;
+                    remotes.retain(|_, state| state.last_seen >= threshold);
+
+                    // If still at or over capacity, evict the oldest entry
+                    if remotes.len() >= MAX_UDP_CONN_STATES_PER_SOCKET {
+                        if let Some((&oldest, _)) = remotes.iter().min_by_key(|(_, state)| state.last_seen) {
+                            remotes.remove(&oldest);
+                        }
+                    }
+                }
                 remotes.insert(
                     remote,
                     UdpState {
@@ -230,14 +267,21 @@ impl UdpTable {
 
         let mut states = self.states.lock().expect("lock poisoned");
         states.retain(|local, remotes| {
-            if !active_binds.contains(local) {
+            if !active_binds.is_empty() && !active_binds.contains(local) {
                 return false;
             }
             remotes.retain(|_, state| state.last_seen >= threshold);
             if remotes.len() > AGGRESSIVE_CLEANING_THRESHOLD {
                 remotes.retain(|_, state| state.last_seen >= short_threshold);
             }
-            true
+            while remotes.len() > MAX_UDP_CONN_STATES_PER_SOCKET {
+                if let Some((&oldest, _)) = remotes.iter().min_by_key(|(_, state)| state.last_seen) {
+                    remotes.remove(&oldest);
+                } else {
+                    break;
+                }
+            }
+            !remotes.is_empty()
         });
     }
 }

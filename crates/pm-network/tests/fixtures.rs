@@ -279,6 +279,39 @@ fn verdict_order_follows_values() {
 }
 
 #[test]
+fn verdict_priority_and_merge_strictly_prioritize_denies() {
+    use pm_network::merge_verdicts;
+
+    // Security hierarchy verification:
+    // Drop > Block > Failed > RerouteToSplitTun > RerouteToTunnel > RerouteToNameserver > Accept > Undeterminable > Undecided
+    assert!(Verdict::Drop.priority() > Verdict::Block.priority());
+    assert!(Verdict::Block.priority() > Verdict::Failed.priority());
+    assert!(Verdict::Failed.priority() > Verdict::RerouteToSplitTun.priority());
+    assert!(Verdict::RerouteToSplitTun.priority() > Verdict::RerouteToTunnel.priority());
+    assert!(Verdict::RerouteToTunnel.priority() > Verdict::RerouteToNameserver.priority());
+    assert!(Verdict::RerouteToNameserver.priority() > Verdict::Accept.priority());
+    assert!(Verdict::Accept.priority() > Verdict::Undeterminable.priority());
+    assert!(Verdict::Undeterminable.priority() > Verdict::Undecided.priority());
+
+    // Merging tests: Block and Drop must NEVER be weakened by reroutes or accept!
+    assert_eq!(merge_verdicts(Verdict::Drop, Verdict::RerouteToSplitTun), Verdict::Drop);
+    assert_eq!(merge_verdicts(Verdict::RerouteToSplitTun, Verdict::Drop), Verdict::Drop);
+    assert_eq!(merge_verdicts(Verdict::Block, Verdict::RerouteToTunnel), Verdict::Block);
+    assert_eq!(merge_verdicts(Verdict::RerouteToTunnel, Verdict::Block), Verdict::Block);
+    assert_eq!(merge_verdicts(Verdict::Block, Verdict::RerouteToSplitTun), Verdict::Block);
+    assert_eq!(merge_verdicts(Verdict::RerouteToSplitTun, Verdict::Block), Verdict::Block);
+    assert_eq!(merge_verdicts(Verdict::Drop, Verdict::Block), Verdict::Drop);
+    assert_eq!(merge_verdicts(Verdict::Block, Verdict::Drop), Verdict::Drop);
+    assert_eq!(merge_verdicts(Verdict::Block, Verdict::Accept), Verdict::Block);
+    assert_eq!(merge_verdicts(Verdict::Accept, Verdict::Block), Verdict::Block);
+
+    // Reroutes override accept
+    assert_eq!(merge_verdicts(Verdict::Accept, Verdict::RerouteToSplitTun), Verdict::RerouteToSplitTun);
+    assert_eq!(merge_verdicts(Verdict::Accept, Verdict::RerouteToTunnel), Verdict::RerouteToTunnel);
+    assert_eq!(merge_verdicts(Verdict::Undecided, Verdict::Accept), Verdict::Accept);
+}
+
+#[test]
 fn matched_lists_without_hit_serialize_as_empty_arrays() {
     let mut e = entity();
     e.ip = ip("1.1.1.1");
