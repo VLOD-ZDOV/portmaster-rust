@@ -169,27 +169,54 @@ impl AppProfile {
             return false;
         };
 
-        // Check flat key "splittun/usagePolicy"
+        // 1. Check boolean flags "splittun/use" or "spn/use"
+        if let Some(val) = cfg.get("splittun/use").or_else(|| cfg.get("spn/use")) {
+            if let Some(b) = val.as_bool() {
+                return b;
+            }
+        }
+
+        // 2. Check flat key "splittun/usagePolicy"
         if let Some(val) = cfg.get("splittun/usagePolicy") {
             if let Some(s) = val.as_str() {
                 if s == "vpn" || s == "proxy" || s == "force-vpn" {
                     return true;
                 }
+                if s == "direct" {
+                    return false;
+                }
             }
         }
 
-        // Check nested structure: splittun -> usagePolicy
+        // 3. Check nested structure: splittun -> use or usagePolicy
         if let Some(splittun) = cfg.get("splittun") {
+            if let Some(val) = splittun.get("use") {
+                if let Some(b) = val.as_bool() {
+                    return b;
+                }
+            }
             if let Some(val) = splittun.get("usagePolicy") {
                 if let Some(s) = val.as_str() {
                     if s == "vpn" || s == "proxy" || s == "force-vpn" {
                         return true;
                     }
+                    if s == "direct" {
+                        return false;
+                    }
                 }
             }
         }
 
-        // Also check if proxy_url is configured
+        // 4. Check nested structure: spn -> use
+        if let Some(spn) = cfg.get("spn") {
+            if let Some(val) = spn.get("use") {
+                if let Some(b) = val.as_bool() {
+                    return b;
+                }
+            }
+        }
+
+        // 5. Check if proxy_url is configured
         if let Some(proxy_url) = cfg.get("proxy_url").or_else(|| cfg.get("proxy/url")) {
             if let Some(s) = proxy_url.as_str() {
                 if !s.trim().is_empty() {
@@ -209,6 +236,14 @@ impl AppProfile {
             _ => Map::new(),
         };
 
+        map.insert(
+            "splittun/use".to_string(),
+            Value::Bool(route_vpn),
+        );
+        map.insert(
+            "spn/use".to_string(),
+            Value::Bool(route_vpn),
+        );
         map.insert(
             "splittun/usagePolicy".to_string(),
             Value::String(value_str.to_string()),

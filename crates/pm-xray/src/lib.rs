@@ -527,16 +527,6 @@ impl Xray {
     /// the `traffic` field unset so the status endpoint stays usable.
     pub fn status(&self) -> XrayStatus {
         let mut status = self.manager.status();
-        if !status.connected {
-            let spn_on = self.config.get_as_bool("spn/enable", false)();
-            let splittun_on = self.config.get_as_bool("splittun/enable", false)();
-            if spn_on || splittun_on {
-                tracing::info!("xray: status is not connected, resetting proxy config");
-                let _ = self.config.set_config_option("spn/enable", serde_json::Value::Bool(false));
-                let _ = self.config.set_config_option("splittun/enable", serde_json::Value::Bool(false));
-                let _ = self.config.set_config_option("splittun/proxy", serde_json::Value::String(String::new()));
-            }
-        }
         if status.connected && self.stats.available() {
             match self.stats.traffic("proxy") {
                 Ok(snapshot) => {
