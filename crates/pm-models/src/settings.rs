@@ -137,6 +137,16 @@ impl Setting {
         }
     }
 
+    /// Alias for is_modified matching Portmaster userConfigured flag.
+    pub fn is_user_configured(&self) -> bool {
+        self.is_modified()
+    }
+
+    /// Returns unit string if defined.
+    pub fn unit(&self) -> Option<&str> {
+        self.annotations.unit.as_deref()
+    }
+
     /// Resets the setting to its default value by clearing the custom value.
     pub fn reset_to_default(&mut self) {
         self.value = None;

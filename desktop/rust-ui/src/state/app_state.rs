@@ -1,6 +1,7 @@
 //! Global application state and reactive signals for Portmaster UI.
 
 use leptos::prelude::*;
+use pm_models::connection::ConnectionRecord;
 use pm_models::profile::AppProfile;
 use pm_models::settings::{ExpertiseLevel, OptionType, Setting, SettingAnnotations};
 use pm_models::xray::{ProcessState, TrafficStatus, XrayNode, XrayStatus};
@@ -83,6 +84,10 @@ pub struct AppState {
     pub set_profiles: WriteSignal<Vec<AppProfile>>,
     pub settings: ReadSignal<Vec<Setting>>,
     pub set_settings: WriteSignal<Vec<Setting>>,
+    pub connections: ReadSignal<Vec<ConnectionRecord>>,
+    pub set_connections: WriteSignal<Vec<ConnectionRecord>>,
+    pub pending_prompts: ReadSignal<usize>,
+    pub set_pending_prompts: WriteSignal<usize>,
 
     pub is_busy: ReadSignal<bool>,
     pub set_busy: WriteSignal<bool>,
@@ -450,6 +455,152 @@ impl AppState {
             },
         ];
 
+        let initial_connections = vec![
+            ConnectionRecord {
+                id: "conn-1".to_string(),
+                domain: Some("safing.io".to_string()),
+                remote_ip: "104.26.10.155".to_string(),
+                remote_port: 443,
+                protocol: "TCP".to_string(),
+                direction: "outbound".to_string(),
+                scope: "Internet".to_string(),
+                country: Some("US".to_string()),
+                country_name: Some("United States".to_string()),
+                profile_id: "firefox".to_string(),
+                profile_name: "Mozilla Firefox".to_string(),
+                verdict: "permit".to_string(),
+                verdict_reason: "Default Filter Action: Permit".to_string(),
+                as_owner: Some("Cloudflare, Inc. (AS13335)".to_string()),
+                bytes_sent: 4120,
+                bytes_received: 38940,
+                time_ago: "5s ago".to_string(),
+                active: true,
+            },
+            ConnectionRecord {
+                id: "conn-2".to_string(),
+                domain: Some("incoming.telemetry.mozilla.org".to_string()),
+                remote_ip: "34.117.237.249".to_string(),
+                remote_port: 443,
+                protocol: "TCP".to_string(),
+                direction: "outbound".to_string(),
+                scope: "Internet".to_string(),
+                country: Some("US".to_string()),
+                country_name: Some("United States".to_string()),
+                profile_id: "firefox".to_string(),
+                profile_name: "Mozilla Firefox".to_string(),
+                verdict: "block".to_string(),
+                verdict_reason: "Blocklist: Privacy & Telemetry Filter".to_string(),
+                as_owner: Some("Google LLC (AS15169)".to_string()),
+                bytes_sent: 0,
+                bytes_received: 0,
+                time_ago: "18s ago".to_string(),
+                active: false,
+            },
+            ConnectionRecord {
+                id: "conn-3".to_string(),
+                domain: Some("gateway.discord.gg".to_string()),
+                remote_ip: "162.159.130.233".to_string(),
+                remote_port: 443,
+                protocol: "TCP".to_string(),
+                direction: "outbound".to_string(),
+                scope: "Internet".to_string(),
+                country: Some("US".to_string()),
+                country_name: Some("United States".to_string()),
+                profile_id: "discord".to_string(),
+                profile_name: "Discord".to_string(),
+                verdict: "permit".to_string(),
+                verdict_reason: "Rule: Permit Discord Services".to_string(),
+                as_owner: Some("Cloudflare, Inc. (AS13335)".to_string()),
+                bytes_sent: 18450,
+                bytes_received: 125600,
+                time_ago: "42s ago".to_string(),
+                active: true,
+            },
+            ConnectionRecord {
+                id: "conn-4".to_string(),
+                domain: Some("dns.quad9.net".to_string()),
+                remote_ip: "9.9.9.9".to_string(),
+                remote_port: 853,
+                protocol: "DoT".to_string(),
+                direction: "outbound".to_string(),
+                scope: "Internet".to_string(),
+                country: Some("CH".to_string()),
+                country_name: Some("Switzerland".to_string()),
+                profile_id: "core".to_string(),
+                profile_name: "Portmaster Secure DNS".to_string(),
+                verdict: "permit".to_string(),
+                verdict_reason: "Secure DNS Upstream Resolver".to_string(),
+                as_owner: Some("Quad9 Foundation (AS19281)".to_string()),
+                bytes_sent: 2450,
+                bytes_received: 8900,
+                time_ago: "1m ago".to_string(),
+                active: true,
+            },
+            ConnectionRecord {
+                id: "conn-5".to_string(),
+                domain: Some("149.154.167.51".to_string()),
+                remote_ip: "149.154.167.51".to_string(),
+                remote_port: 443,
+                protocol: "TCP".to_string(),
+                direction: "outbound".to_string(),
+                scope: "Internet".to_string(),
+                country: Some("NL".to_string()),
+                country_name: Some("Netherlands".to_string()),
+                profile_id: "telegram".to_string(),
+                profile_name: "Telegram Desktop".to_string(),
+                verdict: "permit".to_string(),
+                verdict_reason: "Default Filter Action: Permit".to_string(),
+                as_owner: Some("Telegram Messenger Inc. (AS62041)".to_string()),
+                bytes_sent: 65400,
+                bytes_received: 842100,
+                time_ago: "3m ago".to_string(),
+                active: true,
+            },
+            ConnectionRecord {
+                id: "conn-6".to_string(),
+                domain: Some("analytics.google.com".to_string()),
+                remote_ip: "142.250.180.206".to_string(),
+                remote_port: 443,
+                protocol: "TCP".to_string(),
+                direction: "outbound".to_string(),
+                scope: "Internet".to_string(),
+                country: Some("US".to_string()),
+                country_name: Some("United States".to_string()),
+                profile_id: "chromium".to_string(),
+                profile_name: "Chromium Browser".to_string(),
+                verdict: "block".to_string(),
+                verdict_reason: "EasyList: Advertising & Tracker Block".to_string(),
+                as_owner: Some("Google LLC (AS15169)".to_string()),
+                bytes_sent: 0,
+                bytes_received: 0,
+                time_ago: "5m ago".to_string(),
+                active: false,
+            },
+            ConnectionRecord {
+                id: "conn-7".to_string(),
+                domain: Some("router.local".to_string()),
+                remote_ip: "192.168.1.1".to_string(),
+                remote_port: 80,
+                protocol: "TCP".to_string(),
+                direction: "outbound".to_string(),
+                scope: "LAN".to_string(),
+                country: None,
+                country_name: None,
+                profile_id: "firefox".to_string(),
+                profile_name: "Mozilla Firefox".to_string(),
+                verdict: "permit".to_string(),
+                verdict_reason: "LAN Broadcast / Local Subnet".to_string(),
+                as_owner: Some("Private Network RFC1918".to_string()),
+                bytes_sent: 1200,
+                bytes_received: 4800,
+                time_ago: "8m ago".to_string(),
+                active: false,
+            },
+        ];
+
+        let (connections, set_connections) = signal(initial_connections);
+        let (pending_prompts, set_pending_prompts) = signal(1); // 1 pending connection asking user
+
         let (xray_status, set_xray_status) = signal(initial_status);
         let (xray_nodes, set_xray_nodes) = signal(initial_nodes);
         let (profiles, set_profiles) = signal(initial_profiles);
@@ -488,6 +639,10 @@ impl AppState {
             set_profiles,
             settings,
             set_settings,
+            connections,
+            set_connections,
+            pending_prompts,
+            set_pending_prompts,
 
             is_busy,
             set_busy,
@@ -645,7 +800,8 @@ impl AppState {
     }
 
     /// Saves a setting value to core.
-    pub fn save_setting(&self, key: String, value: Option<serde_json::Value>) {
+    pub fn save_setting(&self, key: impl Into<String>, value: Option<serde_json::Value>) {
+        let key = key.into();
         let set_settings = self.set_settings;
         let client = self.client.clone();
 
@@ -662,9 +818,30 @@ impl AppState {
         });
     }
 
+    /// Updates a setting with a new value.
+    pub fn update_setting(&self, key: impl Into<String>, value: serde_json::Value) {
+        self.save_setting(key, Some(value));
+    }
+
     /// Resets a setting to default.
-    pub fn reset_setting(&self, key: String) {
+    pub fn reset_setting(&self, key: impl Into<String>) {
         self.save_setting(key, None);
+    }
+
+    /// Pauses protection for specified duration in minutes.
+    pub fn pause(&self, minutes: u32, vpn_only: bool) {
+        if vpn_only {
+            self.set_xray_status.update(|s| s.connected = false);
+            self.set_paused.set(true);
+            self.set_pause_until.set(Some(format!("VPN Paused for {}m", minutes)));
+        } else {
+            self.pause_protection(minutes as u64 * 60);
+        }
+    }
+
+    /// Resumes all protection.
+    pub fn resume(&self) {
+        self.resume_protection();
     }
 
     /// Toggles VPN on/off.
@@ -750,11 +927,11 @@ impl AppState {
                 p.set_route_via_vpn(next_vpn);
 
                 let key = p.database_key();
-                let config_val = p.config.clone();
+                let profile_val = serde_json::to_value(&*p).ok();
 
                 spawn_local(async move {
-                    if let Some(cfg) = config_val {
-                        let _ = client.put("update", &key, cfg).await;
+                    if let Some(val) = profile_val {
+                        let _ = client.put("update", &key, val).await;
                     }
                 });
             }
@@ -771,14 +948,41 @@ impl AppState {
                 p.set_default_action(&action);
 
                 let key = p.database_key();
-                let config_val = p.config.clone();
+                let profile_val = serde_json::to_value(&*p).ok();
 
                 spawn_local(async move {
-                    if let Some(cfg) = config_val {
-                        let _ = client.put("update", &key, cfg).await;
+                    if let Some(val) = profile_val {
+                        let _ = client.put("update", &key, val).await;
                     }
                 });
             }
         });
+    }
+
+    /// Explicitly permits a connection and updates its record.
+    pub fn allow_connection(&self, conn_id: &str) {
+        let conn_id = conn_id.to_string();
+        self.set_connections.update(|conns| {
+            if let Some(c) = conns.iter_mut().find(|c| c.id == conn_id) {
+                c.verdict = "permit".to_string();
+                c.verdict_reason = "Manual Rule: Explicitly Allowed by User".to_string();
+            }
+        });
+    }
+
+    /// Explicitly blocks a connection and updates its record.
+    pub fn block_connection(&self, conn_id: &str) {
+        let conn_id = conn_id.to_string();
+        self.set_connections.update(|conns| {
+            if let Some(c) = conns.iter_mut().find(|c| c.id == conn_id) {
+                c.verdict = "block".to_string();
+                c.verdict_reason = "Manual Rule: Explicitly Blocked by User".to_string();
+            }
+        });
+    }
+
+    /// Clears network activity history.
+    pub fn clear_history(&self) {
+        self.set_connections.set(Vec::new());
     }
 }

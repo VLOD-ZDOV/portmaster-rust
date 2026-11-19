@@ -1,22 +1,62 @@
 @import "tailwindcss";
 
 @theme {
-  --color-pm-bg: #121213;
-  --color-pm-panel: #1b1b1b;
-  --color-pm-card: #222222;
-  --color-pm-card-hover: #292929;
-  --color-pm-border: #2c2c2c;
-  --color-pm-border-light: #3a3a3a;
-  --color-pm-text-primary: #ffffff;
-  --color-pm-text-secondary: #ababab;
-  --color-pm-text-tertiary: #666666;
-  --color-pm-blue: #4e97fa;
-  --color-pm-blue-hover: #3d86e8;
-  --color-pm-green: #1de966;
-  --color-pm-green-dim: #18823d;
-  --color-pm-red: #e01d1d;
-  --color-pm-red-dim: #811818;
-  --color-pm-yellow: #e9d81d;
+  --color-background: #121213;
+
+  --color-cards-primary: #222222;
+  --color-cards-secondary: #1b1b1b;
+  --color-cards-tertiary: #2c2c2c;
+
+  --color-text-primary: #ffffff;
+  --color-text-secondary: #ababab;
+  --color-text-tertiary: #888888;
+
+  --color-button-dark: #343434;
+  --color-button-light: #474747;
+  --color-button-icon: #ababab;
+
+  --color-info-green: #3df57f;
+  --color-info-red: #d12e2e;
+  --color-info-gray: #ababab;
+  --color-info-blue: #4e97fa;
+  --color-info-yellow: #e9d31d;
+
+  --color-protection-ok-primary: rgb(29, 233, 102);
+  --color-protection-ok-secondary: rgb(24, 130, 61);
+  --color-protection-ok-tertiary: rgb(20, 61, 36);
+
+  --color-protection-warn-primary: rgb(233, 216, 29);
+  --color-protection-warn-secondary: rgb(130, 121, 24);
+  --color-protection-warn-tertiary: rgb(61, 58, 20);
+
+  --color-protection-fail-primary: rgb(224, 29, 29);
+  --color-protection-fail-secondary: rgb(129, 24, 24);
+  --color-protection-fail-tertiary: rgb(61, 20, 20);
+}
+
+:root {
+  --background: #121213;
+  --cards-primary: #222222;
+  --cards-secondary: #1b1b1b;
+  --cards-tertiary: #2c2c2c;
+
+  --text-primary: #ffffff;
+  --text-secondary: #ababab;
+  --text-tertiary: #888888;
+
+  --button-dark: #343434;
+  --button-light: #474747;
+  --button-icon: #ababab;
+
+  --info-green: #3df57f;
+  --info-red: #d12e2e;
+  --info-gray: #ababab;
+  --info-blue: #4e97fa;
+  --info-yellow: #e9d31d;
+
+  --protection-ok-primary: rgb(29, 233, 102);
+  --protection-ok-secondary: rgb(24, 130, 61);
+  --protection-ok-tertiary: rgb(20, 61, 36);
 }
 
 @layer base {
@@ -24,6 +64,9 @@
     background-color: #121213;
     color: #ffffff;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    user-select: none;
+    margin: 0;
+    padding: 0;
   }
 }
 
@@ -44,4 +87,113 @@
 
 ::-webkit-scrollbar-thumb:hover {
   background: #474747;
+}
+
+/* Portmaster Original Rotating Logo Rings */
+.spin {
+  animation: pm-spin 3500ms linear infinite;
+  transform-origin: center center;
+}
+
+.spin.reverse {
+  animation: pm-spin-reverse 3500ms linear infinite;
+  transform-origin: center center;
+}
+
+@keyframes pm-spin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes pm-spin-reverse {
+  0% {
+    transform: rotate(360deg);
+  }
+  100% {
+    transform: rotate(0deg);
+  }
+}
+
+/* Portmaster Concentric Shields */
+.shield-three {
+  transform-origin: center center;
+  transform: scale(1);
+  opacity: 0.4;
+}
+
+.shield-two {
+  transform-origin: center center;
+  transform: scale(0.8);
+  opacity: 0.6;
+}
+
+.shield-one {
+  transform-origin: center center;
+  transform: scale(0.62);
+  opacity: 1;
+}
+
+/* Portmaster Buttons */
+.btn-pm {
+  background-color: #343434;
+  color: #ffffff;
+  padding: 0.25rem 0.75rem;
+  border-radius: 2px;
+  font-size: 0.7rem;
+  font-weight: 500;
+  cursor: pointer;
+  outline: none;
+  border: none;
+  transition: background-color 0.15s ease-in-out;
+}
+
+.btn-pm:hover:not(:disabled) {
+  background-color: #474747;
+}
+
+.btn-pm:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* Portmaster Inputs */
+.input-pm {
+  background-color: #222222;
+  border: 1px solid #2c2c2c;
+  border-radius: 2px;
+  color: #ffffff;
+  font-size: 0.75rem;
+  padding: 0.375rem 0.5rem;
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+  transition: border-color 0.2s ease-in-out;
+}
+
+.input-pm:focus {
+  border-color: #4e97fa;
+}
+
+.input-pm::placeholder {
+  color: #888888;
+  font-size: 0.7rem;
+}
+
+/* Portmaster Card Header */
+.card-header-pm {
+  background-color: #202020e0;
+  border-radius: 4px;
+  padding: 0.65rem;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  transition: background-color 0.15s ease-in-out;
+}
+
+.card-header-pm:hover {
+  background-color: #292929b0;
 }

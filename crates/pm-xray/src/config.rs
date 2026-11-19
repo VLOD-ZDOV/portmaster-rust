@@ -341,11 +341,25 @@ pub fn parse_routing_rules(raw_rules: &[String]) -> Vec<Value> {
                 "outboundTag": action,
                 "ip": [target]
             }));
-        } else if target.eq_ignore_ascii_case("LAN") || target.eq_ignore_ascii_case("Localhost") {
+        } else if target.eq_ignore_ascii_case("LAN") {
             rules.push(json!({
                 "type": "field",
                 "outboundTag": action,
-                "ip": ["geoip:private"]
+                "ip": [
+                    "geoip:private",
+                    "192.168.0.0/16",
+                    "10.0.0.0/8",
+                    "172.16.0.0/12",
+                    "169.254.0.0/16",
+                    "fe80::/10",
+                    "fc00::/7"
+                ]
+            }));
+        } else if target.eq_ignore_ascii_case("Localhost") {
+            rules.push(json!({
+                "type": "field",
+                "outboundTag": action,
+                "ip": ["127.0.0.0/8", "::1/128"]
             }));
         } else if target.starts_with("geosite:") {
             let outbound_tag = if action == "direct" && target.contains("category-ads") {

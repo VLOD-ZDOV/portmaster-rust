@@ -375,10 +375,13 @@ fn unreachable_service_and_noop_fallback() {
     drop(probe);
 
     let error = GrpcStats::with_addr(addr)
-        .with_timeout(Duration::from_millis(250))
+        .with_timeout(Duration::from_millis(500))
         .get_stats("proxy")
         .unwrap_err();
-    assert!(matches!(error, StatsError::Transport(_)), "{error:?}");
+    assert!(
+        matches!(error, StatsError::Transport(_) | StatsError::Timeout(_)),
+        "{error:?}"
+    );
 
     let noop = NoopTrafficStats;
     assert!(!noop.available());

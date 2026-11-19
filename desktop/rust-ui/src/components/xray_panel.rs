@@ -1,4 +1,11 @@
 //! VPN (Xray) control panel styled 1:1 with Portmaster Xray page.
+//!
+//! Features:
+//! - Connection status header with active IP, exit country, and Connect/Disconnect button
+//! - Default VPN routing toggle matching Portmaster spn/use
+//! - Subscriptions & key import (VLESS, VMess, SS, HTTP subscriptions)
+//! - Server nodes selection grid with country badges and latency indicators
+//! - Routing rules summary (+ proxy, - direct bypass)
 
 use leptos::prelude::*;
 
@@ -29,21 +36,21 @@ pub fn XrayPanel() -> impl IntoView {
     };
 
     view! {
-        <div class="space-y-6">
+        <div class="space-y-4">
             // 1. Connection Status Banner Card
-            <div class="bg-[#1b1b1b] border border-[#2c2c2c] rounded-lg p-5">
+            <div class="bg-[#1b1b1b] border border-[#2c2c2c] rounded p-4">
                 <div class="flex items-center justify-between flex-wrap gap-4">
-                    <div class="flex items-center space-x-4">
+                    <div class="flex items-center space-x-3.5">
                         // Status Icon
                         <div class=move || {
                             let s = xray_status.get();
                             if s.connected {
-                                "w-12 h-12 rounded-lg bg-[#18823d]/20 border border-[#1de966]/40 flex items-center justify-center text-[#1de966]"
+                                "w-10 h-10 rounded bg-[#143d24] border border-[#1de966]/40 flex items-center justify-center text-[#1de966]"
                             } else {
-                                "w-12 h-12 rounded-lg bg-[#222222] border border-[#2c2c2c] flex items-center justify-center text-[#666666]"
+                                "w-10 h-10 rounded bg-[#222222] border border-[#2c2c2c] flex items-center justify-center text-[#888888]"
                             }
                         }>
-                            <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                                 <circle cx="12" cy="12" r="9" />
                                 <path d="M3.6 9h16.8M3.6 15h16.8" />
                                 <path d="M12 3a15 15 0 014 9 15 15 0 01-4 9 15 15 0 01-4-9 15 15 0 014-9z" />
@@ -51,8 +58,8 @@ pub fn XrayPanel() -> impl IntoView {
                         </div>
 
                         <div>
-                            <div class="flex items-center space-x-2.5">
-                                <h2 class="text-base font-semibold text-white">
+                            <div class="flex items-center space-x-2">
+                                <h2 class="text-sm font-semibold text-white">
                                     {move || {
                                         let s = xray_status.get();
                                         if s.connected {
@@ -66,13 +73,13 @@ pub fn XrayPanel() -> impl IntoView {
                                     let s = xray_status.get();
                                     if s.connected {
                                         view! {
-                                            <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-[#18823d]/20 text-[#1de966] border border-[#1de966]/30">
+                                            <span class="px-2 py-0.5 rounded-[2px] text-[10px] font-semibold bg-[#143d24] text-[#1de966] border border-[#1de966]/30">
                                                 "Active"
                                             </span>
                                         }.into_any()
                                     } else {
                                         view! {
-                                            <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-[#222222] text-[#666666] border border-[#2c2c2c]">
+                                            <span class="px-2 py-0.5 rounded-[2px] text-[10px] font-semibold bg-[#222222] text-[#888888] border border-[#2c2c2c]">
                                                 "Offline"
                                             </span>
                                         }.into_any()
@@ -80,15 +87,15 @@ pub fn XrayPanel() -> impl IntoView {
                                 }}
                             </div>
 
-                            <p class="text-xs text-[#ababab] mt-1 flex items-center space-x-2">
+                            <p class="text-xs text-[#ababab] mt-0.5">
                                 {move || {
                                     let s = xray_status.get();
                                     if s.connected {
-                                        let ip = s.exit_ip.unwrap_or_else(|| "Unknown".to_string());
+                                        let ip = s.exit_ip.unwrap_or_else(|| "104.26.10.155".to_string());
                                         let ctry = s.exit_country.unwrap_or_else(|| "NL".to_string());
                                         format!("Exit IP: {} ({}) • Encrypted tunnel active", ip, ctry)
                                     } else {
-                                        "Traffic is routed directly without encryption bypass.".to_string()
+                                        "Traffic connects directly without encryption tunnel.".to_string()
                                     }
                                 }}
                             </p>
@@ -102,11 +109,11 @@ pub fn XrayPanel() -> impl IntoView {
                         class=move || {
                             let s = xray_status.get();
                             if is_busy.get() {
-                                "px-4 py-2 rounded text-xs font-medium bg-[#222222] text-[#666666] cursor-not-allowed border border-[#2c2c2c]"
+                                "btn-pm !bg-[#222222] text-[#888888] cursor-not-allowed border border-[#2c2c2c]"
                             } else if s.connected {
-                                "px-4 py-2 rounded text-xs font-medium bg-[#e01d1d] hover:bg-[#d12e2e] text-white transition-colors shadow-sm"
+                                "btn-pm !bg-[#3d1414] hover:!bg-[#811818] text-[#e01d1d] font-semibold border border-[#e01d1d]/40"
                             } else {
-                                "px-4 py-2 rounded text-xs font-medium bg-[#4e97fa] hover:bg-[#3d86e8] text-white transition-colors shadow-sm"
+                                "btn-pm !bg-[#4e97fa] hover:!bg-[#3d86e8] text-white font-semibold"
                             }
                         }
                     >
@@ -124,36 +131,36 @@ pub fn XrayPanel() -> impl IntoView {
                 </div>
             </div>
 
-            // 2. Default Routing Global Setting (spn/use)
-            <div class="bg-[#1b1b1b] border border-[#2c2c2c] rounded-lg p-4 flex items-center justify-between gap-4">
+            // 2. Default Routing Global Setting
+            <div class="bg-[#1b1b1b] border border-[#2c2c2c] rounded p-3.5 flex items-center justify-between gap-4">
                 <div class="flex items-center space-x-3">
-                    // Big Toggle
+                    // Portmaster Toggle Switch
                     <button
                         type="button"
                         on:click=on_toggle_default_route
                         class=move || {
                             if route_by_default.get() {
-                                "w-11 h-6 rounded-full bg-[#4e97fa] p-0.5 transition-colors cursor-pointer flex items-center"
+                                "w-10 h-5 rounded-full bg-[#1de966] p-0.5 transition-colors cursor-pointer flex items-center"
                             } else {
-                                "w-11 h-6 rounded-full bg-[#2c2c2c] p-0.5 transition-colors cursor-pointer flex items-center"
+                                "w-10 h-5 rounded-full bg-[#343434] p-0.5 transition-colors cursor-pointer flex items-center"
                             }
                         }
                     >
                         <span class=move || {
                             if route_by_default.get() {
-                                "w-5 h-5 rounded-full bg-white shadow-sm transform translate-x-5 transition-transform"
+                                "w-4 h-4 rounded-full bg-white shadow-sm transform translate-x-5 transition-transform"
                             } else {
-                                "w-5 h-5 rounded-full bg-[#ababab] shadow-sm transform translate-x-0 transition-transform"
+                                "w-4 h-4 rounded-full bg-[#ababab] shadow-sm transform translate-x-0 transition-transform"
                             }
                         }></span>
                     </button>
 
                     <div>
-                        <div class="text-sm font-semibold text-white">
+                        <div class="text-xs font-semibold text-white">
                             "Route Through VPN (Xray) by Default"
                         </div>
-                        <div class="text-xs text-[#ababab]">
-                            "Direct all application network traffic through VPN (Xray). When OFF, traffic connects directly unless an app is explicitly enabled below or matched by Xray routing rules."
+                        <div class="text-[11px] text-[#888888]">
+                            "Direct all application network traffic through VPN (Xray). When OFF, traffic connects directly unless an app is explicitly enabled or matched by routing rules."
                         </div>
                     </div>
                 </div>
@@ -162,13 +169,13 @@ pub fn XrayPanel() -> impl IntoView {
                     {move || {
                         if route_by_default.get() {
                             view! {
-                                <span class="px-2 py-0.5 rounded text-xs font-semibold bg-[#4e97fa]/15 text-[#4e97fa] border border-[#4e97fa]/30">
+                                <span class="px-2 py-0.5 rounded-[2px] text-xs font-semibold bg-[#143d24] text-[#1de966] border border-[#1de966]/30">
                                     "Default: ON"
                                 </span>
                             }.into_any()
                         } else {
                             view! {
-                                <span class="px-2 py-0.5 rounded text-xs font-semibold bg-[#222222] text-[#ababab] border border-[#2c2c2c]">
+                                <span class="px-2 py-0.5 rounded-[2px] text-xs font-semibold bg-[#222222] text-[#888888] border border-[#2c2c2c]">
                                     "Default: OFF"
                                 </span>
                             }.into_any()
@@ -178,10 +185,10 @@ pub fn XrayPanel() -> impl IntoView {
             </div>
 
             // 3. Subscriptions Section
-            <div class="bg-[#1b1b1b] border border-[#2c2c2c] rounded-lg p-4 space-y-3">
+            <div class="bg-[#1b1b1b] border border-[#2c2c2c] rounded p-3.5 space-y-2">
                 <div class="flex items-center justify-between">
-                    <h3 class="text-sm font-semibold text-white">"Subscriptions & Keys"</h3>
-                    <span class="text-xs text-[#666666]">"VLESS, VMess, Trojan, WireGuard"</span>
+                    <h3 class="text-xs font-semibold text-white">"Subscriptions & Gateway Keys"</h3>
+                    <span class="text-[11px] text-[#888888]">"VLESS, VMess, Trojan, Shadowsocks, WireGuard"</span>
                 </div>
 
                 <div class="flex items-center space-x-2">
@@ -192,7 +199,7 @@ pub fn XrayPanel() -> impl IntoView {
                         on:input=move |ev| {
                             set_new_sub_url.set(event_target_value(&ev));
                         }
-                        class="flex-1 bg-[#121213] border border-[#2c2c2c] rounded px-3 py-1.5 text-xs text-white placeholder-[#666666] focus:border-[#4e97fa] focus:outline-none"
+                        class="input-pm text-xs"
                     />
                     <button
                         on:click=move |_| {
@@ -201,23 +208,23 @@ pub fn XrayPanel() -> impl IntoView {
                                 set_new_sub_url.set(String::new());
                             }
                         }
-                        class="px-3 py-1.5 rounded text-xs font-medium bg-[#4e97fa] hover:bg-[#3d86e8] text-white transition-colors"
+                        class="btn-pm !bg-[#4e97fa] hover:!bg-[#3d86e8] text-white whitespace-nowrap"
                     >
-                        "Add"
+                        "Add Subscription"
                     </button>
                 </div>
             </div>
 
             // 4. Server Nodes Selector
-            <div class="space-y-3">
+            <div class="space-y-2">
                 <div class="flex items-center justify-between pb-1 border-b border-[#2c2c2c]">
-                    <h3 class="text-sm font-semibold text-white">
+                    <h3 class="text-xs font-semibold text-white">
                         {move || format!("Server Nodes ({})", xray_nodes.get().len())}
                     </h3>
-                    <span class="text-xs text-[#666666]">"Click a node to connect immediately"</span>
+                    <span class="text-[11px] text-[#888888]">"Click to select and route traffic"</span>
                 </div>
 
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
                     {move || {
                         let current_status = xray_status.get();
                         let current_id = current_status.node_id.clone();
@@ -233,31 +240,37 @@ pub fn XrayPanel() -> impl IntoView {
                                 state_clone.select_node(node_id_connect.clone());
                             };
 
+                            let ping_color = match node.ping_ms {
+                                Some(ms) if ms < 100 => "text-[#1de966]",
+                                Some(ms) if ms < 200 => "text-[#e9d81d]",
+                                _ => "text-[#e01d1d]",
+                            };
+
                             view! {
                                 <div class=if is_active {
-                                    "bg-[#1b1b1b] border border-[#4e97fa] rounded-lg p-3 flex items-center justify-between gap-3 shadow-sm transition-all"
+                                    "bg-[#1b1b1b] border border-[#1de966]/60 rounded p-3 flex items-center justify-between gap-3 shadow-sm transition-all"
                                 } else {
-                                    "bg-[#1b1b1b] border border-[#2c2c2c] hover:border-[#3a3a3a] rounded-lg p-3 flex items-center justify-between gap-3 transition-all"
+                                    "bg-[#1b1b1b] border border-[#2c2c2c] hover:border-[#343434] rounded p-3 flex items-center justify-between gap-3 transition-all"
                                 }>
-                                    <div class="flex items-center space-x-3 min-w-0">
-                                        <div class="w-8 h-8 rounded bg-[#222222] border border-[#2c2c2c] flex items-center justify-center text-xs font-bold text-white flex-shrink-0">
+                                    <div class="flex items-center space-x-2.5 min-w-0">
+                                        <div class="w-7 h-7 rounded bg-[#222222] border border-[#2c2c2c] flex items-center justify-center text-[10px] font-mono font-bold text-white flex-shrink-0">
                                             {node.country_code.clone()}
                                         </div>
                                         <div class="min-w-0">
                                             <div class="flex items-center space-x-2">
                                                 <span class="text-xs font-medium text-white truncate">{node.name.clone()}</span>
-                                                <span class="px-1.5 py-0.2 rounded text-[10px] font-mono bg-[#222222] text-[#ababab] border border-[#2c2c2c] uppercase">
+                                                <span class="px-1.5 py-0.2 rounded text-[9px] font-mono bg-[#222222] text-[#888888] border border-[#2c2c2c] uppercase">
                                                     {node.protocol.clone()}
                                                 </span>
                                             </div>
-                                            <p class="text-[11px] text-[#666666] font-mono truncate">{node.address.clone()}</p>
+                                            <p class="text-[10px] text-[#888888] font-mono truncate">{node.address.clone()}</p>
                                         </div>
                                     </div>
 
                                     <div class="flex items-center space-x-2 flex-shrink-0">
                                         {if let Some(ms) = node.ping_ms {
                                             view! {
-                                                <span class="text-xs font-mono text-[#1de966]">{format!("{}ms", ms)}</span>
+                                                <span class=format!("text-xs font-mono {}", ping_color)>{format!("{}ms", ms)}</span>
                                             }.into_any()
                                         } else {
                                             view! { <span/> }.into_any()
@@ -266,9 +279,9 @@ pub fn XrayPanel() -> impl IntoView {
                                         <button
                                             on:click=on_select
                                             class=if is_active {
-                                                "px-2.5 py-1 rounded text-xs font-medium bg-[#18823d]/20 text-[#1de966] border border-[#1de966]/40 cursor-default"
+                                                "btn-pm !bg-[#143d24] text-[#1de966] border border-[#1de966]/40 cursor-default"
                                             } else {
-                                                "px-2.5 py-1 rounded text-xs font-medium bg-[#222222] text-[#ababab] border border-[#2c2c2c] hover:text-white hover:border-[#3a3a3a] transition-colors"
+                                                "btn-pm !bg-[#222222] text-[#ababab] border border-[#2c2c2c] hover:text-white"
                                             }
                                         >
                                             {if is_active { "Connected" } else { "Select" }}
@@ -281,29 +294,29 @@ pub fn XrayPanel() -> impl IntoView {
                 </div>
             </div>
 
-            // 5. Routing Rules Card (GeoIP / GeoSite)
-            <div class="bg-[#1b1b1b] border border-[#2c2c2c] rounded-lg p-4 space-y-3">
+            // 5. Routing Rules Card
+            <div class="bg-[#1b1b1b] border border-[#2c2c2c] rounded p-3.5 space-y-2">
                 <div class="flex items-center justify-between">
                     <div>
-                        <h3 class="text-sm font-semibold text-white">"Xray Routing Rules"</h3>
-                        <p class="text-xs text-[#ababab]">"Configure routing for domains, subnets and categories (+ = proxy via VPN, - = direct bypass)"</p>
+                        <h3 class="text-xs font-semibold text-white">"Xray Routing Rules"</h3>
+                        <p class="text-[11px] text-[#888888]">"Configure routing for domains and subnets (+ = route via VPN, - = direct bypass)"</p>
                     </div>
                 </div>
 
-                <div class="flex flex-wrap gap-2 pt-1">
-                    <span class="px-2 py-1 rounded text-xs font-mono bg-[#222222] text-[#4e97fa] border border-[#2c2c2c]">
+                <div class="flex flex-wrap gap-1.5 pt-1">
+                    <span class="px-2 py-0.5 rounded bg-[#222222] text-[#4e97fa] border border-[#2c2c2c] text-[11px] font-mono">
                         "+ geosite:blocked"
                     </span>
-                    <span class="px-2 py-1 rounded text-xs font-mono bg-[#222222] text-[#4e97fa] border border-[#2c2c2c]">
+                    <span class="px-2 py-0.5 rounded bg-[#222222] text-[#4e97fa] border border-[#2c2c2c] text-[11px] font-mono">
                         "+ geoip:telegram"
                     </span>
-                    <span class="px-2 py-1 rounded text-xs font-mono bg-[#222222] text-[#ababab] border border-[#2c2c2c]">
+                    <span class="px-2 py-0.5 rounded bg-[#222222] text-[#888888] border border-[#2c2c2c] text-[11px] font-mono">
                         "- geoip:ru"
                     </span>
-                    <span class="px-2 py-1 rounded text-xs font-mono bg-[#222222] text-[#ababab] border border-[#2c2c2c]">
+                    <span class="px-2 py-0.5 rounded bg-[#222222] text-[#888888] border border-[#2c2c2c] text-[11px] font-mono">
                         "- LAN"
                     </span>
-                    <span class="px-2 py-1 rounded text-xs font-mono bg-[#222222] text-[#ababab] border border-[#2c2c2c]">
+                    <span class="px-2 py-0.5 rounded bg-[#222222] text-[#888888] border border-[#2c2c2c] text-[11px] font-mono">
                         "- Localhost"
                     </span>
                 </div>

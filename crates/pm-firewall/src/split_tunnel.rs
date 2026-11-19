@@ -58,12 +58,12 @@ pub trait SplitTunnelEnv: Send + Sync {
 /// connection is accepted, not inbound, not localhost, TCP/UDP and not created
 /// by the core itself.
 pub fn check_split_tunneling(conn: &mut Connection, env: &dyn SplitTunnelEnv) {
-    let is_localhost = conn
+    let is_local_or_lan = conn
         .entity
         .as_ref()
-        .is_some_and(|entity| entity.ip_scope.is_localhost());
+        .is_some_and(|entity| entity.ip_scope.is_localhost() || entity.ip_scope.is_lan());
 
-    if is_localhost
+    if is_local_or_lan
         || conn.inbound
         || conn.verdict != Verdict::Accept
         || (conn.ip_protocol != protocol::TCP && conn.ip_protocol != protocol::UDP)

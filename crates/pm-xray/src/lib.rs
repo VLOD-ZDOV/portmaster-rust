@@ -107,26 +107,14 @@ pub fn register_options(config: &Config) -> pm_config::Result<()> {
 
     config.register(
         ConfigOption::new(
-            "Xray Binary",
-            CFG_XRAY_BINARY_NAMESPACED,
-            "Path to the Xray binary. Select a pre-installed binary or auto-detect.",
-            pm_config::OPT_TYPE_STRING,
-            Value::String(default_binary),
-        )
-        .with_expertise_level(pm_config::EXPERTISE_LEVEL_USER)
-        .with_possible_values(xray_binary_options())
-        .with_annotation(pm_config::DISPLAY_HINT_ANNOTATION, json!(pm_config::DISPLAY_HINT_ONE_OF))
-        .with_annotation(pm_config::CATEGORY_ANNOTATION, json!("General")),
-    )?;
-    config.register(
-        ConfigOption::new(
             "Модуль Xray",
             CFG_XRAY_ENABLE,
             "Включение интеграции и фонового процесса Xray для проксирования.",
             pm_config::OPT_TYPE_BOOL,
             Value::Bool(true),
         )
-        .with_expertise_level(pm_config::EXPERTISE_LEVEL_DEVELOPER)
+        .with_expertise_level(pm_config::EXPERTISE_LEVEL_USER)
+        .with_annotation(pm_config::DISPLAY_ORDER_ANNOTATION, json!(1))
         .with_annotation(pm_config::CATEGORY_ANNOTATION, json!("General")),
     )?;
     config.register(
@@ -138,6 +126,21 @@ pub fn register_options(config: &Config) -> pm_config::Result<()> {
             Value::Bool(true),
         )
         .with_expertise_level(pm_config::EXPERTISE_LEVEL_USER)
+        .with_annotation(pm_config::DISPLAY_ORDER_ANNOTATION, json!(10))
+        .with_annotation(pm_config::CATEGORY_ANNOTATION, json!("General")),
+    )?;
+    config.register(
+        ConfigOption::new(
+            "Xray Binary",
+            CFG_XRAY_BINARY_NAMESPACED,
+            "Path to the Xray binary. Select a pre-installed binary or auto-detect.",
+            pm_config::OPT_TYPE_STRING,
+            Value::String(default_binary),
+        )
+        .with_expertise_level(pm_config::EXPERTISE_LEVEL_USER)
+        .with_possible_values(xray_binary_options())
+        .with_annotation(pm_config::DISPLAY_ORDER_ANNOTATION, json!(20))
+        .with_annotation(pm_config::DISPLAY_HINT_ANNOTATION, json!(pm_config::DISPLAY_HINT_ONE_OF))
         .with_annotation(pm_config::CATEGORY_ANNOTATION, json!("General")),
     )?;
     config.register(
@@ -149,6 +152,7 @@ pub fn register_options(config: &Config) -> pm_config::Result<()> {
             Value::from(DEFAULT_INBOUND_PORT),
         )
         .with_expertise_level(pm_config::EXPERTISE_LEVEL_DEVELOPER)
+        .with_annotation(pm_config::DISPLAY_ORDER_ANNOTATION, json!(30))
         .with_annotation(pm_config::CATEGORY_ANNOTATION, json!("Development")),
     )?;
     config.register(
@@ -160,6 +164,7 @@ pub fn register_options(config: &Config) -> pm_config::Result<()> {
             Value::String("socks".to_string()),
         )
         .with_expertise_level(pm_config::EXPERTISE_LEVEL_DEVELOPER)
+        .with_annotation(pm_config::DISPLAY_ORDER_ANNOTATION, json!(40))
         .with_annotation(pm_config::CATEGORY_ANNOTATION, json!("Development")),
     )?;
     config.register(
@@ -171,6 +176,7 @@ pub fn register_options(config: &Config) -> pm_config::Result<()> {
             Value::from(i64::from(DEFAULT_STATS_PORT)),
         )
         .with_expertise_level(pm_config::EXPERTISE_LEVEL_DEVELOPER)
+        .with_annotation(pm_config::DISPLAY_ORDER_ANNOTATION, json!(50))
         .with_annotation(pm_config::CATEGORY_ANNOTATION, json!("Development")),
     )?;
 
@@ -198,6 +204,7 @@ pub fn register_options(config: &Config) -> pm_config::Result<()> {
                 Value::Array(Vec::new()),
             )
             .with_expertise_level(pm_config::EXPERTISE_LEVEL_USER)
+            .with_annotation(pm_config::DISPLAY_ORDER_ANNOTATION, json!(25))
             .with_annotation(pm_config::CATEGORY_ANNOTATION, json!("General")),
         );
     }
@@ -554,6 +561,11 @@ impl Xray {
         let mut rules = self.config.get_as_string_array("xray/rules", &[])();
         if rules.is_empty() {
             rules = self.config.get_as_string_array("spn/usagePolicy", &[])();
+        }
+        // Always ensure private LAN subnets and local domains are bypassed directly
+        if !rules.iter().any(|r| r.contains("LAN") || r.contains("geoip:private") || r.contains("192.168.")) {
+            rules.insert(0, "- LAN".to_string());
+            rules.insert(1, "- Localhost".to_string());
         }
         rules
     }

@@ -167,9 +167,9 @@ fn build_tray_menu(
     // Pause items
     let (pause_status_item, pause_status_time_item, resume_item) = if pause_info.interception || pause_info.spn {
         let status_text = match (pause_info.interception, pause_info.spn) {
-            (true, true) => "Portmaster and SPN are paused",
+            (true, true) => "Portmaster and Xray VPN are paused",
             (true, false) => "Portmaster is paused", 
-            (false, true) => "SPN is paused",
+            (false, true) => "Xray VPN is paused",
             _ => unreachable!(), // We already checked at least one is true
         };
         let status_item = MenuItemBuilder::with_id(PAUSE_INFO_KEY, status_text).enabled(false).build(app).ok();
@@ -192,13 +192,13 @@ fn build_tray_menu(
         (None, None, None)
     };
 
-    // SPN button    
+    // Xray VPN button    
     let (spn_enabled, spn_button_text ) = match spn_status_text {
-        "disabled" => { (false, "Enable SPN") }
-        _ => { (true, "Disable SPN") },
+        "disabled" => { (false, "Connect Xray VPN") }
+        _ => { (true, "Disconnect Xray VPN") },
     };
     
-    let spn_status = MenuItemBuilder::with_id(SPN_STATUS_KEY, format!("SPN: {}", spn_status_text))
+    let spn_status = MenuItemBuilder::with_id(SPN_STATUS_KEY, format!("VPN (Xray): {}", spn_status_text))
         .enabled(false)
         .build(app)
         .unwrap();
@@ -223,9 +223,9 @@ fn build_tray_menu(
 
     // Setup Pause/Resume menu items
     let disabled_spn_pause = (!spn_enabled && !pause_info.spn) || pause_info.interception;
-    let pause_spn_5min_item = MenuItemBuilder::with_id(PAUSE_SPN_5_KEY, "Pause SPN for 5 minutes").enabled(!disabled_spn_pause).build(app)?;
-    let pause_spn_15min_item = MenuItemBuilder::with_id(PAUSE_SPN_15_KEY, "Pause SPN for 15 minutes").enabled(!disabled_spn_pause).build(app)?;
-    let pause_spn_1hour_item = MenuItemBuilder::with_id(PAUSE_SPN_60_KEY, "Pause SPN for 1 hour").enabled(!disabled_spn_pause).build(app)?;
+    let pause_spn_5min_item = MenuItemBuilder::with_id(PAUSE_SPN_5_KEY, "Pause Xray VPN for 5 minutes").enabled(!disabled_spn_pause).build(app)?;
+    let pause_spn_15min_item = MenuItemBuilder::with_id(PAUSE_SPN_15_KEY, "Pause Xray VPN for 15 minutes").enabled(!disabled_spn_pause).build(app)?;
+    let pause_spn_1hour_item = MenuItemBuilder::with_id(PAUSE_SPN_60_KEY, "Pause Xray VPN for 1 hour").enabled(!disabled_spn_pause).build(app)?;
 
     let pause_pm_5min_item = MenuItemBuilder::with_id(PAUSE_PM_5_KEY, "Pause for 5 minutes").build(app)?;
     let pause_pm_15min_item = MenuItemBuilder::with_id(PAUSE_PM_15_KEY, "Pause for 15 minutes").build(app)?;

@@ -120,6 +120,8 @@ pub struct AppProfile {
     pub fingerprints: Vec<ProfileFingerprint>,
     #[serde(rename = "Config", default)]
     pub config: Option<Value>,
+    #[serde(rename = "Stats", default)]
+    pub stats: Option<AppStats>,
     #[serde(rename = "Internal", default)]
     pub internal: bool,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
@@ -140,6 +142,11 @@ impl AppProfile {
     /// Primary database key: `core:profiles/<source>/<id>`.
     pub fn database_key(&self) -> String {
         format!("core:profiles/{}/{}", self.source, self.id)
+    }
+
+    /// Returns the number of currently active connections.
+    pub fn count_alive_connections(&self) -> u64 {
+        self.stats.map(|s| s.connections_count).unwrap_or(0)
     }
 
     /// Best human-readable display name.

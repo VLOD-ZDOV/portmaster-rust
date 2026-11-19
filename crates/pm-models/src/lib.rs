@@ -3,11 +3,13 @@
 //! This crate has zero native system dependencies and is fully compatible with
 //! both native targets and `wasm32-unknown-unknown`.
 
+pub mod connection;
 pub mod profile;
 pub mod protocol;
 pub mod settings;
 pub mod xray;
 
+pub use connection::ConnectionRecord;
 pub use profile::{
     AppProfile, AppStats, FingerprintOperation, FingerprintType, ProfileFingerprint, ProfileIcon,
 };
