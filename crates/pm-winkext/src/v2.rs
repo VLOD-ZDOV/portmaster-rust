@@ -261,7 +261,9 @@ mod windows_impl {
         let mut frame = Vec::with_capacity(5 + size);
         frame.extend_from_slice(&header);
         let mut payload = vec![0_u8; size];
-        file.read_exact(&mut payload)?;
+        if !file.read_exact(&mut payload)? {
+            return Err(Error::UnexpectedRead("truncated info frame payload".into()));
+        }
         frame.extend_from_slice(&payload);
         let (info, _consumed) = parse_info(&frame)?;
         Ok(Some(info))

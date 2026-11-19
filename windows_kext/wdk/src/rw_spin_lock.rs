@@ -14,6 +14,9 @@ pub struct RwSpinLock {
     data: UnsafeCell<i32>,
 }
 
+unsafe impl Send for RwSpinLock {}
+unsafe impl Sync for RwSpinLock {}
+
 impl RwSpinLock {
     /// Creates a new `RwSpinLock` with the default initial value.
     pub const fn default() -> Self {

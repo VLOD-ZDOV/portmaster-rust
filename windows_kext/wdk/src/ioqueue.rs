@@ -187,15 +187,17 @@ impl<T> IOQueue<T> {
                 // Remove and free all elements from the queue.
                 let list_entries: *mut LIST_ENTRY = KeRundownQueue(kqueue);
                 if !list_entries.is_null() {
-                    let mut entry = list_entries;
-                    while !core::ptr::eq((*entry).Flink, list_entries) {
-                        let next = (*entry).Flink;
+                    let queue_head = &mut (*kqueue).EntryListHead as *mut LIST_ENTRY;
+                    let mut curr = list_entries;
+                    while !curr.is_null() && curr != queue_head {
+                        let next = (*curr).Flink;
                         dbg!("discarding entry");
-                        let _ = Box::from_raw(entry as *mut Entry<T>);
-                        entry = next;
+                        let _ = Box::from_raw(curr as *mut Entry<T>);
+                        if next == list_entries {
+                            break;
+                        }
+                        curr = next;
                     }
-                    dbg!("discarding last entry");
-                    let _ = Box::from_raw(entry as *mut Entry<T>);
                 }
             }
         }

@@ -152,6 +152,13 @@ impl Kext {
     pub fn start(&mut self) -> Result<Version> {
         #[cfg(windows)]
         {
+            if self.file.is_some() {
+                if let Some(version) = self.version {
+                    return Ok(version);
+                }
+                self.stop()?;
+            }
+
             let path = self.driver_path.to_string_lossy().into_owned();
             let mut svc = service::KextService::create(DRIVER_NAME, &path)?;
 

@@ -1,6 +1,7 @@
 use alloc::boxed::Box;
 use core::{
     cell::UnsafeCell,
+    mem::MaybeUninit,
     ops::{Deref, DerefMut},
 };
 use windows_sys::{
@@ -42,6 +43,9 @@ pub struct FastMutex<T> {
     val: UnsafeCell<T>,
 }
 
+unsafe impl<T: Send> Send for FastMutex<T> {}
+unsafe impl<T: Send> Sync for FastMutex<T> {}
+
 impl<T> FastMutex<T> {
     pub const fn default(val: T) -> Self {
         Self {
@@ -51,22 +55,24 @@ impl<T> FastMutex<T> {
     }
 
     pub fn init(&self) {
-        let mutex = Box::into_raw(Box::new(unsafe {
-            MaybeUninit::zeroed().assume_init();
-        }));
         unsafe {
-            ExInitializeFastMutex(mutex);
-            *self.kmutex.get() = Some(mutex);
+            let opt = &mut *self.kmutex.get();
+            if opt.is_none() {
+                let mutex: Box<FAST_MUTEX> =
+                    Box::new(MaybeUninit::<FAST_MUTEX>::zeroed().assume_init());
+                let mutex_ptr = Box::into_raw(mutex);
+                ExInitializeFastMutex(mutex_ptr);
+                *opt = Some(mutex_ptr);
+            }
         }
     }
 
     pub fn deinit(&self) {
         unsafe {
             let opt = &mut (*self.kmutex.get());
-            if let Some(mutex) = opt {
-                _ = Box::from_raw(mutex);
+            if let Some(mutex) = opt.take() {
+                drop(Box::from_raw(mutex));
             }
-            opt.take();
         }
     }
 
@@ -84,8 +90,9 @@ impl<T> FastMutex<T> {
     pub fn try_lock(&self) -> Option<LockGuard<T>> {
         unsafe {
             if let Some(mutex) = *self.kmutex.get() {
-                ExTryToAcquireFastMutex(mutex);
-                return Some(LockGuard::new(self));
+                if ExTryToAcquireFastMutex(mutex) {
+                    return Some(LockGuard::new(self));
+                }
             }
         }
         return None;

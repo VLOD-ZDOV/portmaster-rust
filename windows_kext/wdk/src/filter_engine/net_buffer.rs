@@ -232,6 +232,9 @@ pub fn read_packet_partial(nbl: *mut NET_BUFFER_LIST, buffer: &mut [u8]) -> Resu
 
             let ptr = NdisGetDataBuffer(nb, buffer.len() as u32, buffer.as_mut_ptr(), 1, 0);
             if !ptr.is_null() {
+                if ptr != buffer.as_mut_ptr() {
+                    buffer.copy_from_slice(core::slice::from_raw_parts(ptr, buffer.len()));
+                }
                 return Ok(());
             }
         }

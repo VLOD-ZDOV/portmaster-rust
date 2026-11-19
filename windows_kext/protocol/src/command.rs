@@ -4,7 +4,7 @@ use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
 
 #[repr(u8)]
-#[derive(Clone, Copy, FromPrimitive)]
+#[derive(Clone, Copy, FromPrimitive, Debug, PartialEq, Eq)]
 #[rustfmt::skip]
 pub enum CommandType {
     Shutdown              = 0,
@@ -54,25 +54,31 @@ pub struct UpdateV6 {
 }
 
 pub fn parse_type(bytes: &[u8]) -> Option<CommandType> {
+    if bytes.is_empty() {
+        return None;
+    }
     FromPrimitive::from_u8(bytes[0])
 }
 
-pub fn parse_verdict(bytes: &[u8]) -> &Verdict {
+pub fn parse_verdict(bytes: &[u8]) -> Option<&Verdict> {
     as_type(bytes)
 }
 
-pub fn parse_update_v4(bytes: &[u8]) -> &UpdateV4 {
+pub fn parse_update_v4(bytes: &[u8]) -> Option<&UpdateV4> {
     as_type(bytes)
 }
 
-pub fn parse_update_v6(bytes: &[u8]) -> &UpdateV6 {
+pub fn parse_update_v6(bytes: &[u8]) -> Option<&UpdateV6> {
     as_type(bytes)
 }
 
-fn as_type<T>(bytes: &[u8]) -> &T {
-    let ptr: *const u8 = &bytes[0];
+fn as_type<T>(bytes: &[u8]) -> Option<&T> {
+    if bytes.len() < core::mem::size_of::<T>() {
+        return None;
+    }
+    let ptr: *const u8 = bytes.as_ptr();
     let t_ptr: *const T = ptr as _;
-    unsafe { t_ptr.as_ref().unwrap() }
+    unsafe { t_ptr.as_ref() }
 }
 
 #[cfg(test)]
@@ -103,7 +109,7 @@ fn test_go_command_file() {
                         panic!("unexpected bytes count")
                     }
 
-                    assert_eq!(parse_verdict(&buf), &Verdict { id: 1, verdict: 2 })
+                    assert_eq!(parse_verdict(&buf), Some(&Verdict { id: 1, verdict: 2 }))
                 }
                 CommandType::UpdateV4 => {
                     let mut buf = [0; size_of::<UpdateV4>()];
@@ -114,14 +120,14 @@ fn test_go_command_file() {
 
                     assert_eq!(
                         parse_update_v4(&buf),
-                        &UpdateV4 {
+                        Some(&UpdateV4 {
                             protocol: 1,
                             local_address: [1, 2, 3, 4],
                             local_port: 2,
                             remote_address: [2, 3, 4, 5],
                             remote_port: 3,
                             verdict: 4
-                        }
+                        })
                     )
                 }
                 CommandType::UpdateV6 => {
@@ -133,7 +139,7 @@ fn test_go_command_file() {
 
                     assert_eq!(
                         parse_update_v6(&buf),
-                        &UpdateV6 {
+                        Some(&UpdateV6 {
                             protocol: 1,
                             local_address: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
                             local_port: 2,
@@ -142,7 +148,7 @@ fn test_go_command_file() {
                             ],
                             remote_port: 3,
                             verdict: 4
-                        }
+                        })
                     )
                 }
                 CommandType::ClearCache => {}
@@ -155,4 +161,18 @@ fn test_go_command_file() {
             panic!("Unknown command: {}", command[0]);
         }
     }
+}
+
+#[test]
+fn test_buffer_bounds_check() {
+    let empty: [u8; 0] = [];
+    assert_eq!(parse_type(&empty), None);
+    assert_eq!(parse_verdict(&empty), None);
+    assert_eq!(parse_update_v4(&empty), None);
+    assert_eq!(parse_update_v6(&empty), None);
+
+    let undersized = [1u8; 3];
+    assert_eq!(parse_verdict(&undersized), None);
+    assert_eq!(parse_update_v4(&undersized), None);
+    assert_eq!(parse_update_v6(&undersized), None);
 }

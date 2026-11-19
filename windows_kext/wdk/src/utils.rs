@@ -44,10 +44,14 @@ pub const PANIC_BUG_CHECK_CODE: u32 = u32::from_be_bytes(*b"PMrs");
 /// 2 = its length, 3 = the line number, 4 = pointer to the NUL-terminated
 /// panic message (print with `da <P4>`), 0 when there is none.
 pub fn bug_check(file: &str, line: u32, message: &str) -> ! {
+    let mut msg_buf = [0u8; 256];
     let message_ptr = if message.is_empty() {
         0
     } else {
-        message.as_ptr() as usize
+        let copy_len = message.len().min(msg_buf.len() - 1);
+        msg_buf[..copy_len].copy_from_slice(&message.as_bytes()[..copy_len]);
+        msg_buf[copy_len] = 0;
+        msg_buf.as_ptr() as usize
     };
     unsafe {
         KeBugCheckEx(

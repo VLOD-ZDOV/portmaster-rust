@@ -39,10 +39,10 @@ struct SocketAddressIPv4 {
 struct SocketAddressIPv6 {
     family: u16,
     port: u16,
-    flowinfo: u16,
+    flowinfo: u32,
     addr: [u8; 16],
     scope_id: u32,
-    padding: [u8; 128 - 2 - 2 - 2 - 16 - 4],
+    padding: [u8; 128 - 2 - 2 - 4 - 16 - 4],
 }
 
 impl FwpsConnectRequest0 {
@@ -50,27 +50,29 @@ impl FwpsConnectRequest0 {
         info!("local: {:?}", self.local_address_and_port);
         info!("remote: {:?}", self.remote_address_and_port);
         unsafe {
-            let generic_socket: &mut SocketAddressGeneric =
-                core::mem::transmute(&mut self.remote_address_and_port);
-            match generic_socket.family {
+            let generic_socket =
+                self.remote_address_and_port.as_mut_ptr() as *mut SocketAddressGeneric;
+            match (*generic_socket).family {
                 AF_INET => {
                     info!("Socket type AF_INET");
-                    let socket_ipv4: &mut SocketAddressIPv4 = core::mem::transmute(generic_socket);
-                    for i in 0..4 {
-                        socket_ipv4.addr[i] = ip[i];
+                    if ip.len() >= 4 {
+                        let socket_ipv4 =
+                            self.remote_address_and_port.as_mut_ptr() as *mut SocketAddressIPv4;
+                        (*socket_ipv4).addr[..4].copy_from_slice(&ip[..4]);
+                        (*socket_ipv4).port = u16::to_be(port);
                     }
-                    socket_ipv4.port = u16::to_be(port);
                 }
                 AF_INET6 => {
                     info!("Socket type AF_INET6");
-                    let socket_ipv6: &mut SocketAddressIPv6 = core::mem::transmute(generic_socket);
-                    for i in 0..16 {
-                        socket_ipv6.addr[i] = ip[i];
+                    if ip.len() >= 16 {
+                        let socket_ipv6 =
+                            self.remote_address_and_port.as_mut_ptr() as *mut SocketAddressIPv6;
+                        (*socket_ipv6).addr[..16].copy_from_slice(&ip[..16]);
+                        (*socket_ipv6).port = u16::to_be(port);
                     }
-                    socket_ipv6.port = u16::to_be(port);
                 }
                 _ => {
-                    info!("Unsupported socket type: {}", generic_socket.family);
+                    info!("Unsupported socket type: {}", (*generic_socket).family);
                 }
             }
         }

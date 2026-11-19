@@ -53,6 +53,10 @@ members = [
 exclude = [
     "desktop/tauri/src-tauri",
     "desktop/rust-ui",
+    "windows_kext/driver",
+    "windows_kext/wdk",
+    "windows_kext/protocol",
+    "windows_kext/release",
 ]
 
 [workspace.package]

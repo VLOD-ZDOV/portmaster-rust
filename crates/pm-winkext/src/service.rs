@@ -185,11 +185,18 @@ mod windows_impl {
                 if status.current_state == needed {
                     return Ok(());
                 }
+                if needed == sys::SERVICE_RUNNING && status.current_state == sys::SERVICE_STOPPED {
+                    return Err(Error::Command(format!(
+                        "service stopped unexpectedly with exit code {}",
+                        status.win32_exit_code
+                    )));
+                }
                 if start.elapsed() > limit {
                     return Err(Error::Command("service status time limit reached".into()));
                 }
                 // Microsoft recommends waiting 1/10 of the reported hint.
-                std::thread::sleep(Duration::from_millis(u64::from(status.wait_hint) / 10));
+                let wait_ms = (u64::from(status.wait_hint) / 10).clamp(10, 1000);
+                std::thread::sleep(Duration::from_millis(wait_ms));
             }
         }
 

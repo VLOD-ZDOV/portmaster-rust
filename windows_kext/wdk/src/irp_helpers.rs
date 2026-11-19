@@ -114,15 +114,18 @@ impl ReadRequest<'_> {
     pub fn complete(&mut self) {
         self.irp.IoStatus.Information = self.fill_index;
         self.irp.IoStatus.Anonymous.Status = STATUS_SUCCESS;
+        unsafe { IofCompleteRequest(self.irp, IO_NO_INCREMENT as i8) };
     }
 
     pub fn end_of_file(&mut self) {
         self.irp.IoStatus.Information = self.fill_index;
         self.irp.IoStatus.Anonymous.Status = STATUS_END_OF_FILE;
+        unsafe { IofCompleteRequest(self.irp, IO_NO_INCREMENT as i8) };
     }
 
     pub fn timeout(&mut self) {
         self.irp.IoStatus.Anonymous.Status = STATUS_TIMEOUT;
+        unsafe { IofCompleteRequest(self.irp, IO_NO_INCREMENT as i8) };
     }
 
     pub fn get_status(&self) -> NTSTATUS {
@@ -176,6 +179,7 @@ impl WriteRequest<'_> {
 
     pub fn complete(&mut self) {
         self.irp.IoStatus.Anonymous.Status = STATUS_SUCCESS;
+        unsafe { IofCompleteRequest(self.irp, IO_NO_INCREMENT as i8) };
     }
 
     pub fn get_status(&self) -> NTSTATUS {
@@ -247,7 +251,7 @@ impl DeviceControlRequest<'_> {
     }
 
     pub fn complete(&mut self) {
-        self.irp.IoStatus.Information = self.buffer.len();
+        self.irp.IoStatus.Information = self.fill_index;
         self.irp.IoStatus.Anonymous.Status = STATUS_SUCCESS;
         unsafe { IofCompleteRequest(self.irp, IO_NO_INCREMENT as i8) };
     }

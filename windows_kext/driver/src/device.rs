@@ -144,6 +144,9 @@ impl Device {
     pub fn write(&mut self, write_request: &mut WriteRequest) {
         // Try parsing the command.
         let mut buffer = write_request.get_buffer();
+        if buffer.is_empty() {
+            return;
+        }
         let command = protocol::command::parse_type(buffer);
         let Some(command) = command else {
             err!("Unknown command number: {}", buffer[0]);
@@ -159,7 +162,10 @@ impl Device {
                 self.shutdown();
             }
             CommandType::Verdict => {
-                let verdict = protocol::command::parse_verdict(buffer);
+                let Some(verdict) = protocol::command::parse_verdict(buffer) else {
+                    err!("Verdict payload too short: {} bytes", buffer.len());
+                    return;
+                };
                 wdk::dbg!("Verdict command");
                 // Received verdict decision for a specific connection.
                 if let Some((key, mut packet)) = self.packet_cache.pop_id(verdict.id) {
@@ -211,7 +217,10 @@ impl Device {
                 }
             }
             CommandType::UpdateV4 => {
-                let update = protocol::command::parse_update_v4(buffer);
+                let Some(update) = protocol::command::parse_update_v4(buffer) else {
+                    err!("UpdateV4 payload too short: {} bytes", buffer.len());
+                    return;
+                };
                 // Build the new action.
                 if let Some(verdict) = FromPrimitive::from_u8(update.verdict) {
                     // Update with new action.
@@ -235,7 +244,10 @@ impl Device {
                 }
             }
             CommandType::UpdateV6 => {
-                let update = protocol::command::parse_update_v6(buffer);
+                let Some(update) = protocol::command::parse_update_v6(buffer) else {
+                    err!("UpdateV6 payload too short: {} bytes", buffer.len());
+                    return;
+                };
                 // Build the new action.
                 if let Some(verdict) = FromPrimitive::from_u8(update.verdict) {
                     // Update with new action.
