@@ -54,59 +54,82 @@ impl Clone for OutdatedFlag {
 ///
 /// Field names and order match the Go struct.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Profile {
-    #[serde(rename = "ID")]
+    #[serde(rename = "ID", alias = "id")]
     pub id: String,
-    #[serde(rename = "Source")]
+    #[serde(rename = "Source", alias = "source")]
     pub source: crate::ProfileSource,
-    #[serde(rename = "Name")]
+    #[serde(rename = "Name", alias = "name")]
     pub name: String,
-    #[serde(rename = "Description")]
+    #[serde(rename = "Description", alias = "description")]
     pub description: String,
-    #[serde(rename = "Warning")]
+    #[serde(rename = "Warning", alias = "warning")]
     pub warning: String,
     #[serde(
         rename = "WarningLastUpdated",
+        alias = "warningLastUpdated",
         serialize_with = "serialize_time",
         deserialize_with = "deserialize_time",
         default
     )]
     pub warning_last_updated: i64,
-    #[serde(rename = "Homepage")]
+    #[serde(rename = "Homepage", alias = "homepage")]
     pub homepage: String,
-    #[serde(rename = "Icon")]
+    #[serde(rename = "Icon", alias = "icon")]
     pub icon: String,
-    #[serde(rename = "IconType")]
+    #[serde(rename = "IconType", alias = "iconType")]
     pub icon_type: crate::IconType,
     #[serde(
         rename = "Icons",
+        alias = "icons",
         deserialize_with = "deserialize_null_default",
         default
     )]
     pub icons: Vec<Icon>,
-    #[serde(rename = "LinkedPath")]
+    #[serde(rename = "LinkedPath", alias = "linkedPath")]
     pub linked_path: String,
-    #[serde(rename = "PresentationPath")]
+    #[serde(
+        rename = "PresentationPath",
+        alias = "presentationPath",
+        alias = "presPath"
+    )]
     pub presentation_path: String,
-    #[serde(rename = "UsePresentationPath")]
+    #[serde(
+        rename = "UsePresentationPath",
+        alias = "usePresentationPath",
+        alias = "usePresPath"
+    )]
     pub use_presentation_path: bool,
     #[serde(
         rename = "Fingerprints",
+        alias = "fingerprints",
         deserialize_with = "deserialize_null_default",
         default
     )]
     pub fingerprints: Vec<Fingerprint>,
     #[serde(
         rename = "Config",
+        alias = "config",
         deserialize_with = "deserialize_null_default",
         default
     )]
     pub config: Map<String, Value>,
-    #[serde(rename = "LastEdited")]
+    #[serde(
+        rename = "LastEdited",
+        alias = "lastEdited",
+        deserialize_with = "deserialize_time",
+        default
+    )]
     pub last_edited: i64,
-    #[serde(rename = "Created")]
+    #[serde(
+        rename = "Created",
+        alias = "created",
+        deserialize_with = "deserialize_time",
+        default
+    )]
     pub created: i64,
-    #[serde(rename = "Internal")]
+    #[serde(rename = "Internal", alias = "internal")]
     pub internal: bool,
     /// Whether the profile was saved by the core itself; not serialized.
     #[serde(skip)]
@@ -122,8 +145,35 @@ fn serialize_time<S: serde::Serializer>(seconds: &i64, serializer: S) -> Result<
 }
 
 fn deserialize_time<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
-    let text = String::deserialize(deserializer)?;
-    Ok(parse_rfc3339(&text).unwrap_or(0))
+    struct TimeVisitor;
+    impl<'de> serde::de::Visitor<'de> for TimeVisitor {
+        type Value = i64;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a timestamp integer or RFC3339 string")
+        }
+
+        fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E> {
+            Ok(v)
+        }
+
+        fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E> {
+            Ok(v as i64)
+        }
+
+        fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+            Ok(parse_rfc3339(v).unwrap_or(0))
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E> {
+            Ok(0)
+        }
+
+        fn visit_unit<E>(self) -> Result<Self::Value, E> {
+            Ok(0)
+        }
+    }
+    deserializer.deserialize_any(TimeVisitor)
 }
 
 /// Go encodes nil slices and maps as `null`; accept them as empty values.
@@ -335,5 +385,14 @@ mod tests {
         assert!(profile.config.is_empty());
         assert!(profile.icons.is_empty());
         assert!(profile.fingerprints.is_empty());
+
+        // Supports lowercase keys, missing fields (default), and RFC3339 timestamps.
+        let lowercase_json = br#"{"id":"test-app","source":"local","name":"Test App","created":"2023-11-14T22:13:20Z","config":{"filter":{"defaultAction":"block"}}}"#;
+        let profile: Profile = serde_json::from_slice(lowercase_json).expect("decode lowercase profile");
+        assert_eq!(profile.id, "test-app");
+        assert_eq!(profile.name, "Test App");
+        assert_eq!(profile.created, 1700000000);
+        assert_eq!(profile.last_edited, 0);
+        assert!(!profile.internal);
     }
 }

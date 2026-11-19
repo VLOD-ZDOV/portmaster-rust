@@ -9,7 +9,7 @@ pub mod settings;
 pub mod xray;
 
 pub use profile::{
-    AppProfile, FingerprintOperation, FingerprintType, ProfileFingerprint, ProfileIcon,
+    AppProfile, AppStats, FingerprintOperation, FingerprintType, ProfileFingerprint, ProfileIcon,
 };
 pub use protocol::{
     reply_types, request_types, PortApiFrame, PortApiRequest, ProtocolError, RecordMeta,
@@ -17,7 +17,7 @@ pub use protocol::{
 };
 pub use settings::{
     ExpertiseLevel, OptionType, PossibleValue, QuickSetting, ReleaseLevel, Setting,
-    SettingAnnotations,
+    SettingAnnotations, SubsystemDef, SUBSYSTEMS,
 };
 pub use xray::{
     ConnectRequest, ProcessState, TrafficStatus, XrayNode, XrayStatus, XraySubscription,

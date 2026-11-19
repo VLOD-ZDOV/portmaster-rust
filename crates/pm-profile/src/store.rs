@@ -51,7 +51,16 @@ impl ProfileStore {
     pub fn all(&self, source: &str) -> Result<Vec<Profile>> {
         let query = Query::new(&format!("{PROFILES_DB_PATH}{source}/"));
         let records = self.db.query(&query)?;
-        records.iter().map(Self::decode).collect()
+        let mut profiles = Vec::with_capacity(records.len());
+        for record in &records {
+            match Self::decode(record) {
+                Ok(profile) => profiles.push(profile),
+                Err(error) => {
+                    tracing::warn!(key = %record.key, %error, "skipping invalid profile record");
+                }
+            }
+        }
+        Ok(profiles)
     }
 
     /// Saves a profile.
@@ -81,7 +90,16 @@ impl ProfileStore {
     }
 
     fn decode(record: &Record) -> Result<Profile> {
-        Ok(serde_json::from_slice(&record.data)?)
+        let mut profile: Profile = serde_json::from_slice(&record.data)?;
+        if profile.id.is_empty() {
+            let key_str = &record.key.key;
+            if let Some(id) = key_str.strip_prefix(&format!("profiles/{}/", profile.source)) {
+                profile.id = id.to_string();
+            } else if let Some(last_slash) = key_str.rfind('/') {
+                profile.id = key_str[last_slash + 1..].to_string();
+            }
+        }
+        Ok(profile)
     }
 }
 

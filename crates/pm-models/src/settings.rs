@@ -137,8 +137,79 @@ impl Setting {
         }
     }
 
+    /// Resets the setting to its default value by clearing the custom value.
+    pub fn reset_to_default(&mut self) {
+        self.value = None;
+    }
+
+    /// Returns the subsystem key prefix (e.g. "filter", "dns", "core", "xray", "splittun").
+    pub fn subsystem(&self) -> &str {
+        if let Some(pos) = self.key.find('/') {
+            &self.key[..pos]
+        } else {
+            "core"
+        }
+    }
+
+    /// Returns the category from annotations or defaults to "General".
+    pub fn category(&self) -> &str {
+        self.annotations
+            .category
+            .as_deref()
+            .unwrap_or("General")
+    }
+
     /// Primary database key: `config:options/<key>`.
     pub fn database_key(&self) -> String {
         format!("config:options/{}", self.key)
     }
 }
+
+/// Definition of a configuration subsystem.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubsystemDef {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub description: &'static str,
+    pub config_prefix: &'static str,
+}
+
+/// The standard subsystems of Portmaster.
+pub const SUBSYSTEMS: &[SubsystemDef] = &[
+    SubsystemDef {
+        id: "filter",
+        name: "Privacy Filter",
+        description: "DNS & Network rules, filter lists, and blocking policies",
+        config_prefix: "filter/",
+    },
+    SubsystemDef {
+        id: "dns",
+        name: "Secure DNS",
+        description: "DNS-over-TLS, servers, and fallback resolvers",
+        config_prefix: "dns/",
+    },
+    SubsystemDef {
+        id: "xray",
+        name: "VPN / Xray Gateway",
+        description: "VLESS, Trojan, VMess proxy routing and split-tunneling",
+        config_prefix: "xray/",
+    },
+    SubsystemDef {
+        id: "splittun",
+        name: "Split Tunnel",
+        description: "Direct routing bypass and per-interface routing",
+        config_prefix: "splittun/",
+    },
+    SubsystemDef {
+        id: "history",
+        name: "Network History",
+        description: "Connection logging, retention, and Netquery database",
+        config_prefix: "history/",
+    },
+    SubsystemDef {
+        id: "core",
+        name: "Core & System",
+        description: "Base system integration, updates, UI, and logging",
+        config_prefix: "core/",
+    },
+];

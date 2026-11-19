@@ -134,6 +134,7 @@ pub fn AppSwitcher() -> impl IntoView {
                                 {filtered.into_iter().map(|app| {
                                     let app_id_vpn = app.id.clone();
                                     let app_id_block = app.id.clone();
+                                    let app_id_nav = app.id.clone();
                                     let is_vpn = app.route_via_vpn();
                                     let action = app.default_action().to_string();
                                     let is_blocked = action == "block";
@@ -151,16 +152,21 @@ pub fn AppSwitcher() -> impl IntoView {
                                         state_clone2.set_app_action(app_id_block.clone(), next_action.clone());
                                     };
 
+                                    let state_nav = state.clone();
+                                    let on_open_detail = move |_| {
+                                        state_nav.select_app(Some(app_id_nav.clone()));
+                                    };
+
                                     view! {
                                         <div class="bg-[#1b1b1b] border border-[#2c2c2c] hover:border-[#3a3a3a] rounded-lg p-3 flex items-center justify-between gap-4 transition-all">
                                             // Left: Monogram icon & App Info
-                                            <div class="flex items-center space-x-3 min-w-0">
-                                                <div class="w-10 h-10 rounded bg-[#222222] border border-[#2c2c2c] flex items-center justify-center text-white font-semibold text-xs flex-shrink-0">
+                                            <div on:click=on_open_detail class="flex items-center space-x-3 min-w-0 cursor-pointer group">
+                                                <div class="w-10 h-10 rounded bg-[#222222] border border-[#2c2c2c] group-hover:border-cyan-500/50 flex items-center justify-center text-white font-semibold text-xs flex-shrink-0 transition-colors">
                                                     {initials}
                                                 </div>
                                                 <div class="min-w-0">
                                                     <div class="flex items-center space-x-2">
-                                                        <span class="text-sm font-medium text-white truncate">{app.name.clone()}</span>
+                                                        <span class="text-sm font-medium text-white group-hover:text-cyan-300 truncate transition-colors">{app.name.clone()}</span>
                                                         {if is_blocked {
                                                             view! {
                                                                 <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-[#e01d1d]/20 text-[#e01d1d] border border-[#e01d1d]/30">

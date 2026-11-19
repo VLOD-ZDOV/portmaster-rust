@@ -66,6 +66,29 @@ fn default_local_source() -> String {
     "local".to_string()
 }
 
+/// Network activity stats for an application.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct AppStats {
+    #[serde(default)]
+    pub connections_count: u64,
+    #[serde(default)]
+    pub blocked_count: u64,
+    #[serde(default)]
+    pub bytes_sent: u64,
+    #[serde(default)]
+    pub bytes_received: u64,
+}
+
+impl AppStats {
+    pub fn blocked_percent(&self) -> f64 {
+        if self.connections_count == 0 {
+            0.0
+        } else {
+            (self.blocked_count as f64 / self.connections_count as f64) * 100.0
+        }
+    }
+}
+
 /// An application profile defining network security & routing settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct AppProfile {
