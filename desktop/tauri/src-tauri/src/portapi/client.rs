@@ -114,8 +114,12 @@ pub async fn connect(uri: &str) -> Result<PortAPI, Error> {
                                 continue;
                             }
                             
-                            let text = unsafe {
-                                std::str::from_utf8_unchecked(msg.as_payload())
+                            let text = match std::str::from_utf8(msg.as_payload()) {
+                                Ok(t) => t,
+                                Err(err) => {
+                                    warn!("received non-utf8 websocket payload: {err}");
+                                    continue;
+                                }
                             };
 
                             match text.parse::<Message>() {

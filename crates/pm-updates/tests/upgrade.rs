@@ -287,3 +287,33 @@ fn post_upgrade_command_runs_for_a_matching_trigger() {
 
     assert!(Path::new(&marker).exists(), "triggered command ran");
 }
+
+#[test]
+fn unsigned_or_invalid_signature_update_is_rejected() {
+    let tree = TempTree::new("signature-check");
+    std::fs::create_dir_all(tree.path("bin")).expect("create bin");
+    prepare_download(&tree, &[("tool", b"new")]);
+
+    // Create an unsigned index in download_directory
+    let index_file = tree.path("download/index.json");
+    std::fs::write(&index_file, b"{\"name\":\"portmaster\",\"version\":\"2.0.0\"}").unwrap();
+
+    let mut config = config(&tree);
+    config.name = "portmaster".to_string(); // triggers binary_trust_store check
+    config.auto_download = true;
+    config.auto_apply = true;
+
+    let downloaded = index_with("2.0.0", vec![artifact("tool", b"new")]);
+    let upgrader = Upgrader::new(config);
+
+    let res = upgrader.upgrade(&downloaded, true);
+    assert!(res.is_err());
+    let err_msg = format!("{:?}", res.unwrap_err());
+    assert!(
+        err_msg.contains("signature verification failed") || err_msg.contains("Verify"),
+        "expected signature failure, got {err_msg}"
+    );
+
+    // Verify binary was NOT moved into bin
+    assert!(!tree.path("bin/tool").exists());
+}

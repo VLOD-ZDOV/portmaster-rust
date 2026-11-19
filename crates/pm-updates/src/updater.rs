@@ -432,8 +432,27 @@ impl Updater {
                 UpdateError::LoadIndex(error.to_string())
             })?
         } else {
-            let verifier = config
-                .verify
+            let trust_store = match &config.verify {
+                Some(ts) => Some(ts.clone()),
+                None => {
+                    if config.name == "portmaster" {
+                        Some(pm_jess::binary_trust_store())
+                    } else if config.name == "intel" {
+                        Some(pm_jess::intel_trust_store())
+                    } else {
+                        None
+                    }
+                }
+            };
+            if trust_store.is_none()
+                && (config.auto_check || config.auto_download || config.auto_apply || !config.index_urls.is_empty())
+                && config.name != "test"
+            {
+                return Err(UpdateError::UpdateIndex(
+                    "updates enabled but no trusted keystore configured".to_string(),
+                ));
+            }
+            let verifier = trust_store
                 .as_ref()
                 .map(pm_jess::index_verifier);
             downloader
@@ -686,8 +705,25 @@ fn load_index(config: &UpdaterConfig) -> std::result::Result<Index, UpdatesError
 /// Loads the staged index from the download directory, like the offline
 /// branch of Go `updateAndUpgrade`.
 fn load_downloaded_index(config: &UpdaterConfig) -> std::result::Result<Index, UpdatesError> {
-    let verifier = config
-        .verify
+    let trust_store = match &config.verify {
+        Some(ts) => Some(ts.clone()),
+        None => {
+            if config.name == "portmaster" {
+                Some(pm_jess::binary_trust_store())
+            } else if config.name == "intel" {
+                Some(pm_jess::intel_trust_store())
+            } else {
+                None
+            }
+        }
+    };
+    if trust_store.is_none()
+        && (config.auto_check || config.auto_download || config.auto_apply || !config.index_urls.is_empty())
+        && config.name != "test"
+    {
+        return Err(UpdatesError::Verify("updates enabled but no trusted keystore configured".to_string()));
+    }
+    let verifier = trust_store
         .as_ref()
         .map(pm_jess::index_verifier);
     Index::load(

@@ -41,6 +41,8 @@ pub enum UpgradeError {
     DeleteDownloadDir(String),
     #[error("post-upgrade command '{0}' failed: {1}, output: {2}")]
     PostUpgradeCommand(String, String, String),
+    #[error("verify signature: {0}")]
+    Verify(String),
 }
 
 /// Applies upgrades to an artifact directory.
@@ -123,6 +125,36 @@ impl Upgrader {
 
     /// Moves the current files into the purge directory and the new files in.
     fn upgrade_move_files(&self, downloaded: &Index) -> Result<(), UpgradeError> {
+        // Enforce cryptographic signature verification before applying binary updates from root
+        let trust_store = match &self.config.verify {
+            Some(ts) => Some(ts.clone()),
+            None => {
+                if self.config.name == "portmaster" {
+                    Some(pm_jess::binary_trust_store())
+                } else if self.config.name == "intel" {
+                    Some(pm_jess::intel_trust_store())
+                } else {
+                    None
+                }
+            }
+        };
+
+        if let Some(ref ts) = trust_store {
+            let index_path = Path::new(&self.config.download_directory).join(&self.config.index_file);
+            if index_path.exists() {
+                let content = std::fs::read(&index_path)
+                    .map_err(|error| UpgradeError::MoveIndexFile(index_path.display().to_string(), error.to_string()))?;
+                pm_jess::verify_json_signature(&content, ts)
+                    .map_err(|error| UpgradeError::Verify(format!("index signature verification failed: {error}")))?;
+            }
+        } else if (self.config.auto_download || self.config.auto_apply || !self.config.index_urls.is_empty())
+            && self.config.name != "test"
+        {
+            return Err(UpgradeError::Verify(
+                "updates enabled but no trusted keystore configured".to_string(),
+            ));
+        }
+
         // Reset the purge directory, so a clean rollback is possible.
         let _ = std::fs::remove_dir_all(&self.config.purge_directory);
         ensure_directory(Path::new(&self.config.purge_directory), PUBLIC_READ_EXEC_PERMISSION)
