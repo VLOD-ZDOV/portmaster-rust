@@ -429,7 +429,7 @@ pub fn get_table(ip_version: u8, protocol: u8) -> Result<TableData> {
     let mut buf = vec![0u8; provided];
 
     for attempt in 1..=MAX_TRIES {
-        let mut size = provided as u32;
+        let mut size = buf.len() as u32;
         let code = unsafe {
             match protocol {
                 TCP => ffi::GetExtendedTcpTable(
@@ -461,7 +461,7 @@ pub fn get_table(ip_version: u8, protocol: u8) -> Result<TableData> {
             WIN_ERR_INSUFFICIENT_BUFFER => {
                 return Err(TableError::InsufficientBuffer {
                     tries: attempt,
-                    provided,
+                    provided: buf.len(),
                     required: size,
                     code,
                 });

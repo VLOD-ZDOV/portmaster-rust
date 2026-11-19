@@ -2,7 +2,7 @@ use crate::portapi::client::*;
 use crate::portapi::message::*;
 use crate::portapi::models::notification::*;
 use crate::portapi::types::*;
-use log::error;
+use log::{error, warn};
 use serde_json::json;
 use tauri::async_runtime;
 
@@ -147,7 +147,9 @@ pub async fn show_notification(cli: &PortAPI, key: String, n: Notification) {
             Ok(())
         });
     }
-    toast.show().expect("unable to send notification");
+    if let Err(e) = toast.show() {
+        warn!("failed to show toast notification: {e}");
+    }
     // TODO(vladimir): keep a reference of open notifications and close them
     // if the user reacted inside the UI:
 }
