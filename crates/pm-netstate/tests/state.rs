@@ -180,6 +180,59 @@ fn udp_direction_and_exists() {
 }
 
 #[test]
+fn udp_table_hard_limit_and_cleaning() {
+    use pm_netstate::state::MAX_UDP_CONN_STATES_PER_SOCKET;
+
+    let root = temp_dir("udp_limit");
+    let uid = current_uid();
+    write_table(
+        &root,
+        Stack::Udp4,
+        &[
+            &format!("   0: 00000000:14E9 00000000:0000 07 00000000:00000000 00:00000000 00000000  {uid} 0 3333 2 0000000000000000 0"),
+        ],
+    );
+    add_socket_owner(&root, 4444, 3333);
+
+    let state = NetState::new(ProcFs::new(&root));
+
+    // Send more remote endpoints than MAX_UDP_CONN_STATES_PER_SOCKET
+    let total = MAX_UDP_CONN_STATES_PER_SOCKET + 100;
+    for i in 0..total {
+        let p = packet(
+            &format!("10.0.{}.{}", (i / 256) % 256, i % 256),
+            "192.168.1.5",
+            IpProtocol::UDP,
+            true,
+            10000 + (i as u16 % 50000),
+            5353,
+        );
+        let res = state.lookup(&p, true).unwrap();
+        assert_eq!(res.pid, 4444);
+        assert!(res.inbound);
+    }
+
+    // Earliest packet (i = 0) should have been evicted due to hard limit
+    let first_p = packet("10.0.0.0", "192.168.1.5", IpProtocol::UDP, true, 10000, 5353);
+    assert!(!state.exists(&first_p, SystemTime::now()));
+
+    // The most recently inserted packet should still exist
+    let last_idx = total - 1;
+    let last_p = packet(
+        &format!("10.0.{}.{}", (last_idx / 256) % 256, last_idx % 256),
+        "192.168.1.5",
+        IpProtocol::UDP,
+        true,
+        10000 + (last_idx as u16 % 50000),
+        5353,
+    );
+    assert!(state.exists(&last_p, SystemTime::now()));
+
+    // Verify clean_udp_states runs cleanly without errors
+    state.clean_udp_states();
+}
+
+#[test]
 fn dual_stack_lookups() {
     let root = temp_dir("dual");
     let uid = current_uid();

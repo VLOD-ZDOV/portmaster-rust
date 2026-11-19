@@ -65,7 +65,7 @@ pub use env::{
 pub use network::{make_key, Network, DB_SCOPE_DNS, DB_SCOPE_IP};
 pub use store::ConnectionStore;
 pub use types::{
-    canonical_ip, create_connection_id, format_ip, protocol, version, ConnectionType, PacketInfo,
-    Verdict, INCOMING_HOST, INCOMING_INTERNET, INCOMING_INVALID, INCOMING_LAN, PEER_HOST,
-    PEER_INTERNET, PEER_INVALID, PEER_LAN,
+    canonical_ip, create_connection_id, format_ip, merge_verdicts, protocol, version,
+    ConnectionType, PacketInfo, Verdict, INCOMING_HOST, INCOMING_INTERNET, INCOMING_INVALID,
+    INCOMING_LAN, PEER_HOST, PEER_INTERNET, PEER_INVALID, PEER_LAN,
 };

@@ -82,6 +82,44 @@ impl Verdict {
             Verdict::Failed => "failed",
         }
     }
+
+    /// Returns the security priority of the verdict.
+    /// Higher values indicate higher precedence when merging decisions.
+    /// Deny decisions (Drop, Block, Failed) strictly take absolute precedence
+    /// over routing (RerouteToSplitTun, RerouteToTunnel, RerouteToNameserver)
+    /// and allowing (Accept).
+    #[inline]
+    pub fn priority(self) -> u8 {
+        match self {
+            Verdict::Drop => 100,
+            Verdict::Block => 90,
+            Verdict::Failed => 80,
+            Verdict::RerouteToSplitTun => 50,
+            Verdict::RerouteToTunnel => 40,
+            Verdict::RerouteToNameserver => 30,
+            Verdict::Accept => 20,
+            Verdict::Undeterminable => 10,
+            Verdict::Undecided => 0,
+        }
+    }
+
+    /// Merges two verdicts, picking the one with the higher security priority.
+    /// Block/Drop always take precedence over reroutes or accept.
+    #[inline]
+    pub fn merge(self, other: Verdict) -> Verdict {
+        if self.priority() >= other.priority() {
+            self
+        } else {
+            other
+        }
+    }
+}
+
+/// Merges two firewall verdicts with explicit priority: Drop and Block always
+/// have absolute precedence over rerouting or accepting traffic.
+#[inline]
+pub fn merge_verdicts(a: Verdict, b: Verdict) -> Verdict {
+    a.merge(b)
 }
 
 impl fmt::Display for Verdict {

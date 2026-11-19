@@ -85,11 +85,15 @@ impl ConnectionStore {
 
     /// Counts connections with `ended != 0`, exactly like Go `active()`
     /// (which despite its name counts the ended ones).
+    ///
+    /// To ensure strict lock ordering and eliminate AB-BA deadlocks, shard read locks
+    /// are never held while acquiring connection locks: the connections are snapshotted
+    /// and the shard lock is dropped before inspecting each connection.
     pub fn active(&self) -> usize {
         let mut count = 0;
         for shard in self.shards.iter() {
-            let guard = shard.read();
-            for conn in guard.values() {
+            let conns: Vec<SharedConnection> = shard.read().values().cloned().collect();
+            for conn in conns {
                 if conn.lock().expect("lock poisoned").ended != 0 {
                     count += 1;
                 }

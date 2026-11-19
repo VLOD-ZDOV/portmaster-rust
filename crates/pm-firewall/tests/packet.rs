@@ -679,6 +679,30 @@ fn verdict_is_never_weakened_by_a_later_packet() {
 }
 
 #[test]
+fn verdict_block_is_never_weakened_by_reroute_to_tunnel_or_splittun() {
+    let fx = fx(block_all());
+    let first = FakePacket::tcp("93.184.216.34", 80);
+    fx.handler.handle_packet(&first);
+    assert_eq!(first.last(), PktVerdict::PermanentBlock);
+
+    // Verify on connection level that merge_verdicts prioritizes Block/Drop over Reroute
+    let conn_id = first.info.connection_id();
+    let shared = fx.network.get_connection(&conn_id).unwrap();
+    let mut conn = shared.lock().unwrap();
+    assert_eq!(conn.verdict, pm_network::Verdict::Block);
+
+    // Merging connection's Block with RerouteToTunnel or RerouteToSplitTun stays Block
+    assert_eq!(pm_network::merge_verdicts(pm_network::Verdict::RerouteToTunnel, conn.verdict), pm_network::Verdict::Block);
+    assert_eq!(pm_network::merge_verdicts(pm_network::Verdict::RerouteToSplitTun, conn.verdict), pm_network::Verdict::Block);
+    assert_eq!(pm_network::merge_verdicts(conn.verdict, pm_network::Verdict::RerouteToSplitTun), pm_network::Verdict::Block);
+
+    // If connection was Drop, merging with Reroute stays Drop
+    conn.verdict = pm_network::Verdict::Drop;
+    assert_eq!(pm_network::merge_verdicts(pm_network::Verdict::RerouteToTunnel, conn.verdict), pm_network::Verdict::Drop);
+    assert_eq!(pm_network::merge_verdicts(pm_network::Verdict::RerouteToSplitTun, conn.verdict), pm_network::Verdict::Drop);
+}
+
+#[test]
 fn packet_with_verdict_is_ignored() {
     let fx = fx(permit());
     let pkt = FakePacket::tcp("93.184.216.34", 80);

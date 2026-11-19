@@ -176,3 +176,35 @@ fn sing_box_and_xray_json_subscription_payloads() {
     assert!(decoded_xray[0].starts_with("trojan://"));
 }
 
+#[test]
+fn subscription_decoding_with_cyrillic_and_unicode_does_not_panic() {
+    use pm_xray::subscription::decode_payload;
+
+    // Plain text with Cyrillic comments and UTF-8 multi-byte characters
+    let cyrillic_payload = "Подписка на быстрые серверы:\n\
+         # Комментарий с кириллицей и эмодзи 🚀\n\
+         vless://00010203-0405-0607-0809-0a0b0c0d0e0f@example.com:443#Россия-Москва\n\
+         Еще одна строка текста\n\
+         trojan://secret@trojan.example:443#Германия-Франкфурт\n\
+         Завершающий текст";
+
+    let links = decode_payload(cyrillic_payload).unwrap();
+    assert_eq!(links.len(), 2);
+    assert_eq!(links[0], "vless://00010203-0405-0607-0809-0a0b0c0d0e0f@example.com:443#Россия-Москва");
+    assert_eq!(links[1], "trojan://secret@trojan.example:443#Германия-Франкфурт");
+
+    // Also test inside a subscription store refresh
+    let store = store();
+    let created = store
+        .add(&AddSubscriptionRequest {
+            name: "Cyrillic Sub".into(),
+            url: "https://example.com/cyrillic".into(),
+            enabled: true,
+        })
+        .unwrap();
+
+    let fetcher = StaticFetcher(cyrillic_payload.to_string());
+    let node_count = store.refresh(&created.id, &fetcher, None).unwrap();
+    assert_eq!(node_count, 2);
+}
+
