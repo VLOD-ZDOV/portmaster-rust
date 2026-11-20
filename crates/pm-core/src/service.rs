@@ -404,19 +404,6 @@ impl Service {
             .start(&databases)
             .map_err(|error| anyhow::anyhow!("start metrics: {error}"))?;
 
-        // Xray: subscriptions, node discovery and the child process. A missing
-        // binary is a soft warning inside `Xray::start`, never a fatal error.
-        let xray = pm_xray::Xray::new(
-            &config,
-            &databases,
-            Arc::clone(&geoip),
-            data_dir.clone(),
-            options.bin_dir.clone(),
-        );
-        xray.register_api(&api)
-            .map_err(|error| anyhow::anyhow!("register xray api: {error}"))?;
-        xray.start();
-
         // The remaining core endpoints: shutdown and directory map.
         let shutdown_token = service_stop_token.clone();
         api.register_endpoint(
@@ -775,6 +762,19 @@ impl Service {
             pm_netquery::api::ApiOptions::new(Arc::new(move || dev_mode), retention),
         )
         .map_err(|error| anyhow::anyhow!("register netquery api: {error}"))?;
+
+        // Xray: subscriptions, node discovery and the child process.
+        // In strictly ordered startup: databases -> config -> notifications -> status -> dns -> api -> firewall -> xray.
+        let xray = pm_xray::Xray::new(
+            &config,
+            &databases,
+            Arc::clone(&geoip),
+            data_dir.clone(),
+            options.bin_dir.clone(),
+        );
+        xray.register_api(&api)
+            .map_err(|error| anyhow::anyhow!("register xray api: {error}"))?;
+        xray.start();
 
         // Readiness is published in `run()`, after interception startup has
         // been attempted, so `/api/v1/ready` is not true while part of the
@@ -1171,7 +1171,7 @@ impl Service {
         let config_dyn = Arc::clone(&self.config);
         let mut config_rx = self.config.subscribe_changes();
         let stop_token_dyn = self.stop_token.clone();
-        tokio::spawn(async move {
+        let proxies_dyn_worker = tokio::spawn(async move {
             loop {
                 tokio::select! {
                     _ = stop_token_dyn.cancelled() => break,
@@ -1215,6 +1215,11 @@ impl Service {
         // and interception startup attempted", not "interception active".
         self.api.set_ready(true);
 
+        let maintenance_db = Arc::clone(&databases);
+        let maintenance_worker = tokio::spawn(async move {
+            maintenance(maintenance_db).await;
+        });
+
         let outcome: anyhow::Result<()> = tokio::select! {
             result = server => result.map_err(anyhow::Error::from),
             _ = shutdown_signal() => {
@@ -1225,9 +1230,9 @@ impl Service {
                 tracing::info!("stop requested, stopping the service");
                 Ok(())
             }
-            _ = maintenance(Arc::clone(&databases)) => Ok(()),
         };
 
+        // Terminate all background workers
         refresher.abort();
         network_worker.abort();
         online_feedback.abort();
@@ -1240,17 +1245,41 @@ impl Service {
         intel_worker.abort();
         list_watcher.abort();
         broadcasts_worker.abort();
+        proxies_dyn_worker.abort();
+        maintenance_worker.abort();
+
+        // Mark API not ready immediately
+        self.api.set_ready(false);
+
+        // 1. Deactivate firewall / kext:
+        // On Windows, close driver handle, stop service, and stop interception,
+        // ensuring filtering is cleanly unhooked and network traffic is not blocked.
         if let Err(error) = self.firewall.stop().await {
             tracing::warn!(%error, "filter: failed to stop interception");
         }
         self.interop_env.set_interception_started(false);
         self.split_proxies.stop();
-        self.xray.stop();
         self.compat.stop();
+
+        // 2. Stop Xray: stop child process, kill process tree on Windows, clean temporary config files
+        self.xray.stop();
+
+        // 3. Stop DNS: stop systemd DNS monitor, stop DNS nameserver listeners (closing port 53) and resolver
         self.stop_dns_monitor();
-        self.control.shutdown().await;
         self.dns.shutdown().await;
+
+        // 4. Stop API: close UI archives, stop control, stop metrics
+        if let Some(archives) = self.api.ui_archives() {
+            archives.close_archives();
+        }
+        self.control.shutdown().await;
         self.metrics.stop_and_join().await;
+        self.os_integration
+            .lock()
+            .expect("lock poisoned")
+            .clean_up();
+
+        // 5. Close databases: flush WAL journal, SQLite checkpoint, close DB descriptors
         databases.shutdown()?;
         outcome
     }
@@ -1266,11 +1295,42 @@ impl Service {
         }
     }
 
+    /// Shuts the service down asynchronously in the exact Go order.
+    pub async fn shutdown_async(&self) -> anyhow::Result<()> {
+        self.api.set_ready(false);
+        if let Err(error) = self.firewall.stop().await {
+            tracing::warn!(%error, "filter: failed to stop interception");
+        }
+        self.interop_env.set_interception_started(false);
+        self.split_proxies.stop();
+        self.compat.stop();
+        self.xray.stop();
+        self.stop_dns_monitor();
+        self.dns.shutdown().await;
+        if let Some(archives) = self.api.ui_archives() {
+            archives.close_archives();
+        }
+        self.control.shutdown().await;
+        self.metrics.stop_and_join().await;
+        self.os_integration
+            .lock()
+            .expect("lock poisoned")
+            .clean_up();
+        self.databases.shutdown()?;
+        Ok(())
+    }
+
     /// Shuts the service down.
     pub fn shutdown(&self) -> anyhow::Result<()> {
-        self.stop_dns_monitor();
+        self.api.set_ready(false);
+        self.split_proxies.stop();
+        self.compat.stop();
         self.xray.stop();
+        self.stop_dns_monitor();
         self.dns.stop();
+        if let Some(archives) = self.api.ui_archives() {
+            archives.close_archives();
+        }
         self.metrics.stop();
         self.os_integration
             .lock()
@@ -1600,7 +1660,7 @@ fn apply_intel_update(
     Ok(())
 }
 
-/// Waits for a shutdown signal (SIGINT/SIGTERM).
+/// Waits for a shutdown signal (SIGINT/SIGTERM, or Windows control signals).
 async fn shutdown_signal() {
     let ctrl_c = async {
         let _ = tokio::signal::ctrl_c().await;
@@ -1615,7 +1675,38 @@ async fn shutdown_signal() {
             Err(_) => std::future::pending::<()>().await,
         }
     };
-    #[cfg(not(unix))]
+
+    #[cfg(windows)]
+    let terminate = async {
+        let mut ctrl_break = tokio::signal::windows::ctrl_break().ok();
+        let mut ctrl_close = tokio::signal::windows::ctrl_close().ok();
+        let mut ctrl_shutdown = tokio::signal::windows::ctrl_shutdown().ok();
+        tokio::select! {
+            _ = async {
+                if let Some(cb) = ctrl_break.as_mut() {
+                    cb.recv().await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {}
+            _ = async {
+                if let Some(cc) = ctrl_close.as_mut() {
+                    cc.recv().await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {}
+            _ = async {
+                if let Some(cs) = ctrl_shutdown.as_mut() {
+                    cs.recv().await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {}
+        }
+    };
+
+    #[cfg(not(any(unix, windows)))]
     let terminate = std::future::pending::<()>();
 
     tokio::select! {
