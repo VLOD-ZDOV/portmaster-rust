@@ -6,6 +6,7 @@
 //! "not available" and the location service falls back to the timezone.
 
 use std::net::IpAddr;
+#[cfg(not(windows))]
 use std::process::Command;
 
 use pm_geoip::{DeviceLocationService, Location, LocationEnvironment};
@@ -106,7 +107,9 @@ impl LocationEnvironment for CoreLocationEnvironment {
 
 /// Returns the local UTC offset in seconds, like `time.Now().Zone()`.
 ///
-/// Uses `date +%z` so no `unsafe` is needed; a failure yields UTC.
+/// Uses `date +%z` on Unix so no `unsafe` is needed; a failure yields UTC.
+/// On Windows, `chrono::Local` is used to inspect local timezone offset.
+#[cfg(not(windows))]
 pub(crate) fn timezone_offset_seconds() -> i32 {
     let output = Command::new("date").arg("+%z").output().ok();
     output
@@ -117,7 +120,13 @@ pub(crate) fn timezone_offset_seconds() -> i32 {
         .unwrap_or(0)
 }
 
+#[cfg(windows)]
+pub(crate) fn timezone_offset_seconds() -> i32 {
+    chrono::Local::now().offset().local_minus_utc()
+}
+
 /// Parses a `+HHMM` / `-HHMM` UTC offset.
+#[cfg(any(not(windows), test))]
 fn parse_timezone_offset(value: &str) -> Option<i32> {
     if value.len() != 5 {
         return None;

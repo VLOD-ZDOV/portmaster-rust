@@ -50,10 +50,15 @@ impl SqliteStorage {
     /// Opens (and migrates) `<location>/db.sqlite`.
     pub fn open(name: impl Into<String>, location: impl AsRef<Path>) -> Result<SqliteStorage> {
         let location = location.as_ref();
-        std::fs::create_dir_all(location)?;
+        crate::ensure_directory(location)?;
         let path = location.join("db.sqlite");
 
-        let conn = Connection::open(&path)?;
+        let conn = Connection::open(&path).map_err(|err| {
+            Error::Other(format!(
+                "failed to open sqlite database file '{}': {err}",
+                path.display()
+            ))
+        })?;
         let _: String = conn.query_row("PRAGMA journal_mode=WAL;", [], |row| row.get(0))?;
         conn.execute_batch(
             "PRAGMA synchronous=NORMAL;

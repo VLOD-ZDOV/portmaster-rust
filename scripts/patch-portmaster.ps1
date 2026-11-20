@@ -47,8 +47,28 @@ function Invoke-PortmasterPatch {
 
     $Repo = "VLOD-ZDOV/portmaster-rust"
     $InstallDir = "C:\Program Files\Portmaster"
-    $DataDir = "C:\ProgramData\safing\portmaster"
+
+    # Resolve DataDir: C:\ProgramData\Portmaster with fallback to $env:ProgramData\Portmaster and safing path
+    $DataDir = "C:\ProgramData\Portmaster"
+    if (-not (Test-Path $DataDir)) {
+        if ($env:ProgramData -and (Test-Path (Join-Path $env:ProgramData "Portmaster"))) {
+            $DataDir = Join-Path $env:ProgramData "Portmaster"
+        } elseif (Test-Path "C:\ProgramData\safing\portmaster") {
+            $DataDir = "C:\ProgramData\safing\portmaster"
+        } elseif ($env:ProgramData) {
+            $DataDir = Join-Path $env:ProgramData "Portmaster"
+        }
+    }
+
     $BackupDir = Join-Path $DataDir "core-backups"
+
+    # Resolve Service Name: PortmasterCore with fallback to Portmaster
+    $ServiceName = "PortmasterCore"
+    if (-not (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)) {
+        if (Get-Service -Name "Portmaster" -ErrorAction SilentlyContinue) {
+            $ServiceName = "Portmaster"
+        }
+    }
 
     if (-not (Test-Path $InstallDir)) {
         $altInstall = "C:\Program Files (x86)\Portmaster"
@@ -74,19 +94,20 @@ function Invoke-PortmasterPatch {
         $latestBackup = $backups[0].FullName
         Write-Host "[*] Restoring from $latestBackup..." -ForegroundColor Cyan
 
-        Stop-Service -Name "Portmaster" -Force -ErrorAction SilentlyContinue
+        Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 2
 
         if (Test-Path (Join-Path $latestBackup "portmaster-core.exe")) {
             Copy-Item -Path (Join-Path $latestBackup "portmaster-core.exe") -Destination (Join-Path $InstallDir "portmaster-core.exe") -Force
         }
-        Start-Service -Name "Portmaster" -ErrorAction SilentlyContinue
+        Start-Service -Name $ServiceName -ErrorAction SilentlyContinue
         Write-Host "[+] Restore completed successfully." -ForegroundColor Green
         return
     }
 
     Write-Host "==========================================================" -ForegroundColor Cyan
     Write-Host " Portmaster Windows Patcher (Core: $Core, Tag: $Tag)" -ForegroundColor Cyan
+    Write-Host " Service: $ServiceName | DataDir: $DataDir" -ForegroundColor Cyan
     Write-Host "==========================================================" -ForegroundColor Cyan
 
     # Resolve release URLs
@@ -131,10 +152,10 @@ function Invoke-PortmasterPatch {
 
         # Stop Portmaster Service
         $serviceRunning = $false
-        $pmService = Get-Service -Name "Portmaster" -ErrorAction SilentlyContinue
+        $pmService = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
         if ($pmService -and $pmService.Status -eq "Running") {
-            Write-Host "[*] Stopping Portmaster service..." -ForegroundColor Gray
-            Stop-Service -Name "Portmaster" -Force
+            Write-Host "[*] Stopping service $ServiceName..." -ForegroundColor Gray
+            Stop-Service -Name $ServiceName -Force
             Start-Sleep -Seconds 2
             $serviceRunning = $true
         }
@@ -163,10 +184,20 @@ function Invoke-PortmasterPatch {
         # Update UI if downloaded
         if ($hasUi -and (Test-Path $tempZip)) {
             Write-Host "[*] Updating Web UI..." -ForegroundColor Gray
+
+            # 1. Pilot UI directory for Rust core: <DataDir>\pilot-web
+            $pilotWebDest = Join-Path $DataDir "pilot-web"
+            New-Item -ItemType Directory -Path $pilotWebDest -Force | Out-Null
+            Expand-Archive -Path $tempZip -DestinationPath $pilotWebDest -Force
+            Write-Host "[*] Extracted UI bundle to: $pilotWebDest" -ForegroundColor Gray
+
+            # 2. Traditional module directory: <DataDir>\ui\modules\portmaster
             $uiDest = Join-Path $DataDir "ui\modules\portmaster"
             New-Item -ItemType Directory -Path $uiDest -Force | Out-Null
             Expand-Archive -Path $tempZip -DestinationPath $uiDest -Force
+            Write-Host "[*] Extracted UI bundle to: $uiDest" -ForegroundColor Gray
 
+            # 3. Update in updates dir if present
             $updatesUi = Join-Path $DataDir "updates\windows_amd64\ui\modules\portmaster"
             if (Test-Path (Split-Path $updatesUi)) {
                 New-Item -ItemType Directory -Path $updatesUi -Force | Out-Null
@@ -174,15 +205,44 @@ function Invoke-PortmasterPatch {
             }
         }
 
-        # Restart Portmaster Service
-        if ($serviceRunning -or $pmService) {
-            Write-Host "[*] Starting Portmaster service..." -ForegroundColor Gray
-            Start-Service -Name "Portmaster" -ErrorAction SilentlyContinue
+        # Restart Portmaster Service and verify Running state
+        if ($serviceRunning -or (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)) {
+            Write-Host "[*] Starting $ServiceName service..." -ForegroundColor Gray
+            try {
+                Start-Service -Name $ServiceName -ErrorAction Stop
+            } catch {
+                Write-Error "Failed to initiate start for service '$ServiceName': $_"
+                return
+            }
+
+            # Wait for service to reach Running state (up to 30 seconds)
+            Write-Host "[*] Waiting for $ServiceName to reach 'Running' status..." -ForegroundColor Gray
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            $timeoutSeconds = 30
+            $isRunning = $false
+
+            while ($sw.Elapsed.TotalSeconds -lt $timeoutSeconds) {
+                $status = (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue).Status
+                if ($status -eq "Running") {
+                    $isRunning = $true
+                    break
+                }
+                Start-Sleep -Seconds 1
+            }
+
+            if (-not $isRunning) {
+                $finalStatus = (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue).Status
+                Write-Error "Service '$ServiceName' failed to reach 'Running' state within $timeoutSeconds seconds. Current status: $finalStatus."
+                return
+            }
+
+            Write-Host "[+] Service $ServiceName is Running." -ForegroundColor Green
         }
 
         Write-Host ""
         Write-Host "==========================================================" -ForegroundColor Green
         Write-Host " [✓] Portmaster Windows patched successfully!" -ForegroundColor Green
+        Write-Host "     Service: $ServiceName (Running)" -ForegroundColor Green
         Write-Host "     Core: $binName" -ForegroundColor Green
         Write-Host "     Backup saved in: $currentBackup" -ForegroundColor Green
         Write-Host "==========================================================" -ForegroundColor Green

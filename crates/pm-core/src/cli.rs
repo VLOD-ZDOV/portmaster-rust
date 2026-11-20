@@ -37,10 +37,32 @@ pub struct Options {
 
 impl Default for Options {
     fn default() -> Self {
+        #[cfg(not(windows))]
+        let (bin_dir, data_dir, log_dir) = (
+            PathBuf::from("/usr/lib/portmaster"),
+            PathBuf::from("/var/lib/portmaster"),
+            PathBuf::from("/var/log/portmaster"),
+        );
+
+        #[cfg(windows)]
+        let (bin_dir, data_dir, log_dir) = {
+            let program_files = std::env::var_os("ProgramFiles")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(r"C:\Program Files"));
+            let bin = program_files.join("Portmaster");
+
+            let program_data = std::env::var_os("ProgramData")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"));
+            let data = program_data.join("Portmaster");
+            let log = data.join("logs");
+            (bin, data, log)
+        };
+
         Options {
-            bin_dir: PathBuf::from("/usr/lib/portmaster"),
-            data_dir: PathBuf::from("/var/lib/portmaster"),
-            log_dir: PathBuf::from("/var/log/portmaster"),
+            bin_dir,
+            data_dir,
+            log_dir,
             log_to_stdout: false,
             log_level: "info".to_string(),
             api_address: DEFAULT_API_ADDRESS.to_string(),
@@ -144,11 +166,32 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn defaults_match_linux_paths() {
         let options = parse(args(&[])).unwrap();
         assert_eq!(options.data_dir, PathBuf::from("/var/lib/portmaster"));
         assert_eq!(options.bin_dir, PathBuf::from("/usr/lib/portmaster"));
         assert_eq!(options.log_dir, PathBuf::from("/var/log/portmaster"));
+        assert_eq!(options.api_address, "127.0.0.1:817");
+        assert!(!options.dev_mode);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn defaults_match_windows_paths() {
+        let options = parse(args(&[])).unwrap();
+        let expected_bin = std::env::var_os("ProgramFiles")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\Program Files"))
+            .join("Portmaster");
+        let expected_data = std::env::var_os("ProgramData")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"))
+            .join("Portmaster");
+        let expected_log = expected_data.join("logs");
+        assert_eq!(options.bin_dir, expected_bin);
+        assert_eq!(options.data_dir, expected_data);
+        assert_eq!(options.log_dir, expected_log);
         assert_eq!(options.api_address, "127.0.0.1:817");
         assert!(!options.dev_mode);
     }

@@ -138,11 +138,11 @@ pub fn sign(options: &SignOptions) -> Result<(), String> {
 
     // Like Go's os.WriteFile: 0644 is the creation mode, an existing file
     // keeps its own permissions.
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o644)
+    let mut open_opts = std::fs::OpenOptions::new();
+    open_opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    open_opts.mode(0o644);
+    let mut file = open_opts
         .open(index_file)
         .map_err(|error| format!("write signed index file: {error}"))?;
     use std::io::Write;

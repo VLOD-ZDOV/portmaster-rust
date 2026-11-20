@@ -48,6 +48,28 @@ fn setup(tag: &str) -> (PathBuf, Arc<Databases>) {
 }
 
 #[test]
+fn test_ensure_directory_semantics() {
+    let base = temp_dir("ensure-dir");
+    let target = base.join("subdir").join("nested");
+
+    // 1. Create directory hierarchy
+    pm_database::ensure_directory(&target).unwrap();
+    assert!(target.is_dir());
+
+    // 2. Calling on existing directory succeeds idempotently
+    pm_database::ensure_directory(&target).unwrap();
+    assert!(target.is_dir());
+
+    // 3. If a file exists where a directory is needed, it removes it like Go's EnsureDirectory
+    let file_path = base.join("conflicting_file");
+    std::fs::write(&file_path, "conflicting").unwrap();
+    assert!(file_path.is_file());
+
+    pm_database::ensure_directory(&file_path).unwrap();
+    assert!(file_path.is_dir());
+}
+
+#[test]
 fn registry_validation_and_lazy_open() {
     let dir = temp_dir("registry");
     let dbs = Arc::new(Databases::new(&dir).unwrap());

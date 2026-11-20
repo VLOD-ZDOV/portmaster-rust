@@ -67,11 +67,66 @@ pub struct Databases {
     next_id: Arc<AtomicU64>,
 }
 
+/// Ensures that a directory exists at `path`, mirroring Go's `base/utils/fs.go:EnsureDirectory`.
+///
+/// - If the directory already exists, succeeds without error.
+/// - If a file exists at the path, safely attempts to remove it to place the directory,
+///   or returns an informative error naming the file if removal fails.
+/// - If directory creation fails with AlreadyExists (e.g. Windows os error 183), verifies if it is a directory.
+/// - Returns clear error messages including the path on failure.
+pub fn ensure_directory(path: impl AsRef<Path>) -> Result<()> {
+    let path = path.as_ref();
+    match std::fs::metadata(path) {
+        Ok(meta) => {
+            if meta.is_dir() {
+                return Ok(());
+            }
+            // A non-directory file exists at this path. Like Go's EnsureDirectory, try to remove it.
+            if let Err(err) = std::fs::remove_file(path) {
+                return Err(Error::Other(format!(
+                    "could not remove conflicting file '{}' to place directory: {err}",
+                    path.display()
+                )));
+            }
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            // Path does not exist yet; proceed to create.
+        }
+        Err(err) => {
+            return Err(Error::Other(format!(
+                "could not inspect directory path '{}': {err}",
+                path.display()
+            )));
+        }
+    }
+
+    if let Err(err) = std::fs::create_dir_all(path) {
+        if path.is_dir() {
+            return Ok(());
+        }
+        if err.kind() == std::io::ErrorKind::AlreadyExists {
+            if path.is_dir() {
+                return Ok(());
+            }
+            return Err(Error::Other(format!(
+                "cannot create directory '{}': path already exists and is not a directory",
+                path.display()
+            )));
+        }
+        return Err(Error::Other(format!(
+            "could not create directory '{}': {err}",
+            path.display()
+        )));
+    }
+
+    Ok(())
+}
+
 impl Databases {
     /// Creates a database system that stores databases under `root`.
     pub fn new(root: impl AsRef<Path>) -> Result<Self> {
         let root = root.as_ref();
-        std::fs::create_dir_all(root)?;
+        ensure_directory(root)?;
         Ok(Databases {
             root: Some(root.to_path_buf()),
             ..Databases::empty()
@@ -297,7 +352,7 @@ impl Databases {
             .as_ref()
             .ok_or_else(|| Error::Other("database has no storage location".to_string()))?;
         let location = root.join(name).join(storage_type);
-        std::fs::create_dir_all(&location)?;
+        ensure_directory(&location)?;
         Ok(location)
     }
 }

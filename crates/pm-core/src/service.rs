@@ -113,8 +113,8 @@ impl Service {
     pub async fn start(options: &Options) -> anyhow::Result<Service> {
         let data_dir = options.data_dir.clone();
         let databases_dir = data_dir.join("databases");
-        std::fs::create_dir_all(&databases_dir)?;
-        std::fs::create_dir_all(&options.log_dir)?;
+        pm_database::ensure_directory(&databases_dir)?;
+        pm_database::ensure_directory(&options.log_dir)?;
 
         // Databases: the same two the Go core registers.
         let databases = Arc::new(Databases::new(&databases_dir)?);
