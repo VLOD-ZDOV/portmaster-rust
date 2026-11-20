@@ -48,7 +48,18 @@ impl ChildHandle for SystemChild {
     }
 
     fn kill(&mut self) -> std::result::Result<(), String> {
-        self.child.kill().map_err(|error| error.to_string())
+        let res = self.child.kill().map_err(|error| error.to_string());
+        #[cfg(windows)]
+        {
+            // Forcefully terminate the process and any child processes on Windows to prevent zombies
+            let pid = self.id;
+            let _ = Command::new("taskkill")
+                .args(["/F", "/T", "/PID", &pid.to_string()])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+        res
     }
 
     fn wait(&mut self) -> std::result::Result<i32, String> {
@@ -62,7 +73,18 @@ impl ChildHandle for SystemChild {
 impl ProcessAdapter for SystemProcessAdapter {
     fn spawn(&self, binary: &str, config: &Path) -> std::result::Result<Box<dyn ChildHandle>, String> {
         let asset_dir = config.parent().unwrap_or_else(|| Path::new("."));
-        let mut child = Command::new(binary)
+        #[allow(unused_mut)]
+        let mut cmd_binary = binary.to_string();
+        #[cfg(windows)]
+        {
+            if !cmd_binary.to_lowercase().ends_with(".exe") && !Path::new(&cmd_binary).is_file() {
+                let with_exe = format!("{cmd_binary}.exe");
+                if Path::new(&with_exe).is_file() {
+                    cmd_binary = with_exe;
+                }
+            }
+        }
+        let mut child = Command::new(&cmd_binary)
             .arg("run")
             .arg("-config")
             .arg(config)
@@ -70,7 +92,7 @@ impl ProcessAdapter for SystemProcessAdapter {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|error| format!("failed to start {binary}: {error}"))?;
+            .map_err(|error| format!("failed to start {cmd_binary}: {error}"))?;
         let id = child.id();
         if let Some(stdout) = child.stdout.take() {
             thread::spawn(move || {
@@ -280,6 +302,7 @@ impl XrayManager {
         state.exit_country = None;
         state.exit_latitude = None;
         state.exit_longitude = None;
+        self.cleanup_temp_configs();
         Ok(())
     }
 
@@ -398,11 +421,29 @@ impl XrayManager {
         Some(exit_ip)
     }
 
+    /// Removes generated temporary configuration files from the Xray data directory.
+    pub fn cleanup_temp_configs(&self) {
+        let xray_dir = self.data_dir.join("xray");
+        if let Ok(entries) = std::fs::read_dir(&xray_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name == "config.json"
+                        || (name.starts_with("xray-") && name.ends_with(".json"))
+                    {
+                        let _ = std::fs::remove_file(&path);
+                    }
+                }
+            }
+        }
+    }
+
     /// Idempotent shutdown helper used by the core.
     pub fn stop(&self) {
         if let Err(error) = self.disconnect() {
             tracing::warn!(%error, "xray: failed to stop process");
         }
+        self.cleanup_temp_configs();
     }
 }
 
@@ -603,5 +644,30 @@ mod tests {
         assert!(manager.connect(&node("one"), 1080, InboundProtocol::Socks).is_err());
         assert_eq!(manager.status().state, ProcessState::Failed);
         assert!(manager.status().error.is_some());
+    }
+
+    #[test]
+    fn cleans_up_temp_configs_on_stop() {
+        let adapter = FakeAdapter {
+            spawns: Arc::new(Mutex::new(Vec::new())),
+            fail: false,
+            exited: Arc::new(AtomicBool::new(false)),
+            killed: Arc::new(AtomicBool::new(false)),
+        };
+        let Harness { manager, .. } = manager(adapter);
+        let xray_dir = manager.data_dir.join("xray");
+        std::fs::create_dir_all(&xray_dir).unwrap();
+        let dummy_config = xray_dir.join("config.json");
+        let dummy_xray = xray_dir.join("xray-test.json");
+        let persist_file = xray_dir.join("geoip.dat");
+        std::fs::write(&dummy_config, "{}").unwrap();
+        std::fs::write(&dummy_xray, "{}").unwrap();
+        std::fs::write(&persist_file, "dat").unwrap();
+
+        manager.stop();
+
+        assert!(!dummy_config.exists());
+        assert!(!dummy_xray.exists());
+        assert!(persist_file.exists());
     }
 }

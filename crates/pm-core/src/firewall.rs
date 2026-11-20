@@ -1382,9 +1382,7 @@ impl Firewall {
     /// Stops interception, shuts down the verdict loop, and removes the Windows driver service.
     #[cfg(windows)]
     pub async fn stop(&self) -> anyhow::Result<()> {
-        if !self.started.swap(false, Ordering::SeqCst) {
-            return Ok(());
-        }
+        let was_started = self.started.swap(false, Ordering::SeqCst);
         self.cancel
             .lock()
             .unwrap_or_else(|error| error.into_inner())
@@ -1406,11 +1404,37 @@ impl Firewall {
 
         if let Some(kext) = kext {
             let _ = kext.shutdown();
-            if let Ok(mut kext) = Arc::try_unwrap(kext) {
-                if let Err(error) = kext.stop() {
-                    tracing::warn!(%error, "filter: failed to stop windows kext cleanly");
+            let mut unwrapped = Arc::try_unwrap(kext);
+            if unwrapped.is_err() {
+                for _ in 0..50 {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    match Arc::try_unwrap(unwrapped.unwrap_err()) {
+                        Ok(k) => {
+                            unwrapped = Ok(k);
+                            break;
+                        }
+                        Err(k) => {
+                            unwrapped = Err(k);
+                        }
+                    }
                 }
             }
+            match unwrapped {
+                Ok(mut kext) => {
+                    if let Err(error) = kext.stop() {
+                        tracing::warn!(%error, "filter: failed to stop windows kext cleanly");
+                    } else {
+                        tracing::info!("filter: windows kext stopped and unhooked successfully");
+                    }
+                }
+                Err(kext) => {
+                    tracing::warn!("filter: kext Arc still referenced elsewhere, forcing shutdown");
+                    let _ = kext.shutdown();
+                }
+            }
+        }
+        if !was_started {
+            return Ok(());
         }
         Ok(())
     }

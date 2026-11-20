@@ -63,43 +63,78 @@ pub const CFG_XRAY_BINARY_NAMESPACED: &str = "xray/binary";
 pub const XRAY_BINARY_NAME: &str = "xray-rust";
 
 fn xray_binary_options() -> Vec<pm_config::PossibleValue> {
-    vec![
-        pm_config::PossibleValue {
-            name: "Auto-detect (поиск: <папка Portmaster>/xray-rust, /usr/bin, /usr/local/bin, /opt/xray-rust, PATH)".to_string(),
-            description: "Автоматический поиск бинарника xray-rust в каталоге Portmaster, стандартных путях и PATH".to_string(),
-            value: Value::String(String::new()),
-        },
-        pm_config::PossibleValue {
-            name: "xray-rust (/usr/bin/xray-rust, /usr/local/bin/xray-rust, /opt/xray-rust/xray-rust)".to_string(),
-            description: "Выделенный бинарник xray-rust".to_string(),
-            value: Value::String("xray-rust".to_string()),
-        },
-        pm_config::PossibleValue {
-            name: "v2rayN Binary (/opt/v2rayn-bin/bin/xray/xray)".to_string(),
-            description: "Встроенный бинарник Xray core из v2rayN (/opt/v2rayn-bin/bin/xray/xray)".to_string(),
-            value: Value::String("/opt/v2rayn-bin/bin/xray/xray".to_string()),
-        },
-        pm_config::PossibleValue {
-            name: "System binary (/usr/bin/xray)".to_string(),
-            description: "Системный бинарник /usr/bin/xray".to_string(),
-            value: Value::String("/usr/bin/xray".to_string()),
-        },
-        pm_config::PossibleValue {
-            name: "Local binary (/usr/local/bin/xray)".to_string(),
-            description: "Локальный бинарник /usr/local/bin/xray".to_string(),
-            value: Value::String("/usr/local/bin/xray".to_string()),
-        },
-        pm_config::PossibleValue {
-            name: "xray (PATH)".to_string(),
-            description: "Стандартный бинарник xray из системного PATH".to_string(),
-            value: Value::String("xray".to_string()),
-        },
-    ]
+    #[cfg(windows)]
+    {
+        vec![
+            pm_config::PossibleValue {
+                name: "Auto-detect (%ProgramFiles%\\Portmaster, %ProgramData%\\Portmaster\\xray, PATH)".to_string(),
+                description: "Автоматический поиск бинарника xray-rust.exe / xray.exe в каталоге Portmaster, стандартных путях Windows и PATH".to_string(),
+                value: Value::String(String::new()),
+            },
+            pm_config::PossibleValue {
+                name: "Portmaster Xray (%ProgramFiles%\\Portmaster\\xray-rust.exe)".to_string(),
+                description: "Выделенный бинарник xray-rust.exe в Portmaster".to_string(),
+                value: Value::String("xray-rust.exe".to_string()),
+            },
+            pm_config::PossibleValue {
+                name: "v2rayN Binary (%ProgramFiles%\\v2rayN\\bin\\xray\\xray.exe)".to_string(),
+                description: "Встроенный бинарник Xray core из v2rayN".to_string(),
+                value: Value::String(r"C:\Program Files\v2rayN\bin\xray\xray.exe".to_string()),
+            },
+            pm_config::PossibleValue {
+                name: "System binary (%ProgramFiles%\\Xray\\xray.exe)".to_string(),
+                description: "Бинарник xray.exe в Program Files".to_string(),
+                value: Value::String(r"C:\Program Files\Xray\xray.exe".to_string()),
+            },
+            pm_config::PossibleValue {
+                name: "xray.exe (PATH)".to_string(),
+                description: "Стандартный бинарник xray.exe из системного PATH".to_string(),
+                value: Value::String("xray.exe".to_string()),
+            },
+        ]
+    }
+    #[cfg(not(windows))]
+    {
+        vec![
+            pm_config::PossibleValue {
+                name: "Auto-detect (поиск: <папка Portmaster>/xray-rust, /usr/bin, /usr/local/bin, /opt/xray-rust, PATH)".to_string(),
+                description: "Автоматический поиск бинарника xray-rust в каталоге Portmaster, стандартных путях и PATH".to_string(),
+                value: Value::String(String::new()),
+            },
+            pm_config::PossibleValue {
+                name: "xray-rust (/usr/bin/xray-rust, /usr/local/bin/xray-rust, /opt/xray-rust/xray-rust)".to_string(),
+                description: "Выделенный бинарник xray-rust".to_string(),
+                value: Value::String("xray-rust".to_string()),
+            },
+            pm_config::PossibleValue {
+                name: "v2rayN Binary (/opt/v2rayn-bin/bin/xray/xray)".to_string(),
+                description: "Встроенный бинарник Xray core из v2rayN (/opt/v2rayn-bin/bin/xray/xray)".to_string(),
+                value: Value::String("/opt/v2rayn-bin/bin/xray/xray".to_string()),
+            },
+            pm_config::PossibleValue {
+                name: "System binary (/usr/bin/xray)".to_string(),
+                description: "Системный бинарник /usr/bin/xray".to_string(),
+                value: Value::String("/usr/bin/xray".to_string()),
+            },
+            pm_config::PossibleValue {
+                name: "Local binary (/usr/local/bin/xray)".to_string(),
+                description: "Локальный бинарник /usr/local/bin/xray".to_string(),
+                value: Value::String("/usr/local/bin/xray".to_string()),
+            },
+            pm_config::PossibleValue {
+                name: "xray (PATH)".to_string(),
+                description: "Стандартный бинарник xray из системного PATH".to_string(),
+                value: Value::String("xray".to_string()),
+            },
+        ]
+    }
 }
 
 /// Registers the Xray configuration options.
 pub fn register_options(config: &Config) -> pm_config::Result<()> {
-    let default_binary = if Path::new("/opt/v2rayn-bin/bin/xray/xray").is_file() {
+    let default_binary = if cfg!(windows) {
+        String::new()
+    } else if Path::new("/opt/v2rayn-bin/bin/xray/xray").is_file() {
         "/opt/v2rayn-bin/bin/xray/xray".to_string()
     } else {
         String::new()
@@ -215,80 +250,210 @@ pub fn register_options(config: &Config) -> pm_config::Result<()> {
 fn exists_in_path(name: &str) -> bool {
     std::env::var_os("PATH")
         .map(|paths| {
-            std::env::split_paths(&paths)
-                .any(|directory| directory.join(name).is_file())
+            std::env::split_paths(&paths).any(|directory| {
+                if directory.join(name).is_file() {
+                    return true;
+                }
+                #[cfg(windows)]
+                {
+                    if !name.to_lowercase().ends_with(".exe")
+                        && directory.join(format!("{name}.exe")).is_file()
+                    {
+                        return true;
+                    }
+                }
+                false
+            })
         })
         .unwrap_or(false)
 }
 
-/// Resolves the binary path: explicit config, then data_dir/xray, then the bin directory, then
-/// PATH. Returns `None` when nothing is found so callers can warn instead of
-/// failing to start the core.
-fn resolve_binary(configured: &str, data_dir: &Path, bin_dir: &Path) -> Option<String> {
+/// Resolves the Xray binary path: explicit config, then standard locations, then PATH.
+/// On Windows, checks .exe extensions and standard installation directories.
+/// Returns `None` when nothing is found.
+pub fn xray_binary_path(configured: &str, data_dir: &Path, bin_dir: &Path) -> Option<String> {
     if !configured.is_empty() {
         let path = Path::new(configured);
+        if path.is_file() {
+            return Some(configured.to_string());
+        }
+        #[cfg(windows)]
+        {
+            if !configured.to_lowercase().ends_with(".exe") {
+                let with_exe = format!("{configured}.exe");
+                let path_exe = Path::new(&with_exe);
+                if path_exe.is_file() {
+                    return Some(with_exe);
+                }
+            }
+        }
         if path.is_absolute() || configured.contains('/') || configured.contains('\\') {
-            return path.is_file().then(|| configured.to_string());
+            return None;
         }
-        return exists_in_path(configured).then(|| configured.to_string());
-    }
-    const KNOWN_PATHS: &[&str] = &[
-        "/opt/v2rayn-bin/bin/xray/xray",
-        "/usr/bin/xray",
-        "/usr/local/bin/xray",
-        "/opt/xray-rust/xray-rust",
-        "/usr/bin/xray-rust",
-        "/usr/local/bin/xray-rust",
-    ];
-    for &known in KNOWN_PATHS {
-        if Path::new(known).is_file() {
-            return Some(known.to_string());
+        if exists_in_path(configured) {
+            return Some(configured.to_string());
         }
+        #[cfg(windows)]
+        {
+            if !configured.to_lowercase().ends_with(".exe") {
+                let with_exe = format!("{configured}.exe");
+                if exists_in_path(&with_exe) {
+                    return Some(with_exe);
+                }
+            }
+        }
+        return None;
     }
-    let xray_dir = data_dir.join("xray");
-    let candidate_in_xray = xray_dir.join(XRAY_BINARY_NAME);
-    if candidate_in_xray.is_file() {
-        return Some(candidate_in_xray.to_string_lossy().into_owned());
-    }
-    let candidate_xray_in_xray = xray_dir.join("xray");
-    if candidate_xray_in_xray.is_file() {
-        return Some(candidate_xray_in_xray.to_string_lossy().into_owned());
-    }
-    let candidate = bin_dir.join(XRAY_BINARY_NAME);
-    if candidate.is_file() {
-        return Some(candidate.to_string_lossy().into_owned());
-    }
-    let candidate_xray = bin_dir.join("xray");
-    if candidate_xray.is_file() {
-        return Some(candidate_xray.to_string_lossy().into_owned());
-    }
+
     #[cfg(windows)]
     {
-        let candidate_exe = bin_dir.join(format!("{XRAY_BINARY_NAME}.exe"));
-        if candidate_exe.is_file() {
-            return Some(candidate_exe.to_string_lossy().into_owned());
+        // 1. bin_dir (xray-rust.exe, xray.exe, xray-rust, xray)
+        let candidates_bin = [
+            bin_dir.join(format!("{XRAY_BINARY_NAME}.exe")),
+            bin_dir.join("xray.exe"),
+            bin_dir.join(XRAY_BINARY_NAME),
+            bin_dir.join("xray"),
+        ];
+        for c in &candidates_bin {
+            if c.is_file() {
+                return Some(c.to_string_lossy().into_owned());
+            }
         }
-        let candidate_xray_exe = bin_dir.join("xray.exe");
-        if candidate_xray_exe.is_file() {
-            return Some(candidate_xray_exe.to_string_lossy().into_owned());
+
+        // 2. data_dir/xray (xray-rust.exe, xray.exe, xray-rust, xray)
+        let xray_dir = data_dir.join("xray");
+        let candidates_data = [
+            xray_dir.join(format!("{XRAY_BINARY_NAME}.exe")),
+            xray_dir.join("xray.exe"),
+            xray_dir.join(XRAY_BINARY_NAME),
+            xray_dir.join("xray"),
+        ];
+        for c in &candidates_data {
+            if c.is_file() {
+                return Some(c.to_string_lossy().into_owned());
+            }
+        }
+
+        // 3. %ProgramFiles%\Portmaster\xray-rust.exe and xray.exe
+        //    %ProgramFiles%\v2rayN\bin\xray\xray.exe
+        //    %ProgramFiles%\Xray\xray.exe
+        let mut program_files_dirs = Vec::new();
+        if let Some(pf) = std::env::var_os("ProgramFiles") {
+            program_files_dirs.push(PathBuf::from(pf));
+        }
+        if let Some(pf) = std::env::var_os("ProgramW6432") {
+            let p = PathBuf::from(pf);
+            if !program_files_dirs.contains(&p) {
+                program_files_dirs.push(p);
+            }
+        }
+        if let Some(pf) = std::env::var_os("ProgramFiles(x86)") {
+            let p = PathBuf::from(pf);
+            if !program_files_dirs.contains(&p) {
+                program_files_dirs.push(p);
+            }
+        }
+        if program_files_dirs.is_empty() {
+            program_files_dirs.push(PathBuf::from(r"C:\Program Files"));
+        }
+
+        for pf in &program_files_dirs {
+            let candidates = [
+                pf.join("Portmaster").join(format!("{XRAY_BINARY_NAME}.exe")),
+                pf.join("Portmaster").join("xray.exe"),
+                pf.join("v2rayN").join("bin").join("xray").join("xray.exe"),
+                pf.join("Xray").join("xray.exe"),
+            ];
+            for c in &candidates {
+                if c.is_file() {
+                    return Some(c.to_string_lossy().into_owned());
+                }
+            }
+        }
+
+        // 4. %ProgramData%\Portmaster\xray\xray-rust.exe and xray.exe
+        let mut program_data_dirs = Vec::new();
+        if let Some(pd) = std::env::var_os("ProgramData") {
+            program_data_dirs.push(PathBuf::from(pd));
+        }
+        if program_data_dirs.is_empty() {
+            program_data_dirs.push(PathBuf::from(r"C:\ProgramData"));
+        }
+
+        for pd in &program_data_dirs {
+            let candidates = [
+                pd.join("Portmaster").join("xray").join(format!("{XRAY_BINARY_NAME}.exe")),
+                pd.join("Portmaster").join("xray").join("xray.exe"),
+                pd.join("Portmaster").join(format!("{XRAY_BINARY_NAME}.exe")),
+                pd.join("Portmaster").join("xray.exe"),
+            ];
+            for c in &candidates {
+                if c.is_file() {
+                    return Some(c.to_string_lossy().into_owned());
+                }
+            }
+        }
+
+        // 5. PATH check with .exe
+        let exe_names = [
+            format!("{XRAY_BINARY_NAME}.exe"),
+            "xray.exe".to_string(),
+            XRAY_BINARY_NAME.to_string(),
+            "xray".to_string(),
+        ];
+        for name in &exe_names {
+            if exists_in_path(name) {
+                return Some(name.clone());
+            }
         }
     }
-    if exists_in_path("xray") {
-        return Some("xray".to_string());
-    }
-    if exists_in_path(XRAY_BINARY_NAME) {
-        return Some(XRAY_BINARY_NAME.to_string());
-    }
-    #[cfg(windows)]
+
+    #[cfg(not(windows))]
     {
-        if exists_in_path("xray.exe") {
-            return Some("xray.exe".to_string());
+        let xray_dir = data_dir.join("xray");
+        let candidate_in_xray = xray_dir.join(XRAY_BINARY_NAME);
+        if candidate_in_xray.is_file() {
+            return Some(candidate_in_xray.to_string_lossy().into_owned());
         }
-        if exists_in_path(&format!("{XRAY_BINARY_NAME}.exe")) {
-            return Some(format!("{XRAY_BINARY_NAME}.exe"));
+        let candidate_xray_in_xray = xray_dir.join("xray");
+        if candidate_xray_in_xray.is_file() {
+            return Some(candidate_xray_in_xray.to_string_lossy().into_owned());
+        }
+        let candidate = bin_dir.join(XRAY_BINARY_NAME);
+        if candidate.is_file() {
+            return Some(candidate.to_string_lossy().into_owned());
+        }
+        let candidate_xray = bin_dir.join("xray");
+        if candidate_xray.is_file() {
+            return Some(candidate_xray.to_string_lossy().into_owned());
+        }
+        const KNOWN_PATHS: &[&str] = &[
+            "/opt/v2rayn-bin/bin/xray/xray",
+            "/usr/bin/xray",
+            "/usr/local/bin/xray",
+            "/opt/xray-rust/xray-rust",
+            "/usr/bin/xray-rust",
+            "/usr/local/bin/xray-rust",
+        ];
+        for &known in KNOWN_PATHS {
+            if Path::new(known).is_file() {
+                return Some(known.to_string());
+            }
+        }
+        if exists_in_path("xray") {
+            return Some("xray".to_string());
+        }
+        if exists_in_path(XRAY_BINARY_NAME) {
+            return Some(XRAY_BINARY_NAME.to_string());
         }
     }
+
     None
+}
+
+/// Resolves the binary path: explicit config, then standard locations, then PATH.
+pub fn resolve_binary(configured: &str, data_dir: &Path, bin_dir: &Path) -> Option<String> {
+    xray_binary_path(configured, data_dir, bin_dir)
 }
 
 /// Current time as Unix seconds.
@@ -636,5 +801,45 @@ impl Xray {
         let _ = self.config.set_config_option("spn/enable", serde_json::Value::Bool(false));
         let _ = self.config.set_config_option("splittun/enable", serde_json::Value::Bool(false));
         let _ = self.config.set_config_option("splittun/proxy", serde_json::Value::String(String::new()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolves_explicit_and_missing_binary() {
+        let temp = std::env::temp_dir();
+        assert!(xray_binary_path("/non/existent/path/xray", &temp, &temp).is_none());
+
+        let dummy_exe = temp.join(format!("dummy-test-{}.exe", std::process::id()));
+        std::fs::write(&dummy_exe, b"").unwrap();
+        let path_str = dummy_exe.to_string_lossy().into_owned();
+        assert_eq!(
+            xray_binary_path(&path_str, &temp, &temp),
+            Some(path_str.clone())
+        );
+        let _ = std::fs::remove_file(&dummy_exe);
+    }
+
+    #[test]
+    fn resolves_binary_in_data_or_bin_dir() {
+        let temp = std::env::temp_dir().join(format!("xray-find-test-{}", std::process::id()));
+        let bin_dir = temp.join("bin");
+        let data_dir = temp.join("data");
+        let xray_data = data_dir.join("xray");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::fs::create_dir_all(&xray_data).unwrap();
+
+        let target_name = if cfg!(windows) { "xray-rust.exe" } else { "xray-rust" };
+        let dummy = xray_data.join(target_name);
+        std::fs::write(&dummy, b"").unwrap();
+
+        let found = xray_binary_path("", &data_dir, &bin_dir);
+        assert!(found.is_some());
+        assert!(found.unwrap().ends_with(target_name));
+
+        let _ = std::fs::remove_dir_all(&temp);
     }
 }
