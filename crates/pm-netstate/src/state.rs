@@ -31,6 +31,62 @@ const LOOKUP_TRIES: usize = 5;
 const FAST_LOOKUP_TRIES: usize = 2;
 const CHECK_PID_TRIES: usize = 5;
 const CHECK_PID_BASE_WAIT: Duration = Duration::from_millis(5);
+const ERROR_LOG_RATE_LIMIT: Duration = Duration::from_secs(10);
+
+fn log_table_error(limiter: &Mutex<Option<Instant>>, stack: Stack, error: &dyn std::fmt::Display) {
+    let mut last = limiter.lock().expect("lock poisoned");
+    let should_log = match *last {
+        Some(instant) => instant.elapsed() >= ERROR_LOG_RATE_LIMIT,
+        None => true,
+    };
+    if should_log {
+        *last = Some(Instant::now());
+        tracing::warn!(?stack, %error, "state: failed to get socket table");
+    }
+}
+
+#[cfg(windows)]
+fn query_tcp_table(stack: Stack) -> std::result::Result<(Vec<ConnectionInfo>, Vec<BindInfo>), String> {
+    let data = match stack {
+        Stack::Tcp4 => pm_winplatform::iphelper::get_tcp4_table().map_err(|e| e.to_string())?,
+        Stack::Tcp6 => pm_winplatform::iphelper::get_tcp6_table().map_err(|e| e.to_string())?,
+        _ => return Err("invalid stack for TCP".to_string()),
+    };
+    let mut connections = Vec::with_capacity(data.connections.len());
+    for entry in data.connections {
+        let info = ConnectionInfo::new(
+            Address::new(entry.local.ip, entry.local.port),
+            Address::new(entry.remote.ip, entry.remote.port),
+            0,
+            0,
+        );
+        info.set_pid(entry.pid);
+        connections.push(info);
+    }
+    let mut listeners = Vec::with_capacity(data.binds.len());
+    for entry in data.binds {
+        let info = BindInfo::new(Address::new(entry.local.ip, entry.local.port), 0, 0);
+        info.set_pid(entry.pid);
+        listeners.push(info);
+    }
+    Ok((connections, listeners))
+}
+
+#[cfg(windows)]
+fn query_udp_table(stack: Stack) -> std::result::Result<Vec<BindInfo>, String> {
+    let data = match stack {
+        Stack::Udp4 => pm_winplatform::iphelper::get_udp4_table().map_err(|e| e.to_string())?,
+        Stack::Udp6 => pm_winplatform::iphelper::get_udp6_table().map_err(|e| e.to_string())?,
+        _ => return Err("invalid stack for UDP".to_string()),
+    };
+    let mut binds = Vec::with_capacity(data.binds.len());
+    for entry in data.binds {
+        let info = BindInfo::new(Address::new(entry.local.ip, entry.local.port), 0, 0);
+        info.set_pid(entry.pid);
+        binds.push(info);
+    }
+    Ok(binds)
+}
 
 /// Errors returned by the state lookups.
 #[derive(Debug, thiserror::Error)]
@@ -70,6 +126,7 @@ struct TcpTable {
     listeners: RwLock<Vec<Arc<BindInfo>>>,
     last_update: Mutex<Option<SystemTime>>,
     limiter: Mutex<Option<Instant>>,
+    last_error_log: Mutex<Option<Instant>>,
 }
 
 impl TcpTable {
@@ -80,6 +137,7 @@ impl TcpTable {
             listeners: RwLock::new(Vec::new()),
             last_update: Mutex::new(None),
             limiter: Mutex::new(None),
+            last_error_log: Mutex::new(None),
         }
     }
 
@@ -108,7 +166,15 @@ impl TcpTable {
             }
             *limiter = Some(Instant::now());
 
-            match procfs.table(self.stack) {
+            #[cfg(windows)]
+            let res = {
+                let _ = procfs;
+                query_tcp_table(self.stack)
+            };
+            #[cfg(not(windows))]
+            let res = procfs.table(self.stack).map_err(|e| e.to_string());
+
+            match res {
                 Ok((connections, listeners)) => {
                     *self.connections.write().expect("lock poisoned") =
                         connections.into_iter().map(Arc::new).collect();
@@ -117,7 +183,7 @@ impl TcpTable {
                     *self.last_update.lock().expect("lock poisoned") = Some(SystemTime::now());
                 }
                 Err(error) => {
-                    tracing::warn!(stack = ?self.stack, %error, "state: failed to get socket table");
+                    log_table_error(&self.last_error_log, self.stack, &error);
                 }
             }
         }
@@ -140,6 +206,7 @@ struct UdpTable {
     last_update: Mutex<Option<SystemTime>>,
     limiter: Mutex<Option<Instant>>,
     last_clean: Mutex<Option<Instant>>,
+    last_error_log: Mutex<Option<Instant>>,
     states: Mutex<UdpStates>,
 }
 
@@ -151,6 +218,7 @@ impl UdpTable {
             last_update: Mutex::new(None),
             limiter: Mutex::new(None),
             last_clean: Mutex::new(None),
+            last_error_log: Mutex::new(None),
             states: Mutex::new(HashMap::new()),
         }
     }
@@ -177,14 +245,25 @@ impl UdpTable {
             }
             *limiter = Some(Instant::now());
 
-            match procfs.table(self.stack) {
-                Ok((_, binds)) => {
+            #[cfg(windows)]
+            let res = {
+                let _ = procfs;
+                query_udp_table(self.stack)
+            };
+            #[cfg(not(windows))]
+            let res = procfs
+                .table(self.stack)
+                .map(|(_, binds)| binds)
+                .map_err(|e| e.to_string());
+
+            match res {
+                Ok(binds) => {
                     *self.binds.write().expect("lock poisoned") =
                         binds.into_iter().map(Arc::new).collect();
                     *self.last_update.lock().expect("lock poisoned") = Some(SystemTime::now());
                 }
                 Err(error) => {
-                    tracing::warn!(stack = ?self.stack, %error, "state: failed to get socket table");
+                    log_table_error(&self.last_error_log, self.stack, &error);
                 }
             }
         }

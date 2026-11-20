@@ -1911,6 +1911,7 @@ dependencies = [
  "pm-mgr",
  "pm-netstate",
  "pm-netutils",
+ "pm-winplatform",
  "serde",
  "serde_json",
  "sha1 0.10.7",
@@ -1955,6 +1956,7 @@ dependencies = [
 name = "pm-netstate"
 version = "0.1.0"
 dependencies = [
+ "pm-winplatform",
  "serde",
  "serde_json",
  "thiserror",
@@ -2266,10 +2268,10 @@ dependencies = [
 name = "pm-winplatform"
 version = "0.1.0"
 dependencies = [
- "pm-netstate",
  "sha1 0.10.7",
  "thiserror",
  "tracing",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
