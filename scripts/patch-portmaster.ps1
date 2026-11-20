@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Portmaster Patcher / Installer for Windows
     Replaces or upgrades Portmaster core with Rust core (pm-core)
@@ -241,7 +241,7 @@ function Invoke-PortmasterPatch {
 
         Write-Host ""
         Write-Host "==========================================================" -ForegroundColor Green
-        Write-Host " [✓] Portmaster Windows patched successfully!" -ForegroundColor Green
+        Write-Host " [+] Portmaster Windows patched successfully!" -ForegroundColor Green
         Write-Host "     Service: $ServiceName (Running)" -ForegroundColor Green
         Write-Host "     Core: $binName" -ForegroundColor Green
         Write-Host "     Backup saved in: $currentBackup" -ForegroundColor Green
