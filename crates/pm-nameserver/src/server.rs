@@ -231,6 +231,10 @@ async fn serve(
     }
 }
 
+fn is_addr_in_use(err: &std::io::Error) -> bool {
+    err.kind() == ErrorKind::AddrInUse || err.raw_os_error() == Some(10048)
+}
+
 /// Starts the listeners for the configured address, like Go `start`.
 ///
 /// Listeners that cannot bind do not fail the start; they are reported in
@@ -270,6 +274,60 @@ pub async fn start(
                 listeners.push(Listener { addr: local, task });
             }
             Err(err) => {
+                // Check if binding to an unspecified address failed because the port
+                // is already in use (e.g. Windows SharedAccess / Internet Connection Sharing).
+                if ip.is_unspecified() && is_addr_in_use(&err) {
+                    tracing::warn!(
+                        "nameserver: address {addr} is in use (WSAEADDRINUSE / 10048, likely Windows ICS / SharedAccess); attempting fallback bind to loopback"
+                    );
+
+                    let fallback_ips: &[IpAddr] = if ip.is_ipv6() {
+                        &[IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)]
+                    } else {
+                        &[
+                            IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)),
+                            IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 17)),
+                        ]
+                    };
+
+                    let mut fallback_success = false;
+                    for &fallback_ip in fallback_ips {
+                        let fallback_addr = SocketAddr::new(fallback_ip, addresses.port);
+                        tracing::info!("nameserver: trying fallback listen on {fallback_addr}");
+                        match UdpSocket::bind(fallback_addr).await {
+                            Ok(socket) => {
+                                let local = socket.local_addr().unwrap_or(fallback_addr);
+                                tracing::info!(
+                                    "nameserver: fallback listener successfully bound to {local}"
+                                );
+                                if let Some(sink) = &options.on_event {
+                                    sink(ListenerEvent::Started { primary });
+                                }
+                                let task = tokio::spawn(serve(
+                                    Arc::new(socket),
+                                    Arc::clone(&ns),
+                                    cancel.clone(),
+                                    local,
+                                    primary,
+                                    options.on_event.clone(),
+                                ));
+                                listeners.push(Listener { addr: local, task });
+                                fallback_success = true;
+                                break;
+                            }
+                            Err(fallback_err) => {
+                                tracing::warn!(
+                                    "nameserver: fallback bind to {fallback_addr} failed: {fallback_err}"
+                                );
+                            }
+                        }
+                    }
+
+                    if fallback_success {
+                        continue;
+                    }
+                }
+
                 // Probably some other application listens on the same port.
                 tracing::warn!("nameserver: failed to start listening on {addr}: {err}");
                 // The lookup reads socket tables and the proc file system.
@@ -305,11 +363,19 @@ pub async fn start(
         .first()
         .map(|l| l.addr.port())
         .unwrap_or(addresses.port);
-    let matcher = if addresses.ip2.is_none() && addresses.ip1.is_unspecified() {
+    let matcher = if addresses.ip2.is_none()
+        && addresses.ip1.is_unspecified()
+        && listeners.iter().any(|l| l.addr.ip().is_unspecified())
+    {
         NameserverIpMatcher::new(Vec::new(), Some(Arc::clone(ns.env())), port)
     } else {
-        let mut ips: Vec<IpAddr> = vec![addresses.ip1];
-        ips.extend(addresses.ip2);
+        let mut ips: Vec<IpAddr> = listeners.iter().map(|l| l.addr.ip()).collect();
+        if ips.is_empty() {
+            ips.push(addresses.ip1);
+            if let Some(ip2) = addresses.ip2 {
+                ips.push(ip2);
+            }
+        }
         NameserverIpMatcher::new(ips, None, port)
     };
 

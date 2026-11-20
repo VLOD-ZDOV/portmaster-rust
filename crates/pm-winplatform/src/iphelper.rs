@@ -11,7 +11,18 @@
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-use pm_netstate::{Address, BindInfo, ConnectionInfo, SocketInfo};
+/// An IP address and port.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Address {
+    pub ip: IpAddr,
+    pub port: u16,
+}
+
+impl Address {
+    pub fn new(ip: IpAddr, port: u16) -> Self {
+        Self { ip, port }
+    }
+}
 
 /// IP / protocol constants from Go `iphelper.go`.
 pub const IPV4: u8 = 4;
@@ -115,31 +126,6 @@ pub struct BindEntry {
 pub struct TableData {
     pub connections: Vec<ConnectionEntry>,
     pub binds: Vec<BindEntry>,
-}
-
-impl TableData {
-    /// Converts the parsed entries into `pm-netstate` socket objects.
-    ///
-    /// On Windows the owning PID comes straight from the table row, so it is
-    /// written through the [`SocketInfo`] trait instead of being resolved from
-    /// an inode like on Linux. `uid` and `inode` stay at their zero values.
-    pub fn into_sockets(self) -> (Vec<ConnectionInfo>, Vec<BindInfo>) {
-        let mut connections = Vec::with_capacity(self.connections.len());
-        for entry in self.connections {
-            let info = ConnectionInfo::new(entry.local, entry.remote, 0, 0);
-            info.set_pid(entry.pid);
-            connections.push(info);
-        }
-
-        let mut binds = Vec::with_capacity(self.binds.len());
-        for entry in self.binds {
-            let info = BindInfo::new(entry.local, 0, 0);
-            info.set_pid(entry.pid);
-            binds.push(info);
-        }
-
-        (connections, binds)
-    }
 }
 
 /// Converts an `iphlpapi` IPv4 address (little-endian `u32`) to an `Ipv4Addr`.
@@ -505,6 +491,208 @@ pub fn get_udp6_table() -> Result<TableData> {
     get_table(IPV6, UDP)
 }
 
+/// IANA interface types for Windows adapters.
+pub const IF_TYPE_ETHERNET_CSMACD: u32 = 6;
+pub const IF_TYPE_SOFTWARE_LOOPBACK: u32 = 24;
+pub const IF_TYPE_IEEE80211: u32 = 71;
+pub const IF_TYPE_IEEE8023AD_LAG: u32 = 161;
+pub const IF_TYPE_IEEE80216_WMAN: u32 = 237;
+pub const IF_TYPE_WWANPP: u32 = 243;
+pub const IF_TYPE_WWANPP2: u32 = 244;
+
+/// Reports whether the Windows interface type corresponds to real hardware.
+pub fn is_physical_if_type(if_type: u32) -> bool {
+    matches!(
+        if_type,
+        IF_TYPE_ETHERNET_CSMACD
+            | IF_TYPE_IEEE80211
+            | IF_TYPE_IEEE8023AD_LAG
+            | IF_TYPE_IEEE80216_WMAN
+            | IF_TYPE_WWANPP
+            | IF_TYPE_WWANPP2
+    )
+}
+
+/// A network adapter as reported by `GetAdaptersAddresses`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WinAdapter {
+    pub name: String,
+    pub friendly_name: String,
+    pub if_index: u32,
+    pub ipv6_if_index: u32,
+    pub if_type: u32,
+    pub oper_status_up: bool,
+    pub is_loopback: bool,
+    pub is_physical: bool,
+    pub mac: Option<String>,
+    pub unicast_addresses: Vec<(IpAddr, u8)>,
+    pub gateways: Vec<IpAddr>,
+    pub ipv4_metric: u32,
+    pub ipv6_metric: u32,
+}
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+pub fn get_adapters() -> Result<Vec<WinAdapter>> {
+    use windows_sys::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, NO_ERROR};
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        GetAdaptersAddresses, GAA_FLAG_INCLUDE_GATEWAYS, IP_ADAPTER_ADDRESSES_LH,
+    };
+
+    let mut size: u32 = 16384;
+    let mut buf: Vec<u8> = vec![0u8; size as usize];
+    let flags = GAA_FLAG_INCLUDE_GATEWAYS;
+
+    for _ in 0..MAX_TRIES {
+        let ret = unsafe {
+            GetAdaptersAddresses(
+                0, // AF_UNSPEC
+                flags,
+                std::ptr::null(),
+                buf.as_mut_ptr().cast(),
+                &mut size,
+            )
+        };
+        if ret == ERROR_BUFFER_OVERFLOW {
+            buf.resize(size as usize, 0);
+            continue;
+        }
+        if ret != NO_ERROR {
+            return Err(TableError::Unexpected { code: ret });
+        }
+        break;
+    }
+
+    let mut adapters = Vec::new();
+    let mut curr = buf.as_ptr() as *const IP_ADAPTER_ADDRESSES_LH;
+
+    unsafe {
+        while !curr.is_null() {
+            let addr_ref = &*curr;
+
+            let name = pstr_to_string(addr_ref.AdapterName);
+            let friendly_name = pwstr_to_string(addr_ref.FriendlyName);
+            let if_index = addr_ref.Anonymous1.Anonymous.IfIndex;
+            let ipv6_if_index = addr_ref.Ipv6IfIndex;
+            let if_type = addr_ref.IfType;
+            let oper_status_up = addr_ref.OperStatus == 1; // IfOperStatusUp
+            let is_loopback = if_type == IF_TYPE_SOFTWARE_LOOPBACK;
+            let is_physical = is_physical_if_type(if_type);
+
+            let mac = if addr_ref.PhysicalAddressLength > 0
+                && addr_ref.PhysicalAddressLength as usize <= addr_ref.PhysicalAddress.len()
+            {
+                let len = addr_ref.PhysicalAddressLength as usize;
+                let mac_bytes = &addr_ref.PhysicalAddress[..len];
+                let formatted = mac_bytes
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<Vec<_>>()
+                    .join(":");
+                Some(formatted)
+            } else {
+                None
+            };
+
+            let mut unicast_addresses = Vec::new();
+            let mut uni_curr = addr_ref.FirstUnicastAddress;
+            while !uni_curr.is_null() {
+                let uni_ref = &*uni_curr;
+                if let Some(ip) = sockaddr_to_ip(uni_ref.Address.lpSockaddr) {
+                    let prefix = uni_ref.OnLinkPrefixLength;
+                    unicast_addresses.push((ip, prefix));
+                }
+                uni_curr = uni_ref.Next;
+            }
+
+            let mut gateways = Vec::new();
+            let mut gw_curr = addr_ref.FirstGatewayAddress;
+            while !gw_curr.is_null() {
+                let gw_ref = &*gw_curr;
+                if let Some(ip) = sockaddr_to_ip(gw_ref.Address.lpSockaddr) {
+                    gateways.push(ip);
+                }
+                gw_curr = gw_ref.Next;
+            }
+
+            adapters.push(WinAdapter {
+                name,
+                friendly_name,
+                if_index,
+                ipv6_if_index,
+                if_type,
+                oper_status_up,
+                is_loopback,
+                is_physical,
+                mac,
+                unicast_addresses,
+                gateways,
+                ipv4_metric: addr_ref.Ipv4Metric,
+                ipv6_metric: addr_ref.Ipv6Metric,
+            });
+
+            curr = addr_ref.Next;
+        }
+    }
+
+    Ok(adapters)
+}
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+unsafe fn pwstr_to_string(ptr: *const u16) -> String {
+    if ptr.is_null() {
+        return String::new();
+    }
+    let mut len = 0;
+    while *ptr.add(len) != 0 {
+        len += 1;
+    }
+    let slice = std::slice::from_raw_parts(ptr, len);
+    String::from_utf16_lossy(slice)
+}
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+unsafe fn pstr_to_string(ptr: *const u8) -> String {
+    if ptr.is_null() {
+        return String::new();
+    }
+    let mut len = 0;
+    while *ptr.add(len) != 0 {
+        len += 1;
+    }
+    let slice = std::slice::from_raw_parts(ptr, len);
+    String::from_utf8_lossy(slice).into_owned()
+}
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+unsafe fn sockaddr_to_ip(
+    sockaddr: *const windows_sys::Win32::Networking::WinSock::SOCKADDR,
+) -> Option<IpAddr> {
+    if sockaddr.is_null() {
+        return None;
+    }
+    let family = (*sockaddr).sa_family as u32;
+    if family == windows_sys::Win32::Networking::WinSock::AF_INET as u32 {
+        let sa_in = sockaddr as *const windows_sys::Win32::Networking::WinSock::SOCKADDR_IN;
+        let s_addr = (*sa_in).sin_addr.S_un.S_addr;
+        Some(IpAddr::V4(Ipv4Addr::from(s_addr.to_ne_bytes())))
+    } else if family == windows_sys::Win32::Networking::WinSock::AF_INET6 as u32 {
+        let sa_in6 = sockaddr as *const windows_sys::Win32::Networking::WinSock::SOCKADDR_IN6;
+        let bytes = (*sa_in6).sin6_addr.u.Byte;
+        Some(IpAddr::V6(Ipv6Addr::from(bytes)))
+    } else {
+        None
+    }
+}
+
+#[cfg(not(windows))]
+pub fn get_adapters() -> Result<Vec<WinAdapter>> {
+    Err(TableError::InvalidProtocol)
+}
+
 /// Non-Windows stub: the tables can only be read from `iphlpapi.dll`.
 #[cfg(not(windows))]
 pub fn get_table(_ip_version: u8, _protocol: u8) -> Result<TableData> {
@@ -571,10 +759,6 @@ mod tests {
             Address::new(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 7)), 5555)
         );
         assert_eq!(table.connections[0].pid, 99);
-
-        let (connections, binds) = table.into_sockets();
-        assert_eq!(connections[0].pid(), 99);
-        assert_eq!(binds[0].pid(), 4242);
     }
 
     #[test]

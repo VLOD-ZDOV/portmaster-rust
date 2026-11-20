@@ -20,14 +20,15 @@ pub struct EntryResource {
 /// A single filter list entry.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListEntry {
-    #[serde(rename = "type")]
+    #[serde(rename = "type", default)]
     pub type_: String,
     #[serde(rename = "entity")]
     pub entity: String,
-    #[serde(rename = "whitelist")]
+    #[serde(rename = "whitelist", default)]
     pub whitelist: bool,
     #[serde(
         rename = "resources",
+        default,
         deserialize_with = "crate::deserialize_null_default"
     )]
     pub resources: Vec<EntryResource>,
@@ -328,5 +329,18 @@ mod tests {
         let bad = b"not json".to_vec();
         let file = make_file(pm_dsd::format::JSON, &[bad, good]);
         assert_eq!(decode_file(file.as_slice()).unwrap(), vec![entry]);
+    }
+
+    #[test]
+    fn decodes_entry_with_missing_optional_fields() {
+        // Missing type, whitelist, and resources - only entity present.
+        let json_blob = br#"{"entity":"example.com"}"#.to_vec();
+        let file = make_file(pm_dsd::format::JSON, &[json_blob]);
+        let decoded = decode_file(file.as_slice()).unwrap();
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].entity, "example.com");
+        assert_eq!(decoded[0].type_, "");
+        assert_eq!(decoded[0].whitelist, false);
+        assert!(decoded[0].resources.is_empty());
     }
 }

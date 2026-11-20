@@ -84,11 +84,33 @@ impl InterfaceSource for SystemInterfaces {
         Ok(interfaces.into_values().collect())
     }
 
-    /// Interface enumeration uses `getifaddrs`, which is only available on
-    /// Unix. Go's Windows path calls `GetAdaptersAddresses` through P/Invoke;
-    /// it needs unsafe FFI and platform types that are not part of this port,
-    /// so until it lands the system source simply has no interfaces to report.
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    fn interfaces(&self) -> Result<Vec<RawInterface>, String> {
+        let adapters = pm_winplatform::iphelper::get_adapters()
+            .map_err(|error| error.to_string())?;
+        let mut result = Vec::new();
+
+        for adapter in adapters {
+            let name = if !adapter.friendly_name.is_empty() {
+                adapter.friendly_name
+            } else {
+                adapter.name
+            };
+
+            result.push(RawInterface {
+                name,
+                index: adapter.if_index,
+                mac: adapter.mac,
+                up: adapter.oper_status_up,
+                loopback: adapter.is_loopback,
+                addrs: adapter.unicast_addresses,
+            });
+        }
+
+        Ok(result)
+    }
+
+    #[cfg(not(any(unix, windows)))]
     fn interfaces(&self) -> Result<Vec<RawInterface>, String> {
         Ok(Vec::new())
     }
@@ -98,7 +120,18 @@ impl InterfaceSource for SystemInterfaces {
         {
             std::path::Path::new(&format!("/sys/class/net/{name}/device")).exists()
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(windows)]
+        {
+            if let Ok(adapters) = pm_winplatform::iphelper::get_adapters() {
+                for adapter in adapters {
+                    if adapter.friendly_name == name || adapter.name == name {
+                        return adapter.is_physical;
+                    }
+                }
+            }
+            false
+        }
+        #[cfg(not(any(target_os = "linux", windows)))]
         {
             let _ = name;
             false
@@ -136,7 +169,28 @@ impl InterfaceSource for SystemInterfaces {
             }
             Ok(routes)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(windows)]
+        {
+            let adapters = pm_winplatform::iphelper::get_adapters()
+                .map_err(|error| error.to_string())?;
+            let mut routes = Vec::new();
+            for adapter in adapters {
+                let has_v4_gw = adapter.gateways.iter().any(|gw| gw.is_ipv4());
+                if has_v4_gw && adapter.if_index != 0 {
+                    let name = if !adapter.friendly_name.is_empty() {
+                        adapter.friendly_name
+                    } else {
+                        adapter.name
+                    };
+                    routes.push(RouteCandidate {
+                        interface: name,
+                        metric: adapter.ipv4_metric,
+                    });
+                }
+            }
+            Ok(routes)
+        }
+        #[cfg(not(any(target_os = "linux", windows)))]
         {
             Err("physical network interface detection is not supported on this platform"
                 .to_string())
@@ -177,7 +231,34 @@ impl InterfaceSource for SystemInterfaces {
             }
             routes
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(windows)]
+        {
+            let Ok(adapters) = pm_winplatform::iphelper::get_adapters() else {
+                return Vec::new();
+            };
+            let mut routes = Vec::new();
+            for adapter in adapters {
+                let has_v6_gw = adapter.gateways.iter().any(|gw| gw.is_ipv6());
+                let index = if adapter.ipv6_if_index != 0 {
+                    adapter.ipv6_if_index
+                } else {
+                    adapter.if_index
+                };
+                if has_v6_gw && index != 0 {
+                    let name = if !adapter.friendly_name.is_empty() {
+                        adapter.friendly_name
+                    } else {
+                        adapter.name
+                    };
+                    routes.push(RouteCandidate {
+                        interface: name,
+                        metric: adapter.ipv6_metric,
+                    });
+                }
+            }
+            routes
+        }
+        #[cfg(not(any(target_os = "linux", windows)))]
         {
             Vec::new()
         }

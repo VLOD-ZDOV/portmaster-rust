@@ -266,5 +266,27 @@ async fn wildcard_listener_matches_local_addresses_only() {
     running.shutdown().await;
 }
 
+#[tokio::test]
+async fn wildcard_port_conflict_falls_back_to_loopback() {
+    // Block 127.0.0.1 on this port.
+    // Binding 0.0.0.0 will fail with EADDRINUSE, fallback to 127.0.0.1 fails,
+    // and fallback to 127.0.0.17 succeeds!
+    let blocker = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let port = blocker.local_addr().unwrap().port();
+
+    let rig = rig(FakeResolver::answering());
+    let running = start(rig.ns.clone(), &format!("0.0.0.0:{port}"), StartOptions::default())
+        .await
+        .unwrap();
+
+    let addrs = running.local_addrs();
+    assert_eq!(addrs.len(), 1);
+    assert_eq!(addrs[0].ip(), IpAddr::V4(Ipv4Addr::new(127, 0, 0, 17)));
+    assert_eq!(addrs[0].port(), port);
+    assert!(running.failures().is_empty());
+
+    running.shutdown().await;
+}
+
 #[allow(dead_code)]
 fn _types(_: SocketAddr) {}
