@@ -29,8 +29,6 @@ pub fn AppDetailView(app_id: String) -> impl IntoView {
     // Endpoint rules list local state
     let (new_rule, set_new_rule) = signal(String::new());
     let (new_rule_action, set_new_rule_action) = signal("block".to_string());
-    let (custom_dns, set_custom_dns) = signal("1.1.1.1".to_string());
-    let (block_lan, set_block_lan) = signal(false);
 
     let state_back = state.clone();
     let on_back = move |_| {
@@ -40,7 +38,11 @@ pub fn AppDetailView(app_id: String) -> impl IntoView {
     let id_clone = app_id.clone();
     let profile = Memo::new(move |_| {
         let list = profiles.get();
-        list.into_iter().find(|p| p.id == id_clone)
+        list.into_iter().find(|p| {
+            p.id == id_clone
+                || format!("{}/{}", p.source, p.id) == id_clone
+                || (id_clone.contains('/') && id_clone.split('/').last() == Some(&p.id))
+        })
     });
 
     view! {
@@ -92,8 +94,7 @@ pub fn AppDetailView(app_id: String) -> impl IntoView {
                     .filter(|c| {
                         c.profile_id == app_id_curr
                             || c.profile_id.ends_with(&format!("/{}", app_id_curr))
-                            || c.profile_name.eq_ignore_ascii_case(&app_name_curr)
-                            || (!app_id_curr.is_empty() && c.profile_name.to_lowercase().contains(&app_id_curr.to_lowercase()))
+                            || (!app_name_curr.is_empty() && c.profile_name.eq_ignore_ascii_case(&app_name_curr))
                     })
                     .collect();
 
@@ -325,8 +326,7 @@ pub fn AppDetailView(app_id: String) -> impl IntoView {
                                         .filter(|c| {
                                             c.profile_id == app_id_curr
                                                 || c.profile_id.ends_with(&format!("/{}", app_id_curr))
-                                                || c.profile_name.eq_ignore_ascii_case(&app_name_curr)
-                                                || (!app_id_curr.is_empty() && c.profile_name.to_lowercase().contains(&app_id_curr.to_lowercase()))
+                                                || (!app_name_curr.is_empty() && c.profile_name.eq_ignore_ascii_case(&app_name_curr))
                                         })
                                         .collect();
 
@@ -433,110 +433,215 @@ pub fn AppDetailView(app_id: String) -> impl IntoView {
                                 }
 
                                 // 2. Rules Tab
-                                AppTab::Rules => view! {
-                                    <div class="space-y-4">
-                                        // Add New Rule Bar
-                                        <div class="p-3 bg-[#1b1b1b] border border-[#2c2c2c] rounded flex flex-col sm:flex-row items-center gap-2">
-                                            <input
-                                                type="text"
-                                                placeholder="Add domain, IP, or wildcard rule (e.g. *.telemetry.com)..."
-                                                prop:value=move || new_rule.get()
-                                                on:input=move |ev| set_new_rule.set(event_target_value(&ev))
-                                                class="input-pm flex-1"
-                                            />
-                                            <select
-                                                prop:value=move || new_rule_action.get()
-                                                on:change=move |ev| set_new_rule_action.set(event_target_value(&ev))
-                                                class="input-pm !w-auto"
-                                            >
-                                                <option value="permit">"Permit"</option>
-                                                <option value="block">"Block"</option>
-                                                <option value="drop">"Drop"</option>
-                                            </select>
-                                            <button
-                                                on:click=move |_| {
-                                                    if !new_rule.get().trim().is_empty() {
-                                                        set_new_rule.set(String::new());
-                                                    }
-                                                }
-                                                class="btn-pm !bg-[#4e97fa] hover:!bg-[#3d86e8] text-white font-medium"
-                                            >
-                                                "Add Rule"
-                                            </button>
-                                        </div>
+                                AppTab::Rules => {
+                                    let cur_p = p.clone();
+                                    let rules: Vec<String> = cur_p.config.as_ref()
+                                        .and_then(|c| c.get("filter/endpoints"))
+                                        .and_then(|v| serde_json::from_value(v.clone()).ok())
+                                        .unwrap_or_default();
+                                    let app_id_add = cur_p.id.clone();
+                                    let rules_add = rules.clone();
 
-                                        // Active Rules Table
-                                        <div class="bg-[#1b1b1b] border border-[#2c2c2c] rounded overflow-hidden">
-                                            <table class="w-full text-left text-xs">
-                                                <thead>
-                                                    <tr class="bg-[#121213] border-b border-[#2c2c2c] text-[#888888] text-[11px]">
-                                                        <th class="py-2.5 px-3">"Rule Pattern"</th>
-                                                        <th class="py-2.5 px-3">"Action"</th>
-                                                        <th class="py-2.5 px-3">"Scope"</th>
-                                                        <th class="py-2.5 px-3 text-right">"Manage"</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody class="divide-y divide-[#2c2c2c]/60">
-                                                    <tr class="hover:bg-[#222222] transition-colors">
-                                                        <td class="py-2.5 px-3 font-mono text-white">"*.telemetry.mozilla.org"</td>
-                                                        <td class="py-2.5 px-3 text-[#e01d1d] font-semibold">"Block"</td>
-                                                        <td class="py-2.5 px-3 text-[#888888]">"Internet"</td>
-                                                        <td class="py-2.5 px-3 text-right">
-                                                            <button class="text-xs text-[#888888] hover:text-[#e01d1d]">"Delete"</button>
-                                                        </td>
-                                                    </tr>
-                                                    <tr class="hover:bg-[#222222] transition-colors">
-                                                        <td class="py-2.5 px-3 font-mono text-white">"*.safing.io"</td>
-                                                        <td class="py-2.5 px-3 text-[#1de966] font-semibold">"Permit"</td>
-                                                        <td class="py-2.5 px-3 text-[#888888]">"Internet"</td>
-                                                        <td class="py-2.5 px-3 text-right">
-                                                            <button class="text-xs text-[#888888] hover:text-[#e01d1d]">"Delete"</button>
-                                                        </td>
-                                                    </tr>
-                                                </tbody>
-                                            </table>
-                                        </div>
-                                    </div>
-                                }.into_any(),
-
-                                // 3. Settings Overrides Tab
-                                AppTab::Settings => view! {
-                                    <div class="space-y-3">
-                                        <div class="p-3 bg-[#1b1b1b] border-l-2 border-[#4e97fa] border-y border-r border-[#2c2c2c] rounded flex items-center justify-between">
-                                            <div class="space-y-0.5">
-                                                <div class="text-xs font-semibold text-white">"Block LAN / Local Subnet Access"</div>
-                                                <div class="text-[11px] text-[#888888]">"Prevents application from discovering devices or communicating over local network."</div>
-                                            </div>
-                                            <input
-                                                type="checkbox"
-                                                prop:checked=move || block_lan.get()
-                                                on:change=move |_| set_block_lan.update(|v| *v = !*v)
-                                                class="w-4 h-4 rounded bg-[#222222] border-[#2c2c2c] text-[#4e97fa]"
-                                            />
-                                        </div>
-
-                                        <div class="p-3 bg-[#1b1b1b] border-l-2 border-[#4e97fa] border-y border-r border-[#2c2c2c] rounded space-y-2">
-                                            <div class="flex items-center justify-between">
-                                                <div class="space-y-0.5">
-                                                    <div class="text-xs font-semibold text-white">"Custom App DNS Upstream"</div>
-                                                    <div class="text-[11px] text-[#888888]">"Override global DNS resolver specifically for this application."</div>
-                                                </div>
-                                                <button
-                                                    on:click=move |_| set_custom_dns.set("1.1.1.1".to_string())
-                                                    class="btn-pm text-[10px] text-[#ababab]"
+                                    view! {
+                                        <div class="space-y-4">
+                                            // Add New Rule Bar
+                                            <div class="p-3 bg-[#1b1b1b] border border-[#2c2c2c] rounded flex flex-col sm:flex-row items-center gap-2">
+                                                <input
+                                                    type="text"
+                                                    placeholder="Add domain, IP, or wildcard rule (e.g. *.telemetry.com)..."
+                                                    prop:value=move || new_rule.get()
+                                                    on:input=move |ev| set_new_rule.set(event_target_value(&ev))
+                                                    class="input-pm flex-1"
+                                                />
+                                                <select
+                                                    prop:value=move || new_rule_action.get()
+                                                    on:change=move |ev| set_new_rule_action.set(event_target_value(&ev))
+                                                    class="input-pm !w-auto"
                                                 >
-                                                    "Reset to Global"
+                                                    <option value="permit">"Permit"</option>
+                                                    <option value="block">"Block"</option>
+                                                    <option value="drop">"Drop"</option>
+                                                </select>
+                                                <button
+                                                    on:click={
+                                                        let s = state.clone();
+                                                        let app_id_str = app_id_add.clone();
+                                                        let mut current_rules = rules_add.clone();
+                                                        move |_| {
+                                                            let pattern = new_rule.get().trim().to_string();
+                                                            if !pattern.is_empty() {
+                                                                let prefix = match new_rule_action.get().as_str() {
+                                                                    "permit" => "+",
+                                                                    _ => "-",
+                                                                };
+                                                                let rule_str = format!("{} {}", prefix, pattern);
+                                                                if !current_rules.contains(&rule_str) {
+                                                                    current_rules.push(rule_str);
+                                                                    s.save_profile_config(&app_id_str, "filter/endpoints", Some(serde_json::json!(current_rules)));
+                                                                }
+                                                                set_new_rule.set(String::new());
+                                                            }
+                                                        }
+                                                    }
+                                                    class="btn-pm !bg-[#4e97fa] hover:!bg-[#3d86e8] text-white font-medium"
+                                                >
+                                                    "Add Rule"
                                                 </button>
                                             </div>
-                                            <input
-                                                type="text"
-                                                prop:value=move || custom_dns.get()
-                                                on:input=move |ev| set_custom_dns.set(event_target_value(&ev))
-                                                class="input-pm max-w-sm"
-                                            />
+
+                                            // Active Rules Table
+                                            <div class="bg-[#1b1b1b] border border-[#2c2c2c] rounded overflow-hidden">
+                                                <table class="w-full text-left text-xs">
+                                                    <thead>
+                                                        <tr class="bg-[#121213] border-b border-[#2c2c2c] text-[#888888] text-[11px]">
+                                                            <th class="py-2.5 px-3">"Rule Pattern"</th>
+                                                            <th class="py-2.5 px-3">"Action"</th>
+                                                            <th class="py-2.5 px-3">"Scope"</th>
+                                                            <th class="py-2.5 px-3 text-right">"Manage"</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody class="divide-y divide-[#2c2c2c]/60">
+                                                        {if rules.is_empty() {
+                                                            view! {
+                                                                <tr>
+                                                                    <td colspan="4" class="py-4 text-center text-[#888888]">
+                                                                        "No custom rules configured for this profile."
+                                                                    </td>
+                                                                </tr>
+                                                            }.into_any()
+                                                        } else {
+                                                            let app_id_del = cur_p.id.clone();
+                                                            rules.into_iter().map(|rule_entry| {
+                                                                let s = state.clone();
+                                                                let prof_id = app_id_del.clone();
+                                                                let rule_str = rule_entry.clone();
+                                                                let is_permit = rule_str.starts_with('+') || rule_str.starts_with("allow") || rule_str.starts_with("permit");
+                                                                let pattern = rule_str.trim_start_matches('+').trim_start_matches('-').trim_start_matches("allow").trim_start_matches("block").trim().to_string();
+                                                                let action_label = if is_permit { "Permit" } else { "Block" };
+                                                                let action_class = if is_permit { "py-2.5 px-3 text-[#1de966] font-semibold" } else { "py-2.5 px-3 text-[#e01d1d] font-semibold" };
+                                                                let to_remove = rule_entry.clone();
+
+                                                                view! {
+                                                                    <tr class="hover:bg-[#222222] transition-colors">
+                                                                        <td class="py-2.5 px-3 font-mono text-white">{pattern}</td>
+                                                                        <td class=action_class>{action_label}</td>
+                                                                        <td class="py-2.5 px-3 text-[#888888]">"Internet"</td>
+                                                                        <td class="py-2.5 px-3 text-right">
+                                                                            <button
+                                                                                on:click={
+                                                                                    let s_del = s.clone();
+                                                                                    let pid = prof_id.clone();
+                                                                                    let target_rem = to_remove.clone();
+                                                                                    move |_| {
+                                                                                        let mut remaining: Vec<String> = s_del.profiles.get().into_iter()
+                                                                                            .find(|p| p.id == pid)
+                                                                                            .and_then(|p| p.config)
+                                                                                            .and_then(|c| c.get("filter/endpoints").cloned())
+                                                                                            .and_then(|v| serde_json::from_value(v).ok())
+                                                                                            .unwrap_or_default();
+                                                                                        remaining.retain(|r| r != &target_rem);
+                                                                                        s_del.save_profile_config(&pid, "filter/endpoints", Some(serde_json::json!(remaining)));
+                                                                                    }
+                                                                                }
+                                                                                class="text-xs text-[#888888] hover:text-[#e01d1d] cursor-pointer"
+                                                                            >
+                                                                                "Delete"
+                                                                            </button>
+                                                                        </td>
+                                                                    </tr>
+                                                                }
+                                                            }).collect_view().into_any()
+                                                        }}
+                                                    </tbody>
+                                                </table>
+                                            </div>
                                         </div>
-                                    </div>
-                                }.into_any(),
+                                    }.into_any()
+                                }
+
+                                // 3. Settings Overrides Tab
+                                AppTab::Settings => {
+                                    let cur_p = p.clone();
+                                    let is_lan_blocked = cur_p.config.as_ref()
+                                        .and_then(|c| c.get("filter/blockLAN").or_else(|| c.get("filter/blockLan")))
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(false);
+                                    let current_dns = cur_p.config.as_ref()
+                                        .and_then(|c| c.get("dns/servers"))
+                                        .and_then(|v| {
+                                            if let Some(arr) = v.as_array() {
+                                                arr.first().and_then(|s| s.as_str()).map(String::from)
+                                            } else {
+                                                v.as_str().map(String::from)
+                                            }
+                                        })
+                                        .unwrap_or_default();
+                                    let app_id_cfg1 = cur_p.id.clone();
+                                    let app_id_cfg2 = cur_p.id.clone();
+                                    let app_id_cfg3 = cur_p.id.clone();
+
+                                    view! {
+                                        <div class="space-y-3">
+                                            <div class="p-3 bg-[#1b1b1b] border-l-2 border-[#4e97fa] border-y border-r border-[#2c2c2c] rounded flex items-center justify-between">
+                                                <div class="space-y-0.5">
+                                                    <div class="text-xs font-semibold text-white">"Block LAN / Local Subnet Access"</div>
+                                                    <div class="text-[11px] text-[#888888]">"Prevents application from discovering devices or communicating over local network."</div>
+                                                </div>
+                                                <input
+                                                    type="checkbox"
+                                                    prop:checked=move || is_lan_blocked
+                                                    on:change={
+                                                        let s = state.clone();
+                                                        let pid = app_id_cfg1.clone();
+                                                        move |_| {
+                                                            s.save_profile_config(&pid, "filter/blockLAN", Some(serde_json::json!(!is_lan_blocked)));
+                                                        }
+                                                    }
+                                                    class="w-4 h-4 rounded bg-[#222222] border-[#2c2c2c] text-[#4e97fa] cursor-pointer"
+                                                />
+                                            </div>
+
+                                            <div class="p-3 bg-[#1b1b1b] border-l-2 border-[#4e97fa] border-y border-r border-[#2c2c2c] rounded space-y-2">
+                                                <div class="flex items-center justify-between">
+                                                    <div class="space-y-0.5">
+                                                        <div class="text-xs font-semibold text-white">"Custom App DNS Upstream"</div>
+                                                        <div class="text-[11px] text-[#888888]">"Override global DNS resolver specifically for this application."</div>
+                                                    </div>
+                                                    <button
+                                                        on:click={
+                                                            let s = state.clone();
+                                                            let pid = app_id_cfg2.clone();
+                                                            move |_| {
+                                                                s.save_profile_config(&pid, "dns/servers", None);
+                                                            }
+                                                        }
+                                                        class="btn-pm text-[10px] text-[#ababab]"
+                                                    >
+                                                        "Reset to Global"
+                                                    </button>
+                                                </div>
+                                                <input
+                                                    type="text"
+                                                    placeholder="Inheriting Global DNS (e.g. Quad9 / Cloudflare)"
+                                                    prop:value=move || current_dns.clone()
+                                                    on:change={
+                                                        let s = state.clone();
+                                                        let pid = app_id_cfg3.clone();
+                                                        move |ev| {
+                                                            let val = event_target_value(&ev).trim().to_string();
+                                                            if val.is_empty() {
+                                                                s.save_profile_config(&pid, "dns/servers", None);
+                                                            } else {
+                                                                s.save_profile_config(&pid, "dns/servers", Some(serde_json::json!([val])));
+                                                            }
+                                                        }
+                                                    }
+                                                    class="input-pm max-w-sm"
+                                                />
+                                            </div>
+                                        </div>
+                                    }.into_any()
+                                }
 
                                 // 4. Details Tab
                                 AppTab::Details => {

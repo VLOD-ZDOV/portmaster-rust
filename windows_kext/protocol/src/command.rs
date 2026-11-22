@@ -77,6 +77,9 @@ fn as_type<T>(bytes: &[u8]) -> Option<&T> {
         return None;
     }
     let ptr: *const u8 = bytes.as_ptr();
+    if (ptr as usize) % core::mem::align_of::<T>() != 0 {
+        return None;
+    }
     let t_ptr: *const T = ptr as _;
     unsafe { t_ptr.as_ref() }
 }

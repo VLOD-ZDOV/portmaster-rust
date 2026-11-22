@@ -41,12 +41,22 @@ fn main() -> ExitCode {
     if options.recover_iptables {
         #[cfg(target_os = "linux")]
         {
+            if !nix::unistd::geteuid().is_root() {
+                eprintln!("Error: recovering iptables requires root privileges. Please run with sudo or as root.");
+                return ExitCode::FAILURE;
+            }
             use pm_interception::iptables::{self, Cmd};
+            let mut failed = false;
             if let Err(error) = iptables::deactivate(&Cmd::v4(), iptables::ONCE, iptables::V4_CHAINS) {
                 eprintln!("failed to clean up IPv4 iptables: {error}");
+                failed = true;
             }
             if let Err(error) = iptables::deactivate(&Cmd::v6(), iptables::ONCE, iptables::V6_CHAINS) {
                 eprintln!("failed to clean up IPv6 iptables: {error}");
+                failed = true;
+            }
+            if failed {
+                return ExitCode::FAILURE;
             }
             println!("iptables rules recovered");
         }
@@ -80,6 +90,12 @@ fn main() -> ExitCode {
 }
 
 fn run_interactive(options: cli::Options) -> ExitCode {
+    #[cfg(target_os = "linux")]
+    if !nix::unistd::geteuid().is_root() {
+        eprintln!("Error: Portmaster requires root privileges to manage firewall and network interception. Please run with sudo or as root.");
+        return ExitCode::FAILURE;
+    }
+
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

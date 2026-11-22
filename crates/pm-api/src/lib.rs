@@ -8,9 +8,8 @@
 //!
 //! * Path patterns support `{name}` segments, which covers the registered
 //!   endpoints; gorilla-specific regex patterns are not supported.
-//! * Session cookies, the database WebSocket bridge and the UI zip server are
-//!   not implemented yet; API keys, the authenticator hook and development mode
-//!   are.
+//! * Session cookies (via `session`), the database WebSocket bridge (via `database_ws`),
+//!   and the UI zip server (via `ui`) are implemented.
 //! * `expires` in API keys is parsed and enforced; expired keys are dropped from
 //!   the registry and never authorize a request.
 //! * Error and content-type behavior of the Go router (security headers, CORS
@@ -655,12 +654,23 @@ impl Api {
 
     fn check_api_key(&self, request: &Request) -> Option<AuthToken> {
         let key = bearer_token(&request.header)?;
-        let token = self
-            .api_keys
-            .read()
-            .expect("lock poisoned")
-            .get(key.as_str())
-            .cloned()?;
+        let key_bytes = key.as_bytes();
+        let guard = self.api_keys.read().expect("lock poisoned");
+        let mut matched_token: Option<AuthToken> = None;
+        for (reg_key, token) in guard.iter() {
+            let reg_bytes = reg_key.as_bytes();
+            if reg_bytes.len() == key_bytes.len() {
+                // Constant-time byte-wise comparison to prevent timing attacks (BUG-077).
+                let mut diff = 0u8;
+                for (a, b) in reg_bytes.iter().zip(key_bytes.iter()) {
+                    diff |= a ^ b;
+                }
+                if diff == 0 {
+                    matched_token = Some(token.clone());
+                }
+            }
+        }
+        let token = matched_token?;
         // Defense in depth, matching Go's `checkAPIKey`: even if a stale token
         // is still registered, an expired key must never authorize.
         if token.expired() {

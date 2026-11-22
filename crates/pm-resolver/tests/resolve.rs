@@ -640,13 +640,14 @@ async fn special_domains_follow_rfc6761_and_settings() {
     assert_eq!(err.error, QueryError::Invalid);
     assert!(err.error.is_not_found());
 
-    // The environment resolver is not ported: it has no answer.
-    let err = h
+    // The environment resolver synthesizes the router address.
+    let ok = h
         .service
         .resolve(q("router.local.portmaster.home.arpa"))
         .await
-        .unwrap_err();
-    assert!(err.error.is_not_found());
+        .unwrap();
+    assert_eq!(ok.rcode, 0);
+    assert!(!ok.answer.is_empty());
 }
 
 #[tokio::test]

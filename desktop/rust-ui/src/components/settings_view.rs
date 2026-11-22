@@ -125,7 +125,9 @@ pub fn SettingsView() -> impl IntoView {
                 <div class="md:col-span-3 space-y-2">
                     {move || {
                         let sub = active_subsystem.get();
-                        let query = search_term.get().to_lowercase();
+                        let local_q = search_term.get().to_lowercase();
+                        let global_q = state.filter_query.get().to_lowercase();
+                        let query = if !local_q.is_empty() { local_q } else { global_q };
                         let current_exp = expertise_level.get();
                         let all_settings = settings.get();
 
@@ -371,12 +373,18 @@ fn SettingRow(setting: Setting) -> impl IntoView {
                                     />
                                     <button
                                         on:click={
-                                            let mut updated = items_clone.clone();
                                             let k_add = k.clone();
                                             let s_add = s.clone();
+                                            let default_items = items_clone.clone();
                                             move |_| {
                                                 let val = new_item.get().trim().to_string();
                                                 if !val.is_empty() {
+                                                    let mut updated = s_add.settings.get()
+                                                        .into_iter()
+                                                        .find(|item| item.key == k_add)
+                                                        .and_then(|item| item.effective_value().as_array().cloned())
+                                                        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>())
+                                                        .unwrap_or_else(|| default_items.clone());
                                                     updated.push(val);
                                                     s_add.update_setting(&k_add, serde_json::json!(updated));
                                                     set_new_item.set(String::new());

@@ -55,7 +55,7 @@ impl Network {
                             .as_ref()
                             .map_or((None, 0), |entity| (entity.ip, entity.port));
                         let info = PacketInfo {
-                            inbound: false, // src == local
+                            inbound: conn.inbound,
                             in_tunnel: false,
                             version: conn.ip_version,
                             protocol: conn.ip_protocol,

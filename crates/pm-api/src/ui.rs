@@ -3,12 +3,11 @@
 //! Archives are read from `<bin-dir>/<module>.zip` on first use and kept in
 //! memory. Routes:
 //!
-//! * `/assets/<path>` serves from `assets.zip` (missing paths fall back to
-//!   `index.html`).
+//! * `/assets/<path>` serves from `assets.zip` (missing paths return 404).
 //! * `/ui/modules/<module>` redirects to the module root with a trailing slash.
 //! * `/ui/modules/<module>/` serves `index.html`.
 //! * `/ui/modules/<module>/<path>` serves a file, falling back to `index.html`
-//!   for unknown paths (the UI uses client-side routing).
+//!   for unknown paths without static extensions (the UI uses client-side routing).
 //! * `/` redirects to `/ui/modules/portmaster/`.
 
 use std::collections::HashMap;
@@ -204,19 +203,37 @@ fn serve(module: &str, requested_path: &str, archives: &UiArchives) -> AxumRespo
         }
     };
 
-    // Unknown paths fall back to the single page application index.
+    // Unknown paths fall back to the single page application index only for non-asset modules
+    // and non-static-asset file requests (SPA client routes).
+    let is_static_asset = module == ASSETS_MODULE || {
+        let ext = path
+            .rsplit_once('.')
+            .map(|(_, e)| e.to_ascii_lowercase())
+            .unwrap_or_default();
+        !ext.is_empty() && ext != "html" && ext != "htm"
+    };
+
     let (path, data) = match archive.get(&path) {
         Some(data) => (path, data),
-        None => match archive.get("index.html") {
-            Some(data) => ("index.html".to_string(), data),
-            None => {
+        None => {
+            if is_static_asset {
                 return (
                     StatusCode::NOT_FOUND,
                     format!("resource \"{requested_path}\" not found\n"),
                 )
-                    .into_response()
+                    .into_response();
             }
-        },
+            match archive.get("index.html") {
+                Some(data) => ("index.html".to_string(), data),
+                None => {
+                    return (
+                        StatusCode::NOT_FOUND,
+                        format!("resource \"{requested_path}\" not found\n"),
+                    )
+                        .into_response()
+                }
+            }
+        }
     };
 
     let mut response = AxumResponse::new(Body::from(data.clone()));

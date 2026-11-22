@@ -169,9 +169,9 @@ impl Setting {
             .unwrap_or("General")
     }
 
-    /// Primary database key: `config:options/<key>`.
+    /// Primary database key: `config:<key>`.
     pub fn database_key(&self) -> String {
-        format!("config:options/{}", self.key)
+        format!("config:{}", self.key)
     }
 }
 

@@ -64,7 +64,7 @@ impl SqliteStorage {
             "PRAGMA synchronous=NORMAL;
              PRAGMA cache_size=-10000;",
         )?;
-        conn.busy_timeout(Duration::from_millis(3000))?;
+        conn.busy_timeout(Duration::from_millis(10000))?;
 
         run_migrations(&conn)?;
 

@@ -1,7 +1,7 @@
 # Installation scripts order
 
 Execution order of installation scripts (`preInstallScript, preRemoveScript, postInstallScript, postRemoveScript`) is different for DEB and RPM packages.
-**NOTE!** 'remove' scripts is using from old version!
+**NOTE:** During package upgrade, the 'remove' scripts executed are those from the previously installed (old) package version, following standard dpkg and rpm behavior.
 
 ## DEB scripts order
 

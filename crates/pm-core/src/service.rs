@@ -373,13 +373,8 @@ impl Service {
             tracing::warn!(%error, "profile: some global settings are invalid");
         }
 
-        // The config file is stronger than the command line flags, but reset stale test port 8171.
-        let mut listen_address = config.get_as_string(CFG_LISTEN_ADDRESS, &options.api_address)();
-        if listen_address == "127.0.0.1:8171" && options.api_address == crate::cli::DEFAULT_API_ADDRESS {
-            tracing::warn!("service: resetting stale 8171 listenAddress to {}", crate::cli::DEFAULT_API_ADDRESS);
-            listen_address = crate::cli::DEFAULT_API_ADDRESS.to_string();
-            let _ = config.set_config_option(CFG_LISTEN_ADDRESS, serde_json::Value::String(listen_address.clone()));
-        }
+        // The config file is stronger than the command line flags.
+        let listen_address = config.get_as_string(CFG_LISTEN_ADDRESS, &options.api_address)();
         let dev_mode = config.get_as_bool(CFG_DEV_MODE, options.dev_mode)();
         let api_keys = config.get_as_string_array(CFG_API_KEYS, &[])();
 

@@ -1,10 +1,11 @@
 #!/bin/bash
+set -eo pipefail
 
 echo "[ ] Post-Install script [arg1='$1' arg2='$2']"
 
 echo "[ ] Stopping old service (if exists)"
-systemctl stop portmaster.service
-systemctl disable portmaster.service
+systemctl stop portmaster.service 2>/dev/null || true
+systemctl disable portmaster.service 2>/dev/null || true
 
 #
 # Migration from v1
@@ -13,42 +14,44 @@ OLD_INSTALLATION_DIR="/opt/safing/portmaster"
 MIGRATED_FILE_FLAG="$OLD_INSTALLATION_DIR/migrated.txt"
 if [ -d "$OLD_INSTALLATION_DIR" ]; then
     if [ ! -e "$MIGRATED_FILE_FLAG" ]; then
-        echo "[ ] Starting migration form v1 ..."
+        echo "[ ] Starting migration from v1 ..."
         
         # Because the service file need to change path, first the links to the old service needs to be removed.
         echo "[ ] V1 migration: Removing old service"
-        rm /etc/systemd/system/portmaster.service # new V2 service registered at "/usr/lib/systemd/system/portmaster.service"
+        rm -f /etc/systemd/system/portmaster.service || true # new V2 service registered at "/usr/lib/systemd/system/portmaster.service"
 
         # Migrate config
         echo "[ ] V1 migration: Copying V1 configuration"
-        cp -r $OLD_INSTALLATION_DIR/databases /var/lib/portmaster
-        cp -r $OLD_INSTALLATION_DIR/config.json /var/lib/portmaster/config.json
+        mkdir -p /var/lib/portmaster
+        if [ -d "$OLD_INSTALLATION_DIR/databases" ]; then
+            cp -r "$OLD_INSTALLATION_DIR/databases" /var/lib/portmaster/
+        fi
+        if [ -f "$OLD_INSTALLATION_DIR/config.json" ]; then
+            cp "$OLD_INSTALLATION_DIR/config.json" /var/lib/portmaster/config.json
+        fi
 
         # Remove shortcut
         echo "[ ] V1 migration: Removing V1 shortcuts"
-        rm /etc/xdg/autostart/portmaster_notifier.desktop
-        rm /usr/share/applications/portmaster_notifier.desktop
+        rm -f /etc/xdg/autostart/portmaster_notifier.desktop || true
+        rm -f /usr/share/applications/portmaster_notifier.desktop || true
         # app V1 shortcut
         # NOTE: new V2 shortcut registered as "Portmaster.desktop" (first letter uppercase), so we can distinguish between V1 and V2 shortcuts.
-        rm /usr/share/applications/portmaster.desktop 
+        rm -f /usr/share/applications/portmaster.desktop || true
 
         # Remove V1 files (except configuration)
         # (keeping V1 configuration for a smooth downgrade, if needed)
         echo "[ ] V1 migration: Removing V1 files"
-        rm -fr $OLD_INSTALLATION_DIR/exec
-        rm -fr $OLD_INSTALLATION_DIR/logs
-        rm -fr $OLD_INSTALLATION_DIR/updates
-        rm -fr $OLD_INSTALLATION_DIR/databases/cache
-        rm -fr $OLD_INSTALLATION_DIR/databases/icons
-        rm -fr $OLD_INSTALLATION_DIR/databases/history.db
+        rm -fr "$OLD_INSTALLATION_DIR/exec" "$OLD_INSTALLATION_DIR/logs" "$OLD_INSTALLATION_DIR/updates" \
+               "$OLD_INSTALLATION_DIR/databases/cache" "$OLD_INSTALLATION_DIR/databases/icons" \
+               "$OLD_INSTALLATION_DIR/databases/history.db" || true
 
-        for file in $OLD_INSTALLATION_DIR/*; do
+        for file in "$OLD_INSTALLATION_DIR"/*; do
             if [ -f "$file" ] && [ "$(basename "$file")" != "config.json" ]; then
-                rm "$file"
+                rm -f "$file" || true
             fi
         done
 
-        touch $MIGRATED_FILE_FLAG
+        touch "$MIGRATED_FILE_FLAG" || true
         echo "[ ] Migration complete"
     fi
 fi
@@ -56,17 +59,22 @@ fi
 #
 # Fix selinux permissions for portmaster-core if we have semanage available.
 #
-if command -V semanage >/dev/null 2>&1; then
+if command -v semanage >/dev/null 2>&1; then
     echo "[ ] Fixing SELinux permissions"
-    semanage fcontext -a -t bin_t -s system_u $(realpath /usr/lib)'/portmaster/portmaster-core' || :
-    restorecon -R /usr/lib/portmaster/portmaster-core 2>/dev/null >&2 || :
+    semanage fcontext -a -t bin_t -s system_u "$(realpath /usr/lib)/portmaster/portmaster-core" 2>/dev/null || true
+    restorecon -R /usr/lib/portmaster/portmaster-core 2>/dev/null || true
 fi
 
 echo "[ ] Initializing binary files"
-mv /usr/bin/portmaster /usr/lib/portmaster/portmaster
-ln -s /usr/lib/portmaster/portmaster /usr/bin/portmaster 
+mkdir -p /usr/lib/portmaster
+if [ -f /usr/bin/portmaster ] && [ ! -L /usr/bin/portmaster ]; then
+    mv -f /usr/bin/portmaster /usr/lib/portmaster/portmaster
+fi
+ln -sf /usr/lib/portmaster/portmaster /usr/bin/portmaster
 
-chmod +x /usr/lib/portmaster/portmaster-core
+if [ -f /usr/lib/portmaster/portmaster-core ]; then
+    chmod +x /usr/lib/portmaster/portmaster-core
+fi
 
 echo "[ ] Enabling service"
 systemctl daemon-reload

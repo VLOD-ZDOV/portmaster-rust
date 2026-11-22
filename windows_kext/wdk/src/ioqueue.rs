@@ -191,7 +191,6 @@ impl<T> IOQueue<T> {
                     let mut curr = list_entries;
                     while !curr.is_null() && curr != queue_head {
                         let next = (*curr).Flink;
-                        dbg!("discarding entry");
                         let _ = Box::from_raw(curr as *mut Entry<T>);
                         if next == list_entries {
                             break;

@@ -390,6 +390,21 @@ impl Nameserver {
             }
         };
 
+        let conn_pid = conn.lock().expect("lock poisoned").pid;
+        if conn_pid != 0 && conn_pid == std::process::id() as i32 {
+            tracing::warn!(
+                "nameserver: detected self-directed query loop from own PID {} for {id}, dropping query",
+                conn_pid
+            );
+            return self
+                .send(
+                    request,
+                    &StaticResponder::refused(&["self-directed query loop detected"]),
+                    &[],
+                )
+                .await;
+        }
+
         let mut flow = Flow {
             rr_cache: None,
             cancel: cancel.clone(),

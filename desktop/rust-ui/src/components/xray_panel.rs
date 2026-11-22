@@ -18,8 +18,28 @@ pub fn XrayPanel() -> impl IntoView {
     let xray_nodes = state.xray_nodes;
     let is_busy = state.is_busy;
     let route_by_default = state.route_by_default;
+    let settings = state.settings;
 
     let (new_sub_url, set_new_sub_url) = signal(String::new());
+
+    let routing_rules = move || {
+        let all_settings = settings.get();
+        if let Some(s) = all_settings.iter().find(|s| s.key == "xray/rules") {
+            if let Some(serde_json::Value::Array(arr)) = &s.value {
+                let rules: Vec<String> = arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
+                if !rules.is_empty() {
+                    return rules;
+                }
+            }
+        }
+        vec![
+            "+ geosite:blocked".to_string(),
+            "+ geoip:telegram".to_string(),
+            "- geoip:ru".to_string(),
+            "- LAN".to_string(),
+            "- Localhost".to_string(),
+        ]
+    };
 
     let on_toggle_vpn = {
         let state = state.clone();
@@ -207,10 +227,14 @@ pub fn XrayPanel() -> impl IntoView {
                         class="input-pm text-xs"
                     />
                     <button
-                        on:click=move |_| {
-                            let url = new_sub_url.get();
-                            if !url.is_empty() {
-                                set_new_sub_url.set(String::new());
+                        on:click={
+                            let state = state.clone();
+                            move |_| {
+                                let url = new_sub_url.get();
+                                if !url.trim().is_empty() {
+                                    state.add_xray_subscription(url.trim().to_string());
+                                    set_new_sub_url.set(String::new());
+                                }
                             }
                         }
                         class="btn-pm !bg-[#4e97fa] hover:!bg-[#3d86e8] text-white whitespace-nowrap"
@@ -309,21 +333,20 @@ pub fn XrayPanel() -> impl IntoView {
                 </div>
 
                 <div class="flex flex-wrap gap-1.5 pt-1">
-                    <span class="px-2 py-0.5 rounded bg-[#222222] text-[#4e97fa] border border-[#2c2c2c] text-[11px] font-mono">
-                        "+ geosite:blocked"
-                    </span>
-                    <span class="px-2 py-0.5 rounded bg-[#222222] text-[#4e97fa] border border-[#2c2c2c] text-[11px] font-mono">
-                        "+ geoip:telegram"
-                    </span>
-                    <span class="px-2 py-0.5 rounded bg-[#222222] text-[#888888] border border-[#2c2c2c] text-[11px] font-mono">
-                        "- geoip:ru"
-                    </span>
-                    <span class="px-2 py-0.5 rounded bg-[#222222] text-[#888888] border border-[#2c2c2c] text-[11px] font-mono">
-                        "- LAN"
-                    </span>
-                    <span class="px-2 py-0.5 rounded bg-[#222222] text-[#888888] border border-[#2c2c2c] text-[11px] font-mono">
-                        "- Localhost"
-                    </span>
+                    {move || {
+                        routing_rules().into_iter().map(|rule| {
+                            let is_proxy = rule.trim_start().starts_with('+');
+                            view! {
+                                <span class=if is_proxy {
+                                    "px-2 py-0.5 rounded bg-[#222222] text-[#4e97fa] border border-[#2c2c2c] text-[11px] font-mono"
+                                } else {
+                                    "px-2 py-0.5 rounded bg-[#222222] text-[#888888] border border-[#2c2c2c] text-[11px] font-mono"
+                                }>
+                                    {rule}
+                                </span>
+                            }
+                        }).collect::<Vec<_>>()
+                    }}
                 </div>
             </div>
         </div>

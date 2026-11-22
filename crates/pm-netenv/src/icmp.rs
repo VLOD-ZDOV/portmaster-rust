@@ -288,6 +288,19 @@ struct ListenerState {
 /// The packet channel returned to a listener's caller.
 pub type PacketReceiver = mpsc::Receiver<Box<dyn IcmpPacket>>;
 
+static GLOBAL_ICMP_LISTENER: std::sync::LazyLock<Arc<IcmpListener>> =
+    std::sync::LazyLock::new(|| Arc::new(IcmpListener::new()));
+
+/// Returns the shared global ICMP listener, like Go's package variables.
+pub fn global_listener() -> &'static Arc<IcmpListener> {
+    &GLOBAL_ICMP_LISTENER
+}
+
+/// Submits a packet to the global ICMP listener, like Go `SubmitPacketToICMPListener`.
+pub fn submit_packet(packet: Box<dyn IcmpPacket>) -> bool {
+    GLOBAL_ICMP_LISTENER.submit_packet(packet)
+}
+
 /// Single-use ICMP listener, like the package-level variables in Go.
 ///
 /// Calls to [`IcmpListener::listen`] wait for the previous listener to be done;

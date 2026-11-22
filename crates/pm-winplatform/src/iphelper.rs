@@ -359,7 +359,7 @@ impl LearningBufSize {
     }
 
     fn get(&mut self) -> usize {
-        self.uses_left -= 1;
+        self.uses_left = self.uses_left.saturating_sub(1);
         if self.uses_left == 0 {
             self.size = (self.size / 2).max(self.start);
             self.uses_left = self.use_for;
@@ -442,7 +442,7 @@ pub fn get_table(ip_version: u8, protocol: u8) -> Result<TableData> {
             NO_ERROR => return parse_table(&buf, ip_version, protocol),
             WIN_ERR_INSUFFICIENT_BUFFER if attempt < MAX_TRIES => {
                 let new_size = hint.lock().expect("lock poisoned").increase(size as usize);
-                buf.resize(new_size, 0);
+                buf.resize(new_size.max(size as usize), 0);
             }
             WIN_ERR_INSUFFICIENT_BUFFER => {
                 return Err(TableError::InsufficientBuffer {

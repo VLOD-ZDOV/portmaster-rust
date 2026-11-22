@@ -18,6 +18,9 @@ pub fn SideDash() -> impl IntoView {
     let notifications = state.notifications;
     let xray_status = state.xray_status;
     let security_level = state.security_level;
+    let conn_state = state.client.state;
+    let is_paused = state.is_paused;
+    let is_connected = move || conn_state.get() == crate::client::ConnectionState::Connected;
 
     let (scout_search, set_scout_search) = signal(String::new());
     let (sort_by, set_sort_by) = signal("Activity".to_string());
@@ -93,7 +96,7 @@ pub fn SideDash() -> impl IntoView {
                     <button
                         on:click={
                             let state = state.clone();
-                            move |_| state.set_security_level.set("Untrusted".to_string())
+                            move |_| state.update_security_level("Untrusted")
                         }
                         class=move || {
                             if security_level.get() == "Untrusted" {
@@ -108,7 +111,7 @@ pub fn SideDash() -> impl IntoView {
                     <button
                         on:click={
                             let state = state.clone();
-                            move |_| state.set_security_level.set("Standard (Balanced)".to_string())
+                            move |_| state.update_security_level("Standard (Balanced)")
                         }
                         class=move || {
                             if security_level.get() == "Standard (Balanced)" {
@@ -123,7 +126,7 @@ pub fn SideDash() -> impl IntoView {
                     <button
                         on:click={
                             let state = state.clone();
-                            move |_| state.set_security_level.set("Strict (Block All)".to_string())
+                            move |_| state.update_security_level("Strict (Block All)")
                         }
                         class=move || {
                             if security_level.get() == "Strict (Block All)" {
@@ -142,25 +145,59 @@ pub fn SideDash() -> impl IntoView {
             <div class="space-y-1.5">
                 <div class="flex items-center justify-between text-[11px] text-[#888888] px-0.5">
                     <span class="font-medium uppercase tracking-wider text-[10px]">"Feature Scout"</span>
-                    <span>"4/4 Active"</span>
+                    <span>
+                        {move || {
+                            let mut count = 0;
+                            if is_connected() && !is_paused.get() {
+                                count += 2;
+                            }
+                            if xray_status.get().connected {
+                                count += 1;
+                            }
+                            if is_connected() {
+                                count += 1;
+                            }
+                            format!("{}/4 Active", count)
+                        }}
+                    </span>
                 </div>
 
                 <div class="grid grid-cols-2 gap-1.5 text-xs">
                     // Secure DNS
                     <div class="p-2 rounded bg-[#1b1b1b] border border-[#2c2c2c] flex items-center space-x-2">
-                        <span class="w-2 h-2 rounded-full bg-[#1de966]"></span>
+                        <span class=move || {
+                            if !is_connected() {
+                                "w-2 h-2 rounded-full bg-[#e01d1d]"
+                            } else if is_paused.get() {
+                                "w-2 h-2 rounded-full bg-[#e9d81d]"
+                            } else {
+                                "w-2 h-2 rounded-full bg-[#1de966]"
+                            }
+                        }></span>
                         <div class="min-w-0">
                             <div class="text-[11px] font-medium text-white truncate">"Secure DNS"</div>
-                            <div class="text-[9px] text-[#888888]">"DoT / Quad9"</div>
+                            <div class="text-[9px] text-[#888888]">
+                                {move || if !is_connected() { "Offline" } else if is_paused.get() { "Paused" } else { "DoT / Quad9" }}
+                            </div>
                         </div>
                     </div>
 
                     // Privacy Filter
                     <div class="p-2 rounded bg-[#1b1b1b] border border-[#2c2c2c] flex items-center space-x-2">
-                        <span class="w-2 h-2 rounded-full bg-[#1de966]"></span>
+                        <span class=move || {
+                            if !is_connected() {
+                                "w-2 h-2 rounded-full bg-[#e01d1d]"
+                            } else if is_paused.get() {
+                                "w-2 h-2 rounded-full bg-[#e9d81d]"
+                            } else {
+                                "w-2 h-2 rounded-full bg-[#1de966]"
+                            }
+                        }></span>
                         <div class="min-w-0">
                             <div class="text-[11px] font-medium text-white truncate">"Privacy Filter"</div>
-                            <div class="text-[9px] text-[#888888]">"EasyList Active"</div>
+                            <div class="text-[9px] text-[#888888]">
+                                {move || if !is_connected() { "Offline" } else if is_paused.get() { "Paused" } else { "EasyList Active" }}
+                            </div>
                         </div>
                     </div>
 
@@ -190,10 +227,18 @@ pub fn SideDash() -> impl IntoView {
 
                     // History
                     <div class="p-2 rounded bg-[#1b1b1b] border border-[#2c2c2c] flex items-center space-x-2">
-                        <span class="w-2 h-2 rounded-full bg-[#1de966]"></span>
+                        <span class=move || {
+                            if !is_connected() {
+                                "w-2 h-2 rounded-full bg-[#e01d1d]"
+                            } else {
+                                "w-2 h-2 rounded-full bg-[#1de966]"
+                            }
+                        }></span>
                         <div class="min-w-0">
                             <div class="text-[11px] font-medium text-white truncate">"Net History"</div>
-                            <div class="text-[9px] text-[#888888]">"Logging Active"</div>
+                            <div class="text-[9px] text-[#888888]">
+                                {move || if !is_connected() { "Offline" } else { "Logging Active" }}
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -255,7 +300,7 @@ pub fn SideDash() -> impl IntoView {
                         move || {
                             let query = scout_search.get().to_lowercase();
                             let list = profiles.get();
-                            let filtered: Vec<_> = list
+                            let mut filtered: Vec<_> = list
                                 .into_iter()
                                 .filter(|p| {
                                     if query.is_empty() {
@@ -266,6 +311,20 @@ pub fn SideDash() -> impl IntoView {
                                     }
                                 })
                                 .collect();
+
+                            match sort_by.get().as_str() {
+                                "Name" => filtered.sort_by(|a, b| a.display_name().to_lowercase().cmp(&b.display_name().to_lowercase())),
+                                "Blocked" => filtered.sort_by(|a, b| {
+                                    let b_bl = b.stats.map(|s| s.blocked_count).unwrap_or(0);
+                                    let a_bl = a.stats.map(|s| s.blocked_count).unwrap_or(0);
+                                    b_bl.cmp(&a_bl)
+                                }),
+                                _ => filtered.sort_by(|a, b| {
+                                    let b_act = b.stats.map(|s| s.connections_count).unwrap_or(0);
+                                    let a_act = a.stats.map(|s| s.connections_count).unwrap_or(0);
+                                    b_act.cmp(&a_act)
+                                }),
+                            }
 
                             if filtered.is_empty() {
                                 return view! {

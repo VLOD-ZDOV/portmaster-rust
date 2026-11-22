@@ -4,22 +4,20 @@ Check latest versions of tauri packages and update them accordingly (https://cra
 Cargo.toml:  
 ```toml
 [build-dependencies]
-tauri-build = { version = "2.0.0-beta.19", features = [] } # Update to latest
+tauri-build = { version = "2.0.5", features = [] }
 
 [dependencies]
 # Tauri
-tauri = { version = "2.0.0-beta.24", features = ["tray-icon", "image-png", "config-json5", "devtools"] } # Update to latest
-tauri-plugin-shell = "2.0.0-beta"
-tauri-plugin-dialog = "2.0.0-beta"
-tauri-plugin-clipboard-manager = "2.0.0-beta"
-tauri-plugin-os = "2.0.0-beta"
-tauri-plugin-single-instance = "2.0.0-beta"
-tauri-plugin-cli = "2.0.0-beta"
-tauri-plugin-notification = "2.0.0-beta"
-tauri-plugin-log = "2.0.0-beta"
-tauri-plugin-window-state = "2.0.0-beta"
-
-tauri-cli = "2.0.0-beta.21" # Update to latest
+tauri = { version = "2.2.5", features = ["tray-icon", "image-png", "config-json5", "devtools"] }
+tauri-plugin-shell = "2.2.1"
+tauri-plugin-dialog = "2.2.0"
+tauri-plugin-clipboard-manager = "2.1.11"
+tauri-plugin-os = "2.2.0"
+tauri-plugin-single-instance = "2.2.1"
+tauri-plugin-notification = "2.2.1"
+tauri-plugin-log = "2.2.1"
+tauri-plugin-window-state = "2.2.1"
+tauri-plugin-websocket = "2"
 ```
 
 Run:

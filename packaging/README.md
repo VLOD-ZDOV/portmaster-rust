@@ -14,10 +14,10 @@ In the root directory of the repository, run the PowerShell script to generate t
 ./packaging\windows\generate_windows_installers.ps1
 ```
 
-This will output both .exe (NSIS) and .msi (WIX) installers inside the dist folder:
+This automated script invokes Tauri bundler and copies the output from `target\release\bundle\` into the `dist` folder:
 ```
-...\Portmaster\dist\windows_amd64\Portmaster_0.1.0_x64-setup.exe
-...\Portmaster\dist\windows_amd64\Portmaster_0.1.0_x64_en-US.msi
+dist\windows_amd64\Portmaster_0.1.0_x64-setup.exe
+dist\windows_amd64\Portmaster_0.1.0_x64_en-US.msi
 ```
 
 ## Manual build

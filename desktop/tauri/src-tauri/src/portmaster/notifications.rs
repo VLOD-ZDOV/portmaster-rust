@@ -11,8 +11,9 @@ pub async fn notification_handler(cli: PortAPI) {
         .request(Request::QuerySubscribe("query notifications:".to_string()))
         .await;
 
-    if let Ok(mut rx) = res {
-        while let Some(msg) = rx.recv().await {
+    match res {
+        Ok(mut rx) => {
+            while let Some(msg) = rx.recv().await {
             let res = match msg {
                 Response::Ok(key, payload) => Some((key, payload)),
                 Response::New(key, payload) => Some((key, payload)),
@@ -46,6 +47,10 @@ pub async fn notification_handler(cli: PortAPI) {
             }
         }
     }
+    Err(err) => {
+        error!("failed to subscribe to notifications: {err:?}");
+    }
+}
 }
 
 #[cfg(target_os = "linux")]

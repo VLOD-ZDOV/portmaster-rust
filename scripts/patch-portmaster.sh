@@ -79,9 +79,19 @@ if [[ "${ACTION}" == "restore" ]]; then
   if [[ -f "${LATEST_BACKUP}/portmaster-core" ]]; then
     cp -af "${LATEST_BACKUP}/portmaster-core" "${INSTALL_DIR}/portmaster-core"
   fi
+  if [[ -f "${LATEST_BACKUP}/config.json" ]]; then
+    cp -af "${LATEST_BACKUP}/config.json" "${DATA_DIR}/config.json"
+  fi
+  if [[ -d "${LATEST_BACKUP}/ui" ]]; then
+    mkdir -p "${DATA_DIR}/ui/modules/portmaster"
+    cp -af "${LATEST_BACKUP}/ui/." "${DATA_DIR}/ui/modules/portmaster/" 2>/dev/null || true
+  fi
   rm -f /etc/systemd/system/portmaster.service.d/50-rust-core.conf || true
   systemctl daemon-reload || true
-  systemctl start portmaster || true
+  if ! systemctl start portmaster; then
+    echo "[!] Error: failed to start portmaster service after restore." >&2
+    exit 1
+  fi
   echo "[+] Restore completed successfully."
   exit 0
 fi
@@ -90,16 +100,18 @@ echo "=========================================================="
 echo " Portmaster Upgrade & Patcher (Core: ${TARGET_CORE}, Release: ${TAG})"
 echo "=========================================================="
 
-# Check curl / wget
-DOWNLOAD_CMD=""
-if command -v curl >/dev/null 2>&1; then
-  DOWNLOAD_CMD="curl -fsSL"
-elif command -v wget >/dev/null 2>&1; then
-  DOWNLOAD_CMD="wget -qO-"
-else
-  echo "[!] Neither curl nor wget was found." >&2
-  exit 1
-fi
+download_file() {
+  local url="$1"
+  local dest="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fSL "${url}" -o "${dest}"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "${dest}" "${url}"
+  else
+    echo "[!] Neither curl nor wget was found." >&2
+    return 1
+  fi
+}
 
 # Resolve download URL
 echo "[*] Resolving GitHub release URL for ${REPO} (${TAG})..."
@@ -117,14 +129,14 @@ TMP_DIR=$(mktemp -d /tmp/pm-patch.XXXXXX)
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
 echo "[*] Downloading ${BIN_NAME}..."
-if ! curl -fSL "${DOWNLOAD_BIN_URL}" -o "${TMP_DIR}/${BIN_NAME}"; then
+if ! download_file "${DOWNLOAD_BIN_URL}" "${TMP_DIR}/${BIN_NAME}"; then
   echo "[!] Failed to download binary from: ${DOWNLOAD_BIN_URL}" >&2
   exit 1
 fi
 chmod +x "${TMP_DIR}/${BIN_NAME}"
 
 echo "[*] Downloading modern UI bundle (portmaster.zip)..."
-curl -fSL "${DOWNLOAD_UI_URL}" -o "${TMP_DIR}/portmaster.zip" || {
+download_file "${DOWNLOAD_UI_URL}" "${TMP_DIR}/portmaster.zip" || {
   echo "[*] Notice: portmaster.zip download failed or not found, continuing without UI patch."
 }
 
@@ -136,7 +148,7 @@ if systemctl is-active --quiet portmaster 2>/dev/null; then
   SERVICE_WAS_ACTIVE=1
 fi
 
-# Backup existing binaries
+# Backup existing binaries, config and UI
 STAMP=$(date +%Y%m%d-%H%M%S)
 CURRENT_BACKUP="${BACKUP_DIR}/${STAMP}"
 mkdir -p "${CURRENT_BACKUP}"
@@ -146,7 +158,14 @@ for target_file in portmaster-core portmaster-core-rs portmaster-core-go; do
     cp -af "${INSTALL_DIR}/${target_file}" "${CURRENT_BACKUP}/"
   fi
 done
-echo "[*] Existing binaries backed up to: ${CURRENT_BACKUP}"
+if [[ -f "${DATA_DIR}/config.json" ]]; then
+  cp -af "${DATA_DIR}/config.json" "${CURRENT_BACKUP}/"
+fi
+if [[ -d "${DATA_DIR}/ui/modules/portmaster" ]]; then
+  mkdir -p "${CURRENT_BACKUP}/ui"
+  cp -af "${DATA_DIR}/ui/modules/portmaster/." "${CURRENT_BACKUP}/ui/" 2>/dev/null || true
+fi
+echo "[*] Existing binaries, configuration and UI backed up to: ${CURRENT_BACKUP}"
 
 # Install new binary
 TARGET_BIN_PATH="${INSTALL_DIR}/${BIN_NAME}"
@@ -180,12 +199,14 @@ if [[ -f "${TMP_DIR}/portmaster.zip" ]] && command -v unzip >/dev/null 2>&1; the
   echo "[*] Updating Web UI..."
   UI_DEST="${DATA_DIR}/ui/modules/portmaster"
   mkdir -p "${UI_DEST}"
-  unzip -q -o "${TMP_DIR}/portmaster.zip" -d "${UI_DEST}" || true
+  if ! unzip -q -o "${TMP_DIR}/portmaster.zip" -d "${UI_DEST}"; then
+    echo "[!] Warning: failed to unpack portmaster.zip to ${UI_DEST}" >&2
+  fi
 
   # Also update updates path if present
   UPDATES_UI="${INSTALL_DIR}/updates/linux_amd64/ui/modules/portmaster"
   if [[ -d "${UPDATES_UI}" ]]; then
-    unzip -q -o "${TMP_DIR}/portmaster.zip" -d "${UPDATES_UI}" || true
+    unzip -q -o "${TMP_DIR}/portmaster.zip" -d "${UPDATES_UI}" 2>/dev/null || true
   fi
 fi
 
@@ -199,7 +220,10 @@ fi
 # Restart Portmaster
 if [[ ${SERVICE_WAS_ACTIVE} -eq 1 ]] || systemctl is-enabled --quiet portmaster 2>/dev/null; then
   echo "[*] Starting portmaster service..."
-  systemctl start portmaster || true
+  if ! systemctl start portmaster; then
+    echo "[!] Error: failed to start portmaster service. Check: journalctl -u portmaster -n 50" >&2
+    exit 1
+  fi
 fi
 
 echo ""

@@ -17,6 +17,7 @@ enum ScopeFilter {
     Internet,
     Lan,
     Local,
+    Inbound,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -147,6 +148,18 @@ pub fn MonitorPanel() -> impl IntoView {
                         >
                             "Local"
                         </button>
+                        <button
+                            on:click=move |_| set_selected_scope.set(ScopeFilter::Inbound)
+                            class=move || {
+                                if selected_scope.get() == ScopeFilter::Inbound {
+                                    "btn-pm !bg-[#4e97fa] text-white"
+                                } else {
+                                    "btn-pm !bg-[#222222] text-[#888888] hover:text-white"
+                                }
+                            }
+                        >
+                            "Inbound"
+                        </button>
                     </div>
 
                     // Verdict Filters
@@ -209,7 +222,9 @@ pub fn MonitorPanel() -> impl IntoView {
                         </thead>
                         <tbody class="divide-y divide-[#2c2c2c]/60">
                             {move || {
-                                let query = search_query.get().to_lowercase();
+                                let global_q = state.filter_query.get().to_lowercase();
+                                let local_q = search_query.get().to_lowercase();
+                                let query = if !local_q.is_empty() { local_q } else { global_q };
                                 let scope = selected_scope.get();
                                 let verdict = selected_verdict.get();
                                 let conns = connections.get();
@@ -223,6 +238,7 @@ pub fn MonitorPanel() -> impl IntoView {
                                             ScopeFilter::Internet => c.scope.eq_ignore_ascii_case("Internet"),
                                             ScopeFilter::Lan => c.scope.eq_ignore_ascii_case("LAN"),
                                             ScopeFilter::Local => c.scope.eq_ignore_ascii_case("Local") || c.scope.eq_ignore_ascii_case("HostLocal"),
+                                            ScopeFilter::Inbound => c.direction.eq_ignore_ascii_case("inbound"),
                                         }
                                     })
                                     .filter(|c| {
@@ -275,6 +291,8 @@ pub fn MonitorPanel() -> impl IntoView {
 
                                         let verdict_dot = if c.is_permitted() {
                                             "w-2.5 h-2.5 rounded-full bg-[#1de966] inline-block shadow-sm"
+                                        } else if c.verdict == "ask" {
+                                            "w-2.5 h-2.5 rounded-full bg-[#e9d81d] inline-block shadow-sm"
                                         } else {
                                             "w-2.5 h-2.5 rounded-full bg-[#e01d1d] inline-block shadow-sm"
                                         };

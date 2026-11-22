@@ -42,8 +42,8 @@ pub fn Navigation() -> impl IntoView {
             <div class="flex flex-col items-center w-full">
                 // Rotating Portmaster Logo
                 <div
-                    on:click=move |_| s_logo.toggle_side_dash()
-                    title="Toggle Dashboard Drawer"
+                    on:click=move |_| s_logo.navigate(Page::Monitor)
+                    title="Portmaster Dashboard / Network Monitor"
                     class="relative w-16 h-16 flex items-center justify-center cursor-pointer group"
                 >
                     <div class="relative w-8 h-8 flex items-center justify-center">
@@ -353,15 +353,20 @@ pub fn Navigation() -> impl IntoView {
                         let state = state.clone();
                         move || {
                             if is_tools_open.get() {
+                                let s_tools = state.clone();
                                 let s_reinit = state.clone();
+                                let s_dns = state.clone();
                                 let s_cleanup = state.clone();
                                 view! {
                                     <div class="fixed left-16 bottom-14 w-60 bg-[#1b1b1b] border border-[#2c2c2c] rounded-md shadow-2xl py-2 z-50 text-xs">
                                         <div class="px-3 py-1.5 border-b border-[#2c2c2c] text-[11px] text-[#ababab]">
-                                            <div>"Core: "<span class="text-white font-mono">"v1.0.0"</span></div>
+                                            <div>"Core: "<span class="text-white font-mono">{concat!("v", env!("CARGO_PKG_VERSION"))}</span></div>
                                             <div>"Channel: "<span class="text-white font-mono uppercase">"stable"</span></div>
                                         </div>
-                                        <button on:click=move |_| set_tools_open.set(false) class="w-full text-left px-3 py-2 hover:bg-[#222222] text-white flex items-center space-x-2">
+                                        <button on:click=move |_| {
+                                            s_tools.check_updates();
+                                            set_tools_open.set(false);
+                                        } class="w-full text-left px-3 py-2 hover:bg-[#222222] text-white flex items-center space-x-2">
                                             <span>"Check Updates"</span>
                                         </button>
                                         <button on:click=move |_| set_tools_open.set(false) class="w-full text-left px-3 py-2 hover:bg-[#222222] text-white flex items-center space-x-2">
@@ -376,12 +381,15 @@ pub fn Navigation() -> impl IntoView {
                                             <span>"Reload UI"</span>
                                         </button>
                                         <button on:click=move |_| {
-                                            s_reinit.select_node("node-nl-01".to_string());
+                                            s_reinit.restart_xray();
                                             set_tools_open.set(false);
                                         } class="w-full text-left px-3 py-2 hover:bg-[#222222] text-white flex items-center space-x-2">
                                             <span>"Restart Xray VPN"</span>
                                         </button>
-                                        <button on:click=move |_| set_tools_open.set(false) class="w-full text-left px-3 py-2 hover:bg-[#222222] text-white flex items-center space-x-2">
+                                        <button on:click=move |_| {
+                                            s_dns.clear_dns_cache();
+                                            set_tools_open.set(false);
+                                        } class="w-full text-left px-3 py-2 hover:bg-[#222222] text-white flex items-center space-x-2">
                                             <span>"Clear DNS Cache"</span>
                                         </button>
                                         <button on:click=move |_| {
@@ -519,22 +527,34 @@ pub fn Navigation() -> impl IntoView {
                     </button>
 
                     // Power Popover Menu
-                    {move || {
-                        if is_power_open.get() {
-                            view! {
-                                <div class="fixed left-16 bottom-2 w-48 bg-[#1b1b1b] border border-[#2c2c2c] rounded-md shadow-2xl py-2 z-50 text-xs">
-                                    <button on:click=move |_| set_power_open.set(false) class="w-full text-left px-3 py-2 hover:bg-[#222222] text-white">
-                                        "Restart Core Service"
-                                    </button>
-                                    <button on:click=move |_| set_power_open.set(false) class="w-full text-left px-3 py-2 hover:bg-[#222222] text-[#e01d1d]">
-                                        "Shutdown Portmaster"
-                                    </button>
-                                </div>
-                            }.into_any()
-                        } else {
-                            view! { <span/> }.into_any()
+                    {
+                        let s_pow1 = state.clone();
+                        let s_pow2 = state.clone();
+                        move || {
+                            if is_power_open.get() {
+                                let s1 = s_pow1.clone();
+                                let s2 = s_pow2.clone();
+                                view! {
+                                    <div class="fixed left-16 bottom-2 w-48 bg-[#1b1b1b] border border-[#2c2c2c] rounded-md shadow-2xl py-2 z-50 text-xs">
+                                        <button on:click=move |_| {
+                                            s1.restart_core();
+                                            set_power_open.set(false);
+                                        } class="w-full text-left px-3 py-2 hover:bg-[#222222] text-white">
+                                            "Restart Core Service"
+                                        </button>
+                                        <button on:click=move |_| {
+                                            s2.shutdown_core();
+                                            set_power_open.set(false);
+                                        } class="w-full text-left px-3 py-2 hover:bg-[#222222] text-[#e01d1d]">
+                                            "Shutdown Portmaster"
+                                        </button>
+                                    </div>
+                                }.into_any()
+                            } else {
+                                view! { <span/> }.into_any()
+                            }
                         }
-                    }}
+                    }
                 </div>
             </div>
         </aside>

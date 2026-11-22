@@ -100,8 +100,15 @@ function Invoke-PortmasterPatch {
         if (Test-Path (Join-Path $latestBackup "portmaster-core.exe")) {
             Copy-Item -Path (Join-Path $latestBackup "portmaster-core.exe") -Destination (Join-Path $InstallDir "portmaster-core.exe") -Force
         }
-        Start-Service -Name $ServiceName -ErrorAction SilentlyContinue
-        Write-Host "[+] Restore completed successfully." -ForegroundColor Green
+        if (Test-Path (Join-Path $latestBackup "config.json")) {
+            Copy-Item -Path (Join-Path $latestBackup "config.json") -Destination (Join-Path $DataDir "config.json") -Force
+        }
+        try {
+            Start-Service -Name $ServiceName -ErrorAction Stop
+            Write-Host "[+] Restore completed successfully." -ForegroundColor Green
+        } catch {
+            Write-Error "Failed to start service '$ServiceName': $_"
+        }
         return
     }
 
@@ -169,6 +176,11 @@ function Invoke-PortmasterPatch {
         if (Test-Path $existingBin) {
             Copy-Item -Path $existingBin -Destination (Join-Path $currentBackup "portmaster-core.exe") -Force
             Write-Host "[*] Backed up original binary to: $currentBackup" -ForegroundColor Gray
+        }
+        $existingConfig = Join-Path $DataDir "config.json"
+        if (Test-Path $existingConfig) {
+            Copy-Item -Path $existingConfig -Destination (Join-Path $currentBackup "config.json") -Force
+            Write-Host "[*] Backed up config.json to: $currentBackup" -ForegroundColor Gray
         }
 
         # Install new binary
