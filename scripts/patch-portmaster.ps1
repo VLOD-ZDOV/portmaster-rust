@@ -327,7 +327,7 @@ function Invoke-PortmasterPatch {
         $apiSw = [System.Diagnostics.Stopwatch]::StartNew()
         while ($apiSw.Elapsed.TotalSeconds -lt 25) {
             try {
-                $statusResp = Invoke-RestMethod -Uri "http://127.0.0.1:817/api/v1/status" -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop
+                $statusResp = Invoke-RestMethod -Uri "http://127.0.0.1:817/ping" -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop
                 if ($statusResp) {
                     $apiOk = $true
                     break
