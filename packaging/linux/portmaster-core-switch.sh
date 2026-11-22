@@ -67,7 +67,7 @@ newest_backup() {
 # API port can be overridden by core/listenAddress in config.json.
 api_port() {
 	local port
-	port=$(python3 -c 'import json,os,sys;d=json.load(open(os.argv[1]));print(str(d.get("core",{}).get("listenAddress","127.0.0.1:817")).rsplit(":",1)[-1])' "${DATA_DIR}/config.json" 2>/dev/null) || port=""
+	port=$(python3 -c 'import json,os,sys;d=json.load(open(os.argv[1]));addr=d.get("core",{}).get("listenAddress") if isinstance(d.get("core"),dict) else None;addr=addr or d.get("core/listenAddress","127.0.0.1:817");print(str(addr).rsplit(":",1)[-1])' "${DATA_DIR}/config.json" 2>/dev/null) || port=""
 	printf '%s' "${port:-817}"
 }
 
@@ -99,6 +99,9 @@ rollback() {
 	rm -f "${DROPIN}"
 	rmdir --ignore-fail-on-non-empty "${DROPIN_DIR}" || true
 	restart || echo "WARNING: could not restart ${UNIT}; start it manually" >&2
+	if [[ -z ${BACKUP_PATH} ]]; then
+		BACKUP_PATH=$(latest_backup)
+	fi
 	if [[ -n ${BACKUP_PATH} ]]; then
 		# The Rust core may already have rewritten these files; restore the
 		# pre-switch snapshot before starting Go again.
@@ -221,7 +224,10 @@ ui)
 Environment=PORTMASTER_UI_TYPE=rust
 UIOUF
 		restart
-		wait_ready
+		if ! wait_ready; then
+			echo "ERROR: Rust core failed to become ready after UI switch" >&2
+			exit 1
+		fi
 		echo "UI switched to the Rust/WASM pilot at / (TypeScript UI still available on the Go core)"
 		;;
 	typescript)

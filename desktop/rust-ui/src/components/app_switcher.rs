@@ -188,14 +188,15 @@ pub fn AppSwitcher() -> impl IntoView {
                                         c.active && (
                                             c.profile_id == p.id
                                                 || c.profile_id.ends_with(&format!("/{}", p.id))
-                                                || c.profile_name.eq_ignore_ascii_case(&p.name)
-                                                || (!p.id.is_empty() && c.profile_name.to_lowercase().contains(&p.id.to_lowercase()))
+                                                || (!p.name.is_empty() && c.profile_name.eq_ignore_ascii_case(&p.name))
                                         )
                                     });
                                     p.count_alive_connections() > 0 || has_live
                                 }
                                 "vpn" => p.route_via_vpn(),
-                                "blocked" => p.default_action() == "block",
+                                "blocked" => p.default_action() == "block"
+                                    || p.stats.map(|s| s.blocked_count > 0).unwrap_or(false)
+                                    || conns.iter().any(|c| c.is_blocked() && (c.profile_id == p.id || c.profile_id.ends_with(&format!("/{}", p.id)))),
                                 _ => true,
                             }
                         })

@@ -43,7 +43,7 @@ mod addresses;
 pub mod dbus;
 pub mod environment;
 mod flag;
-mod icmp;
+pub mod icmp;
 mod interfaces;
 mod network_change;
 mod notifications;
@@ -66,11 +66,11 @@ pub use flag::{
     NetworkChangeSource,
 };
 pub use icmp::{
-    build_echo, embedded_echo_ids, interface_index, parse_icmp_v4, recv_icmp, recv_timeout,
-    run_probe, target_socket_address, IcmpListener, IcmpListenerGuard, IcmpPacket, IcmpReply,
-    IcmpSocket, IcmpV4Packet, IcmpV4Type, PacketReceiver, ProbeOutcome, RecvOutcome,
-    SystemIcmpSocket, ICMP_CHANNEL_CAPACITY, ICMP_INITIAL_MAX_HOPS, ICMP_PROBE_ATTEMPTS_PER_HOP,
-    ICMP_SEND_RETRIES, ICMP_SEND_RETRY_DELAY,
+    build_echo, embedded_echo_ids, global_listener, interface_index, parse_icmp_v4, recv_icmp,
+    recv_timeout, run_probe, submit_packet, target_socket_address, IcmpListener, IcmpListenerGuard,
+    IcmpPacket, IcmpReply, IcmpSocket, IcmpV4Packet, IcmpV4Type, PacketReceiver, ProbeOutcome,
+    RecvOutcome, SystemIcmpSocket, ICMP_CHANNEL_CAPACITY, ICMP_INITIAL_MAX_HOPS,
+    ICMP_PROBE_ATTEMPTS_PER_HOP, ICMP_SEND_RETRIES, ICMP_SEND_RETRY_DELAY,
 };
 pub use interfaces::{
     canonical_mac, is_routable_unicast, network_contains, normalize_ip, InterfaceCache,

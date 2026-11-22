@@ -263,14 +263,19 @@ fn try_get_app_info(
     let mut result = Vec::new();
 
     for file in desktop_files {
-        let content = Ini::load_from_file_opt(
+        let content = match Ini::load_from_file_opt(
             file.path(),
             ParseOption {
                 enabled_escape: false,
                 enabled_quote: true,
             },
-        )
-        .map_err(|err| Error::new(ErrorKind::Other, err.to_string()))?;
+        ) {
+            Ok(c) => c,
+            Err(err) => {
+                log::debug!("failed to parse desktop file {:?}: {err}", file.path());
+                continue;
+            }
+        };
 
         let desktop_section = match content.section(Some("Desktop Entry")) {
             Some(section) => section,

@@ -1,7 +1,7 @@
 //! Reactive WebSocket client for PortAPI (WASM).
 //!
-//! Connects to `ws://127.0.0.1:817/api/database/v1` (with fallback to `/v1/database/ws`),
-//! multiplexes requests by `opID`, tracks connection state, ping/latency, and manages subscriptions.
+//! Connects to `ws://127.0.0.1:817/api/database/v1`, multiplexes requests by `opID`,
+//! tracks connection state, ping/latency, and manages subscriptions.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -66,7 +66,7 @@ type SubCallback = Arc<dyn Fn(PortApiFrame) + Send + Sync + 'static>;
 #[derive(Default)]
 struct ClientInner {
     pending_oneshot: HashMap<String, oneshot::Sender<PortApiFrame>>,
-    pending_query_stream: HashMap<String, (Vec<PortApiFrame>, oneshot::Sender<Vec<PortApiFrame>>)>,
+    pending_query_stream: HashMap<String, (Vec<PortApiFrame>, oneshot::Sender<Result<Vec<PortApiFrame>, String>>)>,
     subscriptions: HashMap<String, (String, SubCallback)>,
 }
 
@@ -150,6 +150,7 @@ impl PortApiClient {
                 match WebSocket::open(&url) {
                     Ok(ws) => {
                         set_state.set(ConnectionState::Connected);
+                        set_ping.set(Some(1));
                         backoff_ms = 500;
 
                         // Re-subscribe active subscriptions on the newly established connection
@@ -248,11 +249,20 @@ impl PortApiClient {
                     }
                     return;
                 }
-                reply_types::DONE | reply_types::ERROR => {
+                reply_types::DONE => {
                     if let Some((done_records, sender)) =
                         inner.pending_query_stream.remove(&frame.id)
                     {
-                        let _ = sender.send(done_records);
+                        let _ = sender.send(Ok(done_records));
+                    }
+                    return;
+                }
+                reply_types::ERROR => {
+                    if let Some((_, sender)) =
+                        inner.pending_query_stream.remove(&frame.id)
+                    {
+                        let err_msg = frame.key.unwrap_or_else(|| "database query error".to_string());
+                        let _ = sender.send(Err(err_msg));
                     }
                     return;
                 }
@@ -315,7 +325,7 @@ impl PortApiClient {
         self.send_raw(req.to_wire());
 
         match resp_rx.await {
-            Ok(records) => Ok(records),
+            Ok(result) => result,
             Err(_) => Err("query cancelled or connection closed".to_string()),
         }
     }

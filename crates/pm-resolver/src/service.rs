@@ -59,8 +59,7 @@ pub enum MissingResolversState {
     NoServers,
 }
 
-/// Connection of the environment and mDNS resolvers, which are not ported:
-/// they never have an answer.
+/// Connection of mDNS resolvers, returning not found when unconfigured.
 struct UnsupportedConn;
 
 #[async_trait]
@@ -78,7 +77,89 @@ impl ResolverConn for UnsupportedConn {
     async fn force_reconnect(&self) {}
 }
 
-fn builtin_resolver(config_url: &str, resolver_type: &str, source: &str) -> Arc<Resolver> {
+const ROUTER_DOMAIN: &str = "router.local.portmaster.home.arpa.";
+const CAPTIVE_PORTAL_DOMAIN: &str = "captiveportal.local.portmaster.home.arpa.";
+const INTERNAL_SPECIAL_USE_DOMAIN: &str = "portmaster.home.arpa.";
+
+/// Resolves synthetic internal Portmaster special-use domains like Go `envResolverConn`.
+pub struct EnvResolverConn {
+    env: Arc<dyn Environment>,
+}
+
+#[async_trait]
+impl ResolverConn for EnvResolverConn {
+    async fn query(&self, q: Query) -> Result<hickory_proto::op::Message, ResolveError> {
+        use hickory_proto::op::{MessageType, OpCode, ResponseCode};
+        use hickory_proto::rr::{Name, RecordType};
+        use std::str::FromStr;
+
+        let fqdn = q.fqdn.to_ascii_lowercase();
+        let mut msg = hickory_proto::op::Message::new(17, MessageType::Response, OpCode::Query);
+        msg.metadata.authoritative = true;
+
+        if fqdn == ROUTER_DOMAIN || fqdn == CAPTIVE_PORTAL_DOMAIN {
+            let nameservers = self.env.nameservers();
+            let mut ips: Vec<IpAddr> = nameservers.into_iter().map(|ns| ns.ip).collect();
+            if ips.is_empty() {
+                ips.push(IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 1)));
+            }
+            let Ok(name) = Name::from_str(&q.fqdn) else {
+                return Err(ResolveError::NotFound);
+            };
+            let mut answers = Vec::new();
+            for ip in ips {
+                match ip {
+                    IpAddr::V4(v4) if q.qtype == RecordType::A || q.qtype == RecordType::ANY => {
+                        answers.push(hickory_proto::rr::Record::from_rdata(
+                            name.clone(),
+                            17,
+                            hickory_proto::rr::RData::A(hickory_proto::rr::rdata::A(v4)),
+                        ));
+                    }
+                    IpAddr::V6(v6) if q.qtype == RecordType::AAAA || q.qtype == RecordType::ANY => {
+                        answers.push(hickory_proto::rr::Record::from_rdata(
+                            name.clone(),
+                            17,
+                            hickory_proto::rr::RData::AAAA(hickory_proto::rr::rdata::AAAA(v6)),
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+            if !answers.is_empty() {
+                for ans in answers {
+                    msg.add_answer(ans);
+                }
+                msg.metadata.response_code = ResponseCode::NoError;
+                return Ok(msg);
+            }
+            msg.metadata.response_code = ResponseCode::NXDomain;
+            return Ok(msg);
+        }
+
+        if fqdn.ends_with(INTERNAL_SPECIAL_USE_DOMAIN) {
+            msg.metadata.response_code = ResponseCode::NXDomain;
+            return Ok(msg);
+        }
+
+        Err(ResolveError::NotFound)
+    }
+    fn report_failure(&self) -> bool {
+        false
+    }
+    fn is_failing(&self) -> bool {
+        false
+    }
+    fn reset_failure(&self) {}
+    async fn force_reconnect(&self) {}
+}
+
+fn builtin_resolver(
+    config_url: &str,
+    resolver_type: &str,
+    source: &str,
+    conn: Arc<dyn ResolverConn>,
+) -> Arc<Resolver> {
     Arc::new(Resolver {
         config_url: config_url.to_string(),
         info: ResolverInfo {
@@ -96,7 +177,7 @@ fn builtin_resolver(config_url: &str, resolver_type: &str, source: &str) -> Arc<
         search_only: false,
         path: String::new(),
         link_local_unavailable: false,
-        conn: Some(Arc::new(UnsupportedConn)),
+        conn: Some(conn),
     })
 }
 
@@ -161,6 +242,10 @@ impl ResolverService {
         store: NameRecordStore,
         factory: ConnFactory,
     ) -> ResolverService {
+        let env_conn: Arc<dyn ResolverConn> = Arc::new(EnvResolverConn {
+            env: Arc::clone(&env),
+        });
+        let mdns_conn: Arc<dyn ResolverConn> = Arc::new(UnsupportedConn);
         ResolverService {
             inner: Arc::new(Inner {
                 settings,
@@ -172,11 +257,13 @@ impl ResolverService {
                     SERVER_SOURCE_ENV,
                     SERVER_TYPE_ENV,
                     SERVER_SOURCE_ENV,
+                    env_conn,
                 )],
                 mdns_resolvers: vec![builtin_resolver(
                     SERVER_SOURCE_MDNS,
                     SERVER_TYPE_MDNS,
                     SERVER_SOURCE_MDNS,
+                    mdns_conn,
                 )],
                 dedupe: Mutex::new(HashMap::new()),
                 cache_reset: Mutex::new(CacheReset::default()),
@@ -276,6 +363,12 @@ impl ResolverService {
         if new_resolvers.is_empty() {
             // Load the defaults directly, overriding the config system.
             new_resolvers = self.configured_resolvers(&default_name_servers());
+            if self.inner.settings.no_insecure_protocols() {
+                new_resolvers.retain(|r| match r.info.r#type.as_str() {
+                    SERVER_TYPE_DOT | SERVER_TYPE_DOH | SERVER_TYPE_ENV => true,
+                    _ => false,
+                });
+            }
             if new_resolvers.is_empty() {
                 tracing::error!(
                     "resolver: no (valid) dns server found in config, system or global defaults"

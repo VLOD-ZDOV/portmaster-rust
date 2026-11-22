@@ -74,15 +74,27 @@ impl ProfileStore {
                 profile.id
             )));
         }
+        let mut meta = crate::meta::ProfilesMetadata::load(&self.db);
+        meta.mark_seen(&profile.id);
+        let _ = meta.save(&self.db);
         self.db.put(self.encode(profile)?)?;
         Ok(())
     }
 
     /// Deletes a profile.
     pub fn delete(&self, profile: &Profile) -> Result<()> {
+        let mut meta = crate::meta::ProfilesMetadata::load(&self.db);
+        meta.mark_deleted(&profile.id);
+        let _ = meta.save(&self.db);
         self.db
             .delete(&make_profile_key(&profile.source, &profile.id))?;
         Ok(())
+    }
+
+    /// Checks if a profile ID is marked as deleted.
+    pub fn is_deleted(&self, id: &str) -> bool {
+        let meta = crate::meta::ProfilesMetadata::load(&self.db);
+        meta.is_deleted(id)
     }
 
     fn encode(&self, profile: &Profile) -> Result<Record> {

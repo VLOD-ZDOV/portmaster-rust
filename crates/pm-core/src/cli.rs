@@ -145,6 +145,7 @@ Flags:
       --metrics-instance string      set the default metrics instance label for all metrics
       --metrics-comment string       set the default metrics comment label
       --push-metrics string          set default URL to push prometheus metrics to
+      --recover-iptables     clean up portmaster iptables rules and exit
       --version              print version and exit
   -h, --help                 print this help and exit"
 }

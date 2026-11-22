@@ -98,13 +98,14 @@ impl PacketMetrics {
             return Ok(());
         }
 
-        let mut file = OpenOptions::new()
+        let file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.destination)?;
+        let mut writer = std::io::BufWriter::new(file);
         for record in records {
             writeln!(
-                file,
+                writer,
                 "{};{};{};{:.2}",
                 record.start,
                 format_duration(record.duration),
@@ -112,6 +113,7 @@ impl PacketMetrics {
                 record.duration.as_secs_f64() * 1_000_000.0
             )?;
         }
+        writer.flush()?;
         Ok(())
     }
 

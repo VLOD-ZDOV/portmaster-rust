@@ -23,9 +23,14 @@ systemctl disable portmaster.service
 
 echo "[ ] Removing files"
 # Remove binaries folder
-sudo rm -fr /usr/lib/portmaster
-# Remove data folder
-sudo rm -fr /var/lib/portmaster
+rm -fr /usr/lib/portmaster
+# Remove data folder only on purge (DEB: purge); preserve user config/data on standard remove
+if [ "$1" = "purge" ]; then
+    echo "[ ] Purging user data and configuration in /var/lib/portmaster"
+    rm -fr /var/lib/portmaster
+else
+    echo "[ ] Preserving user data in /var/lib/portmaster (use purge to remove data completely)"
+fi
 
 # remove V1 migration flag (if exists)
 MIGRATED_FILE_FLAG="/opt/safing/portmaster/migrated.txt"

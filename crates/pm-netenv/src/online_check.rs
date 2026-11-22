@@ -46,7 +46,7 @@ pub const CONNECTIVITY_DOMAINS: &[&str] = &[
     "network-test.debian.org.",
     "204.pop-os.org.",
     "conncheck.opensuse.org.",
-    "ping.archlinux.org",
+    "ping.archlinux.org.",
     // Android.
     "connectivitycheck.gstatic.com.",
     // Other.
@@ -273,6 +273,8 @@ impl SystemPortalProbe {
     pub fn new() -> SystemPortalProbe {
         let config = ureq::Agent::config_builder()
             .max_redirects(0)
+            .max_redirects_will_error(false)
+            .http_status_as_error(false)
             .timeout_global(Some(Duration::from_secs(1)))
             .build();
         SystemPortalProbe {

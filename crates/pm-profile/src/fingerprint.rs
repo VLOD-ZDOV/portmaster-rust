@@ -116,14 +116,20 @@ impl MatchingFingerprint {
     fn match_value(&self, value: &str) -> i32 {
         let score = match &self.matcher {
             Matcher::Equals => {
-                if value == self.value {
+                if value == self.value || (cfg!(windows) && value.eq_ignore_ascii_case(&self.value)) {
                     FINGERPRINT_EQUALS_BASE_SCORE
                 } else {
                     0
                 }
             }
             Matcher::Prefix => {
-                if value.starts_with(&self.value) {
+                let matches = if cfg!(windows) {
+                    value.len() >= self.value.len()
+                        && value[..self.value.len()].eq_ignore_ascii_case(&self.value)
+                } else {
+                    value.starts_with(&self.value)
+                };
+                if matches {
                     FINGERPRINT_PREFIX_BASE_SCORE
                 } else {
                     0

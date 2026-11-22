@@ -35,6 +35,7 @@ mod windows_impl {
     pub struct KextFile {
         handle: Handle,
         reader: std::sync::Mutex<ReadBuffer>,
+        writer: std::sync::Mutex<()>,
     }
 
     impl KextFile {
@@ -46,6 +47,7 @@ mod windows_impl {
                     buffer: vec![0_u8; read_buffer_size.max(1)],
                     pending: Vec::new(),
                 }),
+                writer: std::sync::Mutex::new(()),
             }
         }
 
@@ -130,6 +132,7 @@ mod windows_impl {
 
         /// Writes a whole command to the driver (Go `KextFile.Write`).
         fn write_all(&self, bytes: &[u8]) -> Result<()> {
+            let _guard = self.writer.lock().map_err(|_| Error::KextNotReady)?;
             let mut overlapped = Overlapped::default();
             let mut written = 0_u32;
             // SAFETY: `bytes` is a live slice, count and overlapped are locals

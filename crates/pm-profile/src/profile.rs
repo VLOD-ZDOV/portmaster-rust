@@ -321,6 +321,7 @@ impl Profile {
             cfg_key,
             serde_json::json!(entries),
         );
+        self.mark_outdated();
         true
     }
 }

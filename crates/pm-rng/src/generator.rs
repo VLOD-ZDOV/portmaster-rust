@@ -34,9 +34,8 @@ impl Generator {
         let mut gen = Generator::unseeded(kind);
         let mut seed = Vec::with_capacity(KEY_SIZE + 8);
         let mut os = [0u8; KEY_SIZE];
-        if getrandom::fill(&mut os).is_ok() {
-            seed.extend_from_slice(&os);
-        }
+        getrandom::fill(&mut os).expect("failed to seed RNG from OS entropy: getrandom failed");
+        seed.extend_from_slice(&os);
         // Go mixes in the current time among other machine-specific data.
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)

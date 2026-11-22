@@ -711,6 +711,45 @@ impl PacketEnv for CoreFirewallEnv {
         self.dns_interception.load(Ordering::SeqCst)
     }
 
+    fn submit_icmp(&self, pkt: &dyn QueuedPacket) -> bool {
+        if let Some(parsed) = pm_netenv::icmp::parse_icmp_v4(pkt.raw()) {
+            struct CoreIcmpPacket {
+                outbound: bool,
+                dst: IpAddr,
+                remote: IpAddr,
+                parsed: pm_netenv::icmp::IcmpV4Packet,
+            }
+            impl pm_netenv::icmp::IcmpPacket for CoreIcmpPacket {
+                fn load_packet_data(&mut self) -> Result<(), String> {
+                    Ok(())
+                }
+                fn is_outbound(&self) -> bool {
+                    self.outbound
+                }
+                fn destination(&self) -> IpAddr {
+                    self.dst
+                }
+                fn remote_ip(&self) -> IpAddr {
+                    self.remote
+                }
+                fn icmp_v4(&self) -> Option<&pm_netenv::icmp::IcmpV4Packet> {
+                    Some(&self.parsed)
+                }
+            }
+            let info = pkt.info();
+            let dst = info.dst.unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+            let remote = info.remote_ip().unwrap_or(dst);
+            let packet = Box::new(CoreIcmpPacket {
+                outbound: !info.inbound,
+                dst,
+                remote,
+                parsed,
+            });
+            return pm_netenv::icmp::submit_packet(packet);
+        }
+        false
+    }
+
     fn submit_system_integration_check(&self, _pkt: &dyn QueuedPacket) {
         self.compat.submit_system_integration_check_packet();
     }
@@ -1231,6 +1270,16 @@ impl Firewall {
                         remaining -= step;
                     }
                     ensure_jump_rules_at_top(ipv6);
+                }
+                // Periodic self-healing watchdog to recover if external firewalls (Docker/UFW) flush rules.
+                let mut interval = tokio::time::interval(Duration::from_secs(60));
+                loop {
+                    tokio::select! {
+                        () = cancel_rules.cancelled() => return,
+                        _ = interval.tick() => {
+                            ensure_jump_rules_at_top(ipv6);
+                        }
+                    }
                 }
             })
         };

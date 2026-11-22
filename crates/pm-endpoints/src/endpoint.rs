@@ -80,12 +80,18 @@ fn mask(ip: IpAddr, prefix: u8) -> IpAddr {
     match ip {
         IpAddr::V4(v4) => {
             let bits = u32::from(v4);
-            let m = u32::MAX.checked_shl(32 - u32::from(prefix)).unwrap_or(0);
+            let m = 32u32
+                .checked_sub(u32::from(prefix))
+                .and_then(|shift| u32::MAX.checked_shl(shift))
+                .unwrap_or(0);
             IpAddr::V4((bits & m).into())
         }
         IpAddr::V6(v6) => {
             let bits = u128::from(v6);
-            let m = u128::MAX.checked_shl(128 - u32::from(prefix)).unwrap_or(0);
+            let m = 128u32
+                .checked_sub(u32::from(prefix))
+                .and_then(|shift| u128::MAX.checked_shl(shift))
+                .unwrap_or(0);
             IpAddr::V6((bits & m).into())
         }
     }

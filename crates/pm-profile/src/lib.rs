@@ -24,6 +24,7 @@ mod global;
 mod icon;
 mod layered;
 mod matching;
+pub mod meta;
 mod merge;
 mod option_texts;
 pub mod options;
@@ -62,6 +63,7 @@ pub use icon::{
 pub use layered::LayeredProfile;
 pub use matching::{find_matching_profile, ProfileMatch};
 pub use merge::merge_profiles;
+pub use meta::{ProfilesMetadata, META_STATE_DELETED, META_STATE_SEEN, PROFILES_METADATA_KEY};
 pub use profile::{
     ensure_profile, now, OutdatedFlag, Profile, CFG_OPTION_DEFAULT_ACTION_KEY, CFG_OPTION_ENDPOINTS_KEY,
     CFG_OPTION_SERVICE_ENDPOINTS_KEY, DEFAULT_ACTION_ASK, DEFAULT_ACTION_BLOCK,
