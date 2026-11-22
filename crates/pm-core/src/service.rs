@@ -499,10 +499,18 @@ impl Service {
 
         // Authenticate local clients by their process; the server address is
         // the bound one, so a port of 0 works.
+        let mut allowed_clients = options.allowed_clients.clone();
+        allowed_clients.push(options.data_dir.clone());
+        #[cfg(windows)]
+        {
+            if let Ok(program_data) = std::env::var("ProgramData") {
+                allowed_clients.push(PathBuf::from(program_data).join("Portmaster"));
+            }
+        }
         api.set_authenticator(Arc::new(ApiAuthenticator::new(
             Arc::new(SystemLookup::new()),
             options.bin_dir.clone(),
-            options.allowed_clients.clone(),
+            allowed_clients,
             listener.local_addr()?,
         )));
 

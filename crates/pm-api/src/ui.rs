@@ -93,7 +93,30 @@ impl UiArchives {
         {
             return Err("invalid module".to_string());
         }
-        let path = self.bin_dir.join(format!("{module}.zip"));
+
+        let zip_name = format!("{module}.zip");
+        let mut candidates = vec![self.bin_dir.join(&zip_name)];
+        if let Ok(data_dir) = std::env::var("PORTMASTER_DATA_DIR") {
+            candidates.push(PathBuf::from(data_dir).join(&zip_name));
+        }
+        #[cfg(windows)]
+        {
+            if let Ok(program_data) = std::env::var("ProgramData") {
+                let pd = PathBuf::from(&program_data).join("Portmaster");
+                candidates.push(pd.join(&zip_name));
+                candidates.push(pd.join("updates").join("windows_amd64").join("ui").join("modules").join(module).join(&zip_name));
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            candidates.push(PathBuf::from("/var/lib/portmaster").join(&zip_name));
+        }
+
+        let path = candidates
+            .into_iter()
+            .find(|p| p.is_file())
+            .unwrap_or_else(|| self.bin_dir.join(&zip_name));
+
         let archive = Arc::new(Archive::load(&path, module)?);
         self.archives
             .write()

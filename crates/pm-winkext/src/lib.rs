@@ -529,3 +529,16 @@ pub const fn severity_name(severity: u8) -> &'static str {
         _ => "unknown",
     }
 }
+
+/// Forcibly stops and deletes the driver service by name if installed in SCM.
+pub fn force_stop_driver() -> Result<()> {
+    #[cfg(windows)]
+    {
+        service::KextService::force_stop(DRIVER_NAME)
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(())
+    }
+}
+

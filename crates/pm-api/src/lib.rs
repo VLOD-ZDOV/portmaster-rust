@@ -845,7 +845,7 @@ fn is_trusted_host(host: &str) -> bool {
 ///
 /// Prevents DNS rebinding and cross-site attacks by validating that the origin
 /// and host are strictly trusted local/loopback interfaces or trusted extensions.
-pub(crate) fn origin_allowed(origin: &str, host: &str, dev_mode: bool) -> bool {
+pub fn origin_allowed(origin: &str, host: &str, dev_mode: bool) -> bool {
     let parsed = origin.split_once("://");
     let Some((scheme, rest)) = parsed else {
         return false;

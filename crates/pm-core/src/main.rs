@@ -132,7 +132,7 @@ fn run_interactive(options: cli::Options) -> ExitCode {
         // `run` consumes the Arc, but the flag lives in the shared Service,
         // so keep another handle to read it AFTER run() returns.
         let service_for_flag = Arc::clone(&service);
-        match service.run().await {
+        let code = match service.run().await {
             Ok(()) => {
                 if service_for_flag.restart_requested() {
                     // A restart is a graceful stop from the service's point of
@@ -150,13 +150,18 @@ fn run_interactive(options: cli::Options) -> ExitCode {
                 eprintln!("core failed: {error}");
                 ExitCode::FAILURE
             }
-        }
+        };
+        #[cfg(windows)]
+        let _ = pm_winkext::force_stop_driver();
+        code
     })
 }
 
 #[cfg(windows)]
 fn win_service_main(_arguments: Vec<std::ffi::OsString>) {
-    if let Err(error) = run_service() {
+    let res = run_service();
+    let _ = pm_winkext::force_stop_driver();
+    if let Err(error) = res {
         tracing::error!(%error, "windows service terminated with error");
         eprintln!("windows service terminated with error: {error}");
     }

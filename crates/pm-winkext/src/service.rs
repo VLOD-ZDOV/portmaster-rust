@@ -231,6 +231,33 @@ mod windows_impl {
             }
             self.handle = sys::INVALID_HANDLE_VALUE;
         }
+
+        /// Forcibly stops and deletes the driver service by name, if it exists in SCM.
+        pub fn force_stop(driver_name: &str) -> Result<()> {
+            let manager = unsafe {
+                sys::OpenSCManagerW(
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    sys::SC_MANAGER_ALL_ACCESS,
+                )
+            };
+            if sys::is_invalid(manager) {
+                return Ok(());
+            }
+
+            let name = sys::wide(driver_name);
+            let existing = unsafe { sys::OpenServiceW(manager, name.as_ptr(), sys::SERVICE_ALL_ACCESS) };
+            if !sys::is_invalid(existing) {
+                let mut svc = Self {
+                    handle: existing,
+                    driver_name: driver_name.to_owned(),
+                };
+                let _ = svc.stop(false);
+                let _ = svc.delete();
+            }
+            let _ = unsafe { sys::CloseServiceHandle(manager) };
+            Ok(())
+        }
     }
 }
 

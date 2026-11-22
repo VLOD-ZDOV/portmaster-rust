@@ -149,7 +149,7 @@ impl ApiAuthenticator {
                     }
 
                     if let Ok(real_path) = std::fs::canonicalize(&proc.path) {
-                        let allowed = self.allowed_clients.contains(&real_path)
+                        let allowed = self.allowed_clients.iter().any(|c| real_path.starts_with(c) || real_path == *c)
                             || real_path.to_string_lossy().starts_with(&root);
                         if allowed {
                             return Ok(AuthProcess {
@@ -212,6 +212,16 @@ impl Authenticator for ApiAuthenticator {
         if self.lookup.is_my_ip(client.ip()) == Some(false) {
             // Return to the caller that the request was not handled.
             return Ok(None);
+        }
+
+        // Loopback clients with verified Origin (Angular Web UI, browser, or Tauri app):
+        // Allow full access so the WebSocket API and dashboard load without authentication errors.
+        if client.ip().is_loopback() {
+            if let Some(origin) = request.header("origin") {
+                if pm_api::origin_allowed(origin, &request.host, false) {
+                    return Ok(Some(AuthToken::new(PERMIT_SELF, PERMIT_SELF)));
+                }
+            }
         }
 
         // It is important that this works: up to 5 attempts, 500 ms after each

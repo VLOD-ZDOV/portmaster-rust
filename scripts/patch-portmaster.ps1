@@ -38,12 +38,42 @@ function Invoke-PortmasterPatch {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]'Tls12'
     }
 
+    # Self-healing helper: ensure network & DNS are functional
+    function Repair-NetworkState {
+        # Unhang any orphaned kernel driver from previous crashed/stopped sessions
+        & sc.exe stop PortmasterKext 2>$null | Out-Null
+        & sc.exe delete PortmasterKext 2>$null | Out-Null
+
+        # If internet is unreachable, reset adapter DNS to DHCP / default
+        $canConnect = $false
+        try {
+            $tcp = New-Object System.Net.Sockets.TcpClient
+            $async = $tcp.BeginConnect("1.1.1.1", 53, $null, $null)
+            $wait = $async.AsyncWaitHandle.WaitOne(1500, $false)
+            if ($wait -and $tcp.Connected) {
+                $canConnect = $true
+                $tcp.EndConnect($async)
+            }
+            $tcp.Close()
+        } catch {}
+
+        if (-not $canConnect) {
+            Write-Host "[*] Connectivity issue detected; resetting DNS to DHCP..." -ForegroundColor Yellow
+            Get-NetAdapter | Where-Object Status -eq 'Up' | Set-DnsClientServerAddress -ResetServerAddresses -ErrorAction SilentlyContinue
+            & ipconfig /flushdns 2>$null | Out-Null
+            Start-Sleep -Seconds 1
+        }
+    }
+
     # Ensure Administrator
     $currentPrincipal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
     if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         Write-Error "Administrator privileges are required. Please run PowerShell as Administrator."
         return
     }
+
+    # Pre-patch network self-healing
+    Repair-NetworkState
 
     $Repo = "VLOD-ZDOV/portmaster-rust"
     $InstallDir = "C:\Program Files\Portmaster"
@@ -184,15 +214,19 @@ function Invoke-PortmasterPatch {
             Write-Host "[*] UI bundle not found or download failed, continuing without UI update." -ForegroundColor Yellow
         }
 
-        # Stop Portmaster Service
+        # Stop Portmaster Service & cleanup driver
         $serviceRunning = $false
         $pmService = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
         if ($pmService -and $pmService.Status -eq "Running") {
             Write-Host "[*] Stopping service $ServiceName..." -ForegroundColor Gray
-            Stop-Service -Name $ServiceName -Force
+            Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
             Start-Sleep -Seconds 2
             $serviceRunning = $true
         }
+        # Forcibly stop and unhook kernel driver so network is never blocked during patching
+        & sc.exe stop PortmasterKext 2>$null | Out-Null
+        & sc.exe delete PortmasterKext 2>$null | Out-Null
+        Get-Process -Name "portmaster-core-rs", "portmaster-core" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
         # Backup existing binary
         $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
@@ -224,6 +258,10 @@ function Invoke-PortmasterPatch {
         if ($hasUi -and (Test-Path $tempZip)) {
             Write-Host "[*] Updating Web UI..." -ForegroundColor Gray
 
+            # Copy UI zip archive for pm-api UiArchives
+            Copy-Item -Path $tempZip -Destination (Join-Path $InstallDir "portmaster.zip") -Force
+            Copy-Item -Path $tempZip -Destination (Join-Path $DataDir "portmaster.zip") -Force
+
             # 1. Pilot UI directory for Rust core: <DataDir>\pilot-web
             $pilotWebDest = Join-Path $DataDir "pilot-web"
             New-Item -ItemType Directory -Path $pilotWebDest -Force | Out-Null
@@ -244,38 +282,65 @@ function Invoke-PortmasterPatch {
             }
         }
 
+        # Register service if not present
+        if (-not (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)) {
+            Write-Host "[*] Service $ServiceName not found, creating Windows Service..." -ForegroundColor Gray
+            New-Service -Name $ServiceName -BinaryPathName "`"$InstallDir\portmaster-core.exe`"" -DisplayName "Portmaster Core" -StartupType Automatic
+            $serviceRunning = $true
+        }
+
         # Restart Portmaster Service and verify Running state
-        if ($serviceRunning -or (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)) {
-            Write-Host "[*] Starting $ServiceName service..." -ForegroundColor Gray
-            try {
-                Start-Service -Name $ServiceName -ErrorAction Stop
-            } catch {
-                Write-Error "Failed to initiate start for service '$ServiceName': $_"
-                return
+        Write-Host "[*] Starting $ServiceName service..." -ForegroundColor Gray
+        try {
+            Start-Service -Name $ServiceName -ErrorAction Stop
+        } catch {
+            Write-Error "Failed to initiate start for service '$ServiceName': $_"
+            return
+        }
+
+        # Wait for service to reach Running state (up to 30 seconds)
+        Write-Host "[*] Waiting for $ServiceName to reach 'Running' status..." -ForegroundColor Gray
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $timeoutSeconds = 30
+        $isRunning = $false
+
+        while ($sw.Elapsed.TotalSeconds -lt $timeoutSeconds) {
+            $status = (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue).Status
+            if ($status -eq "Running") {
+                $isRunning = $true
+                break
             }
+            Start-Sleep -Seconds 1
+        }
 
-            # Wait for service to reach Running state (up to 30 seconds)
-            Write-Host "[*] Waiting for $ServiceName to reach 'Running' status..." -ForegroundColor Gray
-            $sw = [System.Diagnostics.Stopwatch]::StartNew()
-            $timeoutSeconds = 30
-            $isRunning = $false
+        if (-not $isRunning) {
+            $finalStatus = (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue).Status
+            Write-Error "Service '$ServiceName' failed to reach 'Running' state within $timeoutSeconds seconds. Current status: $finalStatus."
+            return
+        }
 
-            while ($sw.Elapsed.TotalSeconds -lt $timeoutSeconds) {
-                $status = (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue).Status
-                if ($status -eq "Running") {
-                    $isRunning = $true
+        Write-Host "[+] Service $ServiceName is Running." -ForegroundColor Green
+
+        # Verify API health check
+        Write-Host "[*] Verifying Portmaster Core API status (http://127.0.0.1:817)..." -ForegroundColor Gray
+        $apiOk = $false
+        $apiSw = [System.Diagnostics.Stopwatch]::StartNew()
+        while ($apiSw.Elapsed.TotalSeconds -lt 25) {
+            try {
+                $statusResp = Invoke-RestMethod -Uri "http://127.0.0.1:817/api/v1/status" -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop
+                if ($statusResp) {
+                    $apiOk = $true
                     break
                 }
+            } catch {
                 Start-Sleep -Seconds 1
             }
+        }
 
-            if (-not $isRunning) {
-                $finalStatus = (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue).Status
-                Write-Error "Service '$ServiceName' failed to reach 'Running' state within $timeoutSeconds seconds. Current status: $finalStatus."
-                return
-            }
-
-            Write-Host "[+] Service $ServiceName is Running." -ForegroundColor Green
+        if ($apiOk) {
+            Write-Host "[+] API is responsive and ready on http://127.0.0.1:817" -ForegroundColor Green
+        } else {
+            Write-Host "[!] API is still initializing; background workers are running." -ForegroundColor Yellow
         }
 
         Write-Host ""

@@ -1475,12 +1475,16 @@ impl Firewall {
                     } else {
                         tracing::info!("filter: windows kext stopped and unhooked successfully");
                     }
+                    let _ = pm_winkext::force_stop_driver();
                 }
                 Err(kext) => {
                     tracing::warn!("filter: kext Arc still referenced elsewhere, forcing shutdown");
                     let _ = kext.shutdown();
+                    let _ = pm_winkext::force_stop_driver();
                 }
             }
+        } else {
+            let _ = pm_winkext::force_stop_driver();
         }
         if !was_started {
             return Ok(());
@@ -1602,6 +1606,15 @@ impl pm_firewall::packet::QueuedPacket for WinPacket {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(windows)]
+impl Drop for WinPacket {
+    fn drop(&mut self) {
+        if !self.verdict_set.load(Ordering::Acquire) {
+            let _ = self.set_verdict(pm_interception::Verdict::Accept);
+        }
     }
 }
 
