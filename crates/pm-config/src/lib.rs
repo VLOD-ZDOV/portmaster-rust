@@ -171,10 +171,12 @@ impl Config {
         }
 
         if option.validation_regex.is_empty() && !option.possible_values.is_empty() {
+            // Go joins the raw values; Windows paths like `C:\Program Files\xray`
+            // then turn into invalid escapes (`\x`) and the core fails to start.
             let values: Vec<String> = option
                 .possible_values
                 .iter()
-                .map(|possible| go_value_string(&possible.value))
+                .map(|possible| regex::escape(&go_value_string(&possible.value)))
                 .collect();
             option.validation_regex = format!("^({})$", values.join("|"));
         }
