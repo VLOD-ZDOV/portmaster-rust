@@ -74,6 +74,27 @@ impl ProcReader {
 
     /// Reads the details of a process.
     pub fn read(&self, pid: i32) -> Result<ProcInfo> {
+        #[cfg(windows)]
+        {
+            if pid >= 0 {
+                if let Some(win) = pm_winplatform::get_process_info(pid as u32) {
+                    return Ok(ProcInfo {
+                        pid,
+                        ppid: win.ppid as i32,
+                        pgrp: 0,
+                        created_at: win.created_at,
+                        uid: 0,
+                        username: "User".to_string(),
+                        name: win.name,
+                        exe: win.exe,
+                        cwd: String::new(),
+                        cmdline: String::new(),
+                        environ: BTreeMap::new(),
+                    });
+                }
+            }
+        }
+
         let dir = self.procfs.root().join(pid.to_string());
 
         let stat = fs::read_to_string(dir.join("stat")).map_err(|error| {

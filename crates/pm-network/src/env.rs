@@ -102,6 +102,37 @@ impl ProcessResolver for SystemProcessResolver {
         let mut ns_info = info.to_netstate();
         let (pid, inbound, _error) =
             get_pid_of_connection(&self.cache, &self.state, &mut ns_info, false);
+        #[cfg(windows)]
+        if pid <= 0 {
+            if let (Some(src), Some(dst)) = (info.src, info.dst) {
+                use pm_winplatform::iphelper::{get_table, IPV4, IPV6, TCP, UDP};
+                let version = if src.is_ipv4() { IPV4 } else { IPV6 };
+                let protocol = match info.protocol {
+                    6 => TCP,
+                    17 => UDP,
+                    _ => 0,
+                };
+                if protocol != 0 {
+                    if let Ok(table) = get_table(version, protocol) {
+                        for conn in &table.connections {
+                            if (conn.local.ip == src && conn.local.port == info.src_port && conn.remote.ip == dst && conn.remote.port == info.dst_port)
+                                || (conn.local.ip == dst && conn.local.port == info.dst_port && conn.remote.ip == src && conn.remote.port == info.src_port)
+                            {
+                                return (conn.pid, conn.local.ip == dst);
+                            }
+                        }
+                        for bind in &table.binds {
+                            if bind.local.port == info.dst_port && (bind.local.ip.is_unspecified() || bind.local.ip == dst) {
+                                return (bind.pid, true);
+                            }
+                            if bind.local.port == info.src_port && (bind.local.ip.is_unspecified() || bind.local.ip == src) {
+                                return (bind.pid, false);
+                            }
+                        }
+                    }
+                }
+            }
+        }
         (pid, inbound)
     }
 

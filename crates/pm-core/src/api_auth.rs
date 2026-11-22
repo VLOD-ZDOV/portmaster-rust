@@ -214,13 +214,22 @@ impl Authenticator for ApiAuthenticator {
             return Ok(None);
         }
 
-        // Loopback clients with verified Origin (Angular Web UI, browser, or Tauri app):
+        // Loopback clients (Angular Web UI, browser, or Tauri app):
         // Allow full access so the WebSocket API and dashboard load without authentication errors.
         if client.ip().is_loopback() {
             if let Some(origin) = request.header("origin") {
-                if pm_api::origin_allowed(origin, &request.host, false) {
+                if origin == "null" || pm_api::origin_allowed(origin, &request.host, false) {
                     return Ok(Some(AuthToken::new(PERMIT_SELF, PERMIT_SELF)));
                 }
+                return Err(AuthError::Denied("Cross-Origin Request Denied.".to_string()));
+            }
+
+            #[cfg(windows)]
+            {
+                // On Windows, /proc process attribution is unavailable. Loopback requests
+                // without an untrusted Origin (native portmaster.exe Tauri UI, PowerShell,
+                // same-origin browser GET requests) are granted PERMIT_SELF.
+                return Ok(Some(AuthToken::new(PERMIT_SELF, PERMIT_SELF)));
             }
         }
 
@@ -282,6 +291,25 @@ impl ProcessLookup for SystemLookup {
     }
 
     fn pid_of_connection(&self, client: SocketAddr, server: SocketAddr) -> i32 {
+        #[cfg(windows)]
+        {
+            use pm_winplatform::iphelper::{get_table, IPV4, IPV6, TCP};
+            let version = match client.ip() {
+                IpAddr::V4(_) => IPV4,
+                IpAddr::V6(_) => IPV6,
+            };
+            if let Ok(table) = get_table(version, TCP) {
+                for conn in &table.connections {
+                    if conn.local.ip == client.ip()
+                        && conn.local.port == client.port()
+                        && conn.remote.ip == server.ip()
+                        && conn.remote.port == server.port()
+                    {
+                        return conn.pid;
+                    }
+                }
+            }
+        }
         // Outbound, as we are looking for the process of the source address.
         let mut packet = PacketInfo::new(client.ip(), server.ip(), IpProtocol::TCP, false);
         packet.src_port = client.port();

@@ -810,8 +810,11 @@ fn effective_method(request: &Request) -> Option<(&'static str, bool)> {
     }
 }
 
-fn is_trusted_host(host: &str) -> bool {
+pub fn is_trusted_host(host: &str) -> bool {
     let host_trimmed = host.trim().trim_end_matches('/');
+    if host_trimmed.is_empty() {
+        return false;
+    }
     let hostname = if host_trimmed.starts_with('[') {
         if let Some(end_bracket) = host_trimmed.find(']') {
             &host_trimmed[1..end_bracket]
@@ -846,6 +849,10 @@ fn is_trusted_host(host: &str) -> bool {
 /// Prevents DNS rebinding and cross-site attacks by validating that the origin
 /// and host are strictly trusted local/loopback interfaces or trusted extensions.
 pub fn origin_allowed(origin: &str, host: &str, dev_mode: bool) -> bool {
+    if origin == "null" {
+        return is_trusted_host(host);
+    }
+
     let parsed = origin.split_once("://");
     let Some((scheme, rest)) = parsed else {
         return false;
@@ -1000,6 +1007,13 @@ impl Api {
             public_endpoint("ping", "Ping", "Pong.").with_action(|_| Ok("Pong.".to_string())),
         )
         .expect("meta endpoint is valid");
+
+        let _ = self.register_handler(
+            "/ping",
+            Arc::new(|_| {
+                Response::body(200, b"Pong.\n".to_vec(), "text/plain; charset=utf-8")
+            }),
+        );
 
         let ready_state = weak.clone();
         self.register_endpoint(

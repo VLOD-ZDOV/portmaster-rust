@@ -1987,6 +1987,7 @@ dependencies = [
  "pm-query",
  "pm-record",
  "pm-resolver",
+ "pm-winplatform",
  "serde",
  "serde_json",
  "tracing",

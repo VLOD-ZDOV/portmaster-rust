@@ -238,6 +238,10 @@ pub async fn serve(
             axum::routing::get(pm_api::database_ws::database_ws_upgrade),
         )
         .route(
+            "/v1/database/ws",
+            axum::routing::get(pm_api::database_ws::database_ws_upgrade),
+        )
+        .route(
             "/assets/{*path}",
             axum::routing::get(pm_api::ui::serve_assets),
         )

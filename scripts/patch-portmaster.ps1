@@ -333,7 +333,15 @@ function Invoke-PortmasterPatch {
                     break
                 }
             } catch {
-                Start-Sleep -Seconds 1
+                try {
+                    $statusResp = Invoke-RestMethod -Uri "http://127.0.0.1:817/api/v1/ping" -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop
+                    if ($statusResp) {
+                        $apiOk = $true
+                        break
+                    }
+                } catch {
+                    Start-Sleep -Seconds 1
+                }
             }
         }
 

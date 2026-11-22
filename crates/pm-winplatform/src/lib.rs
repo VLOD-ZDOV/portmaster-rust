@@ -30,6 +30,9 @@ pub mod binmeta;
 pub mod integration;
 pub mod iphelper;
 pub mod osdetail;
+pub mod process;
+
+pub use process::{get_process_info, WinProcessInfo};
 
 use thiserror::Error;
 

@@ -368,6 +368,22 @@ fn cors_and_preflight() {
     );
     assert_eq!(response.status, 200);
 
+    // Null origin from local webviews/iframes with trusted loopback host is allowed.
+    let response = api.handle(
+        Request::new("GET", "/api/v1/endpoints")
+            .with_host("127.0.0.1:817")
+            .with_header("origin", "null"),
+    );
+    assert_eq!(response.status, 200);
+
+    // Raw /ping handler responds with Pong.
+    let response = api.handle(
+        Request::new("GET", "/ping")
+            .with_host("127.0.0.1:817"),
+    );
+    assert_eq!(response.status, 200);
+    assert_eq!(response.body_string(), "Pong.\n");
+
     // Preflight requests succeed without authentication.
     let response = api.handle(
         Request::new("OPTIONS", "/api/v1/endpoints")
