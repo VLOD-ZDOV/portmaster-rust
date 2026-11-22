@@ -70,13 +70,40 @@ function Invoke-PortmasterPatch {
         }
     }
 
-    if (-not (Test-Path $InstallDir)) {
-        $altInstall = "C:\Program Files (x86)\Portmaster"
-        if (Test-Path $altInstall) {
-            $InstallDir = $altInstall
+    # Resolve InstallDir: check service PathName first if service exists
+    $svcObj = Get-CimInstance Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue
+    if (-not $svcObj) {
+        $svcObj = Get-WmiObject Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue
+    }
+    if ($svcObj -and $svcObj.PathName) {
+        $svcPath = $svcObj.PathName.Trim().Trim('"')
+        if ($svcPath -match '^([a-zA-Z]:\\[^:]+?\.exe)') {
+            $svcPath = $matches[1]
+        }
+        $svcDir = Split-Path -Path $svcPath -Parent
+        if ($svcDir -and (Test-Path $svcDir)) {
+            $InstallDir = $svcDir
         }
     }
 
+    if (-not (Test-Path $InstallDir)) {
+        $candidateDirs = @(
+            "C:\Program Files\Portmaster",
+            "C:\Program Files\safing\portmaster",
+            "C:\Program Files (x86)\Portmaster",
+            "C:\Program Files (x86)\safing\portmaster"
+        )
+        foreach ($cand in $candidateDirs) {
+            if (Test-Path $cand) {
+                $InstallDir = $cand
+                break
+            }
+        }
+    }
+
+    if (-not (Test-Path $InstallDir)) {
+        New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+    }
     if (-not (Test-Path $DataDir)) {
         New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
     }
