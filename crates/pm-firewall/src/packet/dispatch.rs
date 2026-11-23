@@ -48,6 +48,17 @@ fn thread_executor() -> Executor {
     })
 }
 
+/// Extracts a readable message from a caught panic payload.
+fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(text) = panic.downcast_ref::<&str>() {
+        (*text).to_string()
+    } else if let Some(text) = panic.downcast_ref::<String>() {
+        text.clone()
+    } else {
+        "unknown panic payload".to_string()
+    }
+}
+
 struct Queue {
     /// The firewall handler; `None` after `StopFirewallHandler`.
     handler: Option<Handler>,
@@ -146,7 +157,24 @@ impl PacketHandler {
 
     /// Go `handlePacket`: finds or creates the connection of the packet and
     /// hands the packet to it. Single caller only, see the type docs.
+    ///
+    /// A panic while handling one packet must not kill the dispatcher: that
+    /// would leave every later packet without a verdict and stall the whole
+    /// network. The packet is dropped during unwinding, which issues the
+    /// fail-closed Drop verdict via its verdict handle.
     pub fn dispatch(&self, pkt: Box<dyn QueuedPacket>) {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.dispatch_inner(pkt);
+        }));
+        if let Err(panic) = result {
+            tracing::error!(
+                panic = %panic_message(&panic),
+                "filter: packet handling panicked, packet dropped"
+            );
+        }
+    }
+
+    fn dispatch_inner(&self, pkt: Box<dyn QueuedPacket>) {
         let shared = &self.shared;
         let core = &shared.core;
         if shared.shutdown.load(Ordering::SeqCst) {
@@ -348,7 +376,18 @@ impl Shared {
                 }
             };
             if !self.shutdown.load(Ordering::SeqCst) {
-                self.handle_queued(conn, state, pkt.as_ref());
+                // Isolate per-packet panics: the worker must keep draining and
+                // `queue.running` must not stay stuck true. The packet is
+                // dropped after a panic, issuing the fail-closed Drop verdict.
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    self.handle_queued(conn, state, pkt.as_ref());
+                }));
+                if let Err(panic) = result {
+                    tracing::error!(
+                        panic = %panic_message(&panic),
+                        "filter: queued packet handling panicked, packet dropped"
+                    );
+                }
             }
             self.inflight.fetch_sub(1, Ordering::SeqCst);
         }

@@ -73,7 +73,7 @@ impl Network {
         self.env
             .processes
             .set_db_controller(Arc::clone(&controller));
-        *self.db.write().expect("lock poisoned") = Some(controller);
+        *self.db.write().unwrap_or_else(|error| error.into_inner()) = Some(controller);
     }
 
     /// Returns the IP connection with the given ID.
@@ -118,7 +118,7 @@ impl Network {
     /// The connection must not be locked by the caller; see
     /// [`Network::save_locked`].
     pub fn save(&self, shared: &SharedConnection) {
-        let mut conn = shared.lock().expect("lock poisoned");
+        let mut conn = shared.lock().unwrap_or_else(|error| error.into_inner());
         self.save_locked(shared, &mut conn);
     }
 
@@ -167,7 +167,7 @@ impl Network {
     }
 
     fn push_update(&self, conn: &Connection) {
-        let Some(controller) = self.db.read().expect("lock poisoned").clone() else {
+        let Some(controller) = self.db.read().unwrap_or_else(|error| error.into_inner()).clone() else {
             return;
         };
         if let Some(record) = conn.to_record() {
@@ -271,7 +271,7 @@ impl Network {
         // Check if the DNS request connection was reported with process info.
         let mut process: Option<Arc<Process>> = None;
         if let Some(dns_conn) = self.get_dns_request_connection(&info) {
-            let dns_conn = dns_conn.lock().expect("lock poisoned");
+            let dns_conn = dns_conn.lock().unwrap_or_else(|error| error.into_inner());
             if dns_conn.pid < 0 {
                 // Process is not identified or special.
             } else if dns_conn.ended > 0 && dns_conn.ended < now - DNS_REQUEST_CONN_GRACE {
@@ -444,7 +444,7 @@ impl Network {
     pub fn new_connection_from_first_packet(&self, info: &PacketInfo) -> SharedConnection {
         let shared = self.new_incomplete_connection(info);
         {
-            let mut conn = shared.lock().expect("lock poisoned");
+            let mut conn = shared.lock().unwrap_or_else(|error| error.into_inner());
             self.gather_connection_info(&mut conn, info, false);
         }
         shared

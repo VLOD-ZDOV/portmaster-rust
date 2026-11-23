@@ -1149,13 +1149,15 @@ impl Service {
             }
         });
 
-        // Start the split tunnel proxies when split tunneling or Xray routing is enabled and configured.
+        // Start the split tunnel proxies when split tunneling or Xray routing
+        // is enabled, like Go's splittun module. Per-app proxy/interface
+        // settings are resolved per connection, not here: gating on the global
+        // strings would silently disable split tunneling for the common
+        // per-app configuration flow.
         let proxies_wanted = {
             let splittun_on = self.config.get_as_bool("splittun/enable", false)();
             let spn_on = self.config.get_as_bool("spn/enable", false)();
-            let proxy_str = self.config.get_as_string("splittun/proxy", "")();
-            let iface_str = self.config.get_as_string("splittun/interface", "")();
-            (splittun_on || spn_on) && (!proxy_str.trim().is_empty() || !iface_str.trim().is_empty())
+            splittun_on || spn_on
         };
         if proxies_wanted {
             if let Err(error) = self
@@ -1184,9 +1186,7 @@ impl Service {
                         }
                         let splittun_on = config_dyn.get_as_bool("splittun/enable", false)();
                         let spn_on = config_dyn.get_as_bool("spn/enable", false)();
-                        let proxy_str = config_dyn.get_as_string("splittun/proxy", "")();
-                        let iface_str = config_dyn.get_as_string("splittun/interface", "")();
-                        let wanted = (splittun_on || spn_on) && (!proxy_str.trim().is_empty() || !iface_str.trim().is_empty());
+                        let wanted = splittun_on || spn_on;
                         let running = proxies_dyn.is_ready();
                         if wanted && !running {
                             if let Err(err) = proxies_dyn.start(queue_dyn.clone(), ifaces_dyn.as_ref()).await {

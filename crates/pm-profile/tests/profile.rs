@@ -226,9 +226,10 @@ fn profile_store_reads_and_writes() {
     let all = store.all(SOURCE_LOCAL).unwrap();
     assert_eq!(all.len(), 1);
 
-    // Deleted profiles are gone.
+    // Deleted profiles are gone and marked as deleted.
     store.delete(&profile).unwrap();
     assert!(store.get(&profile.scoped_id()).is_err());
+    assert!(store.is_deleted(&profile.id));
 
     // Invalid profiles are rejected.
     assert!(store.save(&Profile::default()).is_err());

@@ -61,12 +61,13 @@ impl ConnectionState {
 }
 
 type SubCallback = Arc<dyn Fn(PortApiFrame) + Send + Sync + 'static>;
+type QueryStreamEntry = (Vec<PortApiFrame>, oneshot::Sender<Result<Vec<PortApiFrame>, String>>);
 
 /// Shared state of active in-flight requests and subscriptions.
 #[derive(Default)]
 struct ClientInner {
     pending_oneshot: HashMap<String, oneshot::Sender<PortApiFrame>>,
-    pending_query_stream: HashMap<String, (Vec<PortApiFrame>, oneshot::Sender<Result<Vec<PortApiFrame>, String>>)>,
+    pending_query_stream: HashMap<String, QueryStreamEntry>,
     subscriptions: HashMap<String, (String, SubCallback)>,
 }
 

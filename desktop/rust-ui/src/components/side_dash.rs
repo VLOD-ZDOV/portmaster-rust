@@ -313,7 +313,7 @@ pub fn SideDash() -> impl IntoView {
                                 .collect();
 
                             match sort_by.get().as_str() {
-                                "Name" => filtered.sort_by(|a, b| a.display_name().to_lowercase().cmp(&b.display_name().to_lowercase())),
+                                "Name" => filtered.sort_by_key(|a| a.display_name().to_lowercase()),
                                 "Blocked" => filtered.sort_by(|a, b| {
                                     let b_bl = b.stats.map(|s| s.blocked_count).unwrap_or(0);
                                     let a_bl = a.stats.map(|s| s.blocked_count).unwrap_or(0);
@@ -402,7 +402,7 @@ pub fn SideDash() -> impl IntoView {
                     <button
                         on:click={
                             let s_clear = state.clone();
-                            move |_| s_clear.set_notifications.set(Vec::new())
+                            move |_| s_clear.clear_notifications()
                         }
                         class="text-[10px] text-[#888888] hover:text-white transition-colors"
                     >

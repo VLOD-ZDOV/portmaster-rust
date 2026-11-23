@@ -654,23 +654,13 @@ impl Api {
 
     fn check_api_key(&self, request: &Request) -> Option<AuthToken> {
         let key = bearer_token(&request.header)?;
-        let key_bytes = key.as_bytes();
         let guard = self.api_keys.read().expect("lock poisoned");
-        let mut matched_token: Option<AuthToken> = None;
-        for (reg_key, token) in guard.iter() {
-            let reg_bytes = reg_key.as_bytes();
-            if reg_bytes.len() == key_bytes.len() {
-                // Constant-time byte-wise comparison to prevent timing attacks (BUG-077).
-                let mut diff = 0u8;
-                for (a, b) in reg_bytes.iter().zip(key_bytes.iter()) {
-                    diff |= a ^ b;
-                }
-                if diff == 0 {
-                    matched_token = Some(token.clone());
-                }
-            }
-        }
-        let token = matched_token?;
+        // Direct lookup like Go's `checkAPIKey`. Keys are high-entropy random
+        // tokens; a hash lookup does not leak usable key material, while the
+        // previous O(N) scan with a length gate leaked the key length and was
+        // not actually constant-time.
+        let token = guard.get(key.as_str())?.clone();
+        drop(guard);
         // Defense in depth, matching Go's `checkAPIKey`: even if a stale token
         // is still registered, an expired key must never authorize.
         if token.expired() {

@@ -225,10 +225,10 @@ pub fn Navigation() -> impl IntoView {
                             on:click=move |_| state.navigate(Page::Apps)
                             title="Applications"
                             class=move || {
-                                let is_active = match current_page.get() {
-                                    Page::Apps | Page::AppDetail(_) => true,
-                                    _ => false,
-                                };
+                                let is_active = matches!(
+                                    current_page.get(),
+                                    Page::Apps | Page::AppDetail(_)
+                                );
                                 if is_active {
                                     "w-8 h-8 my-2 rounded-[10px] flex items-center justify-center cursor-pointer bg-[#2c2c2c] text-white transition-all scale-105"
                                 } else {

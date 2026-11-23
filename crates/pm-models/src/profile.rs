@@ -8,35 +8,29 @@ use crate::protocol::RecordMeta;
 /// Type of an application fingerprint.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum FingerprintType {
     Tag,
     Cmdline,
     Env,
     Path,
+    #[default]
     Unknown,
 }
 
-impl Default for FingerprintType {
-    fn default() -> Self {
-        Self::Unknown
-    }
-}
 
 /// Operation of a fingerprint match.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum FingerprintOperation {
+    #[default]
     Equal,
     Prefix,
     Regex,
     Unknown,
 }
 
-impl Default for FingerprintOperation {
-    fn default() -> Self {
-        Self::Equal
-    }
-}
 
 /// An application fingerprint descriptor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

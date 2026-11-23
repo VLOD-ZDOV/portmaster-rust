@@ -113,6 +113,18 @@ pub(crate) struct MatchingFingerprint {
 }
 
 impl MatchingFingerprint {
+    /// Prefix match, case-insensitive on Windows. Uses `get()` instead of byte
+    /// slicing so a prefix length inside a multi-byte character cannot panic.
+    fn prefix_matches(&self, value: &str) -> bool {
+        if cfg!(windows) {
+            value
+                .get(..self.value.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(&self.value))
+        } else {
+            value.starts_with(&self.value)
+        }
+    }
+
     fn match_value(&self, value: &str) -> i32 {
         let score = match &self.matcher {
             Matcher::Equals => {
@@ -123,13 +135,7 @@ impl MatchingFingerprint {
                 }
             }
             Matcher::Prefix => {
-                let matches = if cfg!(windows) {
-                    value.len() >= self.value.len()
-                        && value[..self.value.len()].eq_ignore_ascii_case(&self.value)
-                } else {
-                    value.starts_with(&self.value)
-                };
-                if matches {
+                if self.prefix_matches(value) {
                     FINGERPRINT_PREFIX_BASE_SCORE
                 } else {
                     0
@@ -160,7 +166,7 @@ impl MatchingFingerprint {
         match &self.matcher {
             Matcher::Equals => self.value.len() as i32,
             Matcher::Prefix => {
-                if value.starts_with(&self.value) {
+                if self.prefix_matches(value) {
                     self.value.len() as i32
                 } else {
                     0

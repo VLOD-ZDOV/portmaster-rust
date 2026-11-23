@@ -323,24 +323,117 @@ pub fn parse_winstore_app_dir(app_dir: &str) -> Option<(String, String)> {
     Some((parts[0].to_string(), parts[4].to_string()))
 }
 
+#[cfg(unix)]
+fn search_directory(dir: &Path, bin_name: &str) -> Option<std::path::PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut best_match: Option<std::path::PathBuf> = None;
+    let mut best_excess = usize::MAX;
+
+    for entry in entries.flatten() {
+        if let Ok(file_type) = entry.file_type() {
+            if file_type.is_dir() {
+                continue;
+            }
+        }
+        let file_name = entry.file_name();
+        let name_str = file_name.to_string_lossy().to_ascii_lowercase();
+        let stem = match name_str.rfind('.') {
+            Some(idx) => &name_str[..idx],
+            None => &name_str,
+        };
+        if stem == bin_name {
+            return Some(entry.path());
+        }
+        if stem.starts_with(bin_name) {
+            let excess = stem.len() - bin_name.len();
+            if excess < best_excess {
+                best_excess = excess;
+                best_match = Some(entry.path());
+            }
+        }
+    }
+    best_match
+}
+
+#[cfg(unix)]
+fn search_linux_icon(bin_path: &Path, home_dir: &str) -> Option<std::path::PathBuf> {
+    let bin_name = bin_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if bin_name.is_empty() {
+        return None;
+    }
+
+    // 1. /usr/share/pixmaps (flat dir)
+    let pixmaps = Path::new("/usr/share/pixmaps");
+    if let Some(path) = search_directory(pixmaps, &bin_name) {
+        return Some(path);
+    }
+
+    // 2. XDG icons
+    const XDG_ICON_PATHS: &[&str] = &[
+        "icons/hicolor/256x256/apps",
+        "icons/hicolor/192x192/apps",
+        "icons/hicolor/128x128/apps",
+        "icons/hicolor/96x96/apps",
+        "icons/hicolor/64x64/apps",
+        "icons/hicolor/48x48/apps",
+        "icons/hicolor/scalable/apps",
+    ];
+
+    let mut base_dirs = vec![Path::new("/usr/share").to_path_buf()];
+    if !home_dir.is_empty() {
+        base_dirs.push(Path::new(home_dir).join(".local/share"));
+        base_dirs.push(Path::new(home_dir).join(".local/share/flatpak/exports/share"));
+    }
+
+    for base in base_dirs {
+        for sub in XDG_ICON_PATHS {
+            let candidate_dir = base.join(sub);
+            if let Some(path) = search_directory(&candidate_dir, &bin_name) {
+                return Some(path);
+            }
+        }
+    }
+
+    None
+}
+
 /// Returns the name and icon of a binary, like Go `GetIconAndName`.
 pub fn get_icon_and_name(
     bin_path: &Path,
-    _home_dir: &str,
+    home_dir: &str,
     storage_path: &Path,
 ) -> Result<BinaryMeta> {
+    #[cfg(windows)]
     let (png, mut name) = extract_from_exe(bin_path)?;
+
+    #[cfg(not(windows))]
+    let (png, mut name): (Option<Vec<u8>>, String) = (None, String::new());
+
     if name.is_empty() {
         name = generate_binary_name_from_path(&bin_path.to_string_lossy());
     }
 
-    let icon = match png {
+    #[allow(unused_mut)]
+    let mut icon = match png {
         Some(png) => Some(IconResult::api(icon_filename(&png, "png")?)),
         None => None,
     };
-    // `storage_path` is kept in the signature to mirror Go's global icon
-    // storage; the current extractor produces no PNG to store yet.
+
+    #[cfg(unix)]
+    if icon.is_none() {
+        if let Some(icon_path) = search_linux_icon(bin_path, home_dir) {
+            if let Ok(res) = load_and_save_icon(&icon_path, storage_path) {
+                icon = Some(res);
+            }
+        }
+    }
+
     let _ = storage_path;
+    let _ = home_dir;
 
     Ok(BinaryMeta { icon, name })
 }

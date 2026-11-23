@@ -145,7 +145,9 @@ impl Rng {
 
 impl Inner {
     /// Go `checkEntropy`: reseed when too many bytes were read or too much
-    /// time has passed. Returns `NoEntropy` if the feeder has nothing ready.
+    /// time has passed. Falls back to fresh OS entropy when no feeder batch
+    /// is queued, so reads cannot start failing permanently after the first
+    /// reseed interval (Go blocks on its continuously running feeder).
     fn check_entropy(&mut self) -> Result<(), RngError> {
         if !self.ready {
             return Err(RngError::NotReady);
@@ -153,10 +155,10 @@ impl Inner {
         if self.bytes_read > RESEED_AFTER_BYTES
             || self.last_feed.elapsed().as_secs() > RESEED_AFTER_SECONDS
         {
-            let batch = self
-                .pending
-                .pop_front()
-                .ok_or(RngError::NoEntropy)?;
+            let batch = match self.pending.pop_front() {
+                Some(batch) => batch,
+                None => crate::feed::os_entropy(crate::feed::OS_ENTROPY_BYTES)?,
+            };
             self.gen.reseed(&batch);
             self.bytes_read = 0;
             self.last_feed = Instant::now();
@@ -243,17 +245,28 @@ mod tests {
     }
 
     #[test]
-    fn empty_entropy_pool_returns_error_on_reseed() {
+    fn reseed_falls_back_to_os_entropy_without_feeders() {
         let rng = Rng::new(CipherKind::Aes);
         {
             let mut inner = rng.inner.lock().unwrap();
             inner.bytes_read = RESEED_AFTER_BYTES + 1;
             assert!(inner.pending.is_empty());
         }
-        assert!(matches!(rng.bytes(16), Err(RngError::NoEntropy)));
+        // No feeder is running: the reseed must fetch OS entropy directly
+        // instead of failing every subsequent read.
+        assert_eq!(rng.bytes(16).unwrap().len(), 16);
+        {
+            let inner = rng.inner.lock().unwrap();
+            assert_eq!(inner.bytes_read, 16);
+            assert!(inner.pending.is_empty());
+        }
 
-        // Once entropy is supplied, the next call succeeds and resets state.
+        // Queued feeder batches are still preferred and reset the state.
         rng.supply_entropy(&[7u8; 32], 256);
+        {
+            let mut inner = rng.inner.lock().unwrap();
+            inner.bytes_read = RESEED_AFTER_BYTES + 1;
+        }
         assert_eq!(rng.bytes(16).unwrap().len(), 16);
         {
             let inner = rng.inner.lock().unwrap();

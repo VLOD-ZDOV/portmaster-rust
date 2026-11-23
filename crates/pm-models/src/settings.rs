@@ -8,10 +8,12 @@ use crate::protocol::RecordMeta;
 /// Type of a configuration option value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(u8)]
+#[derive(Default)]
 pub enum OptionType {
     #[serde(rename = "any")]
     Any = 0,
     #[serde(rename = "string")]
+    #[default]
     String = 1,
     #[serde(rename = "[]string")]
     StringArray = 2,
@@ -21,11 +23,6 @@ pub enum OptionType {
     Bool = 4,
 }
 
-impl Default for OptionType {
-    fn default() -> Self {
-        Self::String
-    }
-}
 
 /// Required user expertise level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default)]

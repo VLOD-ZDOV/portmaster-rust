@@ -73,7 +73,7 @@ impl Network {
     /// firewall and nameserver do) use the `_locked` variants. The internal map
     /// locks are never held while a connection is locked.
     pub fn save_dns_request_connection(&self, conn: &SharedConnection, info: &PacketInfo) {
-        let guard = conn.lock().expect("lock poisoned");
+        let guard = conn.lock().unwrap_or_else(|error| error.into_inner());
         self.save_dns_request_connection_locked(conn, &guard, info);
     }
 
@@ -93,7 +93,7 @@ impl Network {
         };
         self.dns_request_conns
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .insert(key, Arc::clone(shared));
     }
 
@@ -102,7 +102,7 @@ impl Network {
         let key = dns_request_connection_key(info)?;
         self.dns_request_conns
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .get(&key)
             .cloned()
     }
@@ -114,14 +114,14 @@ impl Network {
         let snapshot: Vec<(String, SharedConnection)> = self
             .dns_request_conns
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .iter()
             .map(|(key, conn)| (key.clone(), Arc::clone(conn)))
             .collect();
         for (key, shared) in snapshot {
-            let ended = shared.lock().expect("lock poisoned").ended;
+            let ended = shared.lock().unwrap_or_else(|error| error.into_inner()).ended;
             if ended > 0 && ended < delete_older_than {
-                let mut map = self.dns_request_conns.lock().expect("lock poisoned");
+                let mut map = self.dns_request_conns.lock().unwrap_or_else(|error| error.into_inner());
                 if map.get(&key).is_some_and(|c| Arc::ptr_eq(c, &shared)) {
                     map.remove(&key);
                 }
@@ -131,7 +131,7 @@ impl Network {
 
     /// Removes the open requests for the domain, also those without a process.
     pub fn remove_open_dns_request(&self, pid: i32, fqdn: &str) {
-        let mut open = self.open_dns_requests.lock().expect("lock poisoned");
+        let mut open = self.open_dns_requests.lock().unwrap_or_else(|error| error.into_inner());
         for qtype in SUPPORTED_DOMAIN_TO_IP_RECORD_TYPES {
             open.remove(&request_cache_key(pid, fqdn, qtype));
         }
@@ -148,7 +148,7 @@ impl Network {
     /// [`Network::write_open_dns_requests`]. The connection must not be locked
     /// by the caller; see [`Network::save_open_dns_request_locked`].
     pub fn save_open_dns_request(&self, query: Option<&OpenDnsQuery>, conn: &SharedConnection) {
-        let mut guard = conn.lock().expect("lock poisoned");
+        let mut guard = conn.lock().unwrap_or_else(|error| error.into_inner());
         self.save_open_dns_request_locked(query, conn, &mut guard);
     }
 
@@ -184,7 +184,7 @@ impl Network {
         let key = request_cache_key(conn.process_pid(), domain, query.qtype);
         self.open_dns_requests
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .insert(key, Arc::clone(shared));
     }
 
@@ -197,18 +197,18 @@ impl Network {
         let snapshot: Vec<(String, SharedConnection)> = self
             .open_dns_requests
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .iter()
             .map(|(key, conn)| (key.clone(), Arc::clone(conn)))
             .collect();
 
         for (key, shared) in snapshot {
-            let mut conn = shared.lock().expect("lock poisoned");
+            let mut conn = shared.lock().unwrap_or_else(|error| error.into_inner());
             if conn.ended >= threshold {
                 continue;
             }
             let removed = {
-                let mut open = self.open_dns_requests.lock().expect("lock poisoned");
+                let mut open = self.open_dns_requests.lock().unwrap_or_else(|error| error.into_inner());
                 if open.get(&key).is_some_and(|c| Arc::ptr_eq(c, &shared)) {
                     open.remove(&key);
                     true
@@ -224,6 +224,6 @@ impl Network {
 
     /// Returns the number of open DNS requests.
     pub fn open_dns_request_count(&self) -> usize {
-        self.open_dns_requests.lock().expect("lock poisoned").len()
+        self.open_dns_requests.lock().unwrap_or_else(|error| error.into_inner()).len()
     }
 }

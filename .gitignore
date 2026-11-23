@@ -76,3 +76,6 @@ _docs_local/
 # IDE configs
 .vscode/
 .idea/
+
+skills/
+.claude/skills

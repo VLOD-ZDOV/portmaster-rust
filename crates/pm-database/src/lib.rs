@@ -102,20 +102,12 @@ pub fn ensure_directory(path: impl AsRef<Path>) -> Result<()> {
 
     if let Err(err) = std::fs::create_dir_all(path) {
         if path.is_dir() {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700));
-            }
+            // Created concurrently by another process: leave its permissions
+            // alone, they were set intentionally by whoever created it.
             return Ok(());
         }
         if err.kind() == std::io::ErrorKind::AlreadyExists {
             if path.is_dir() {
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700));
-                }
                 return Ok(());
             }
             return Err(Error::Other(format!(

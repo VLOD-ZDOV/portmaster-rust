@@ -631,8 +631,8 @@ fn parse_outbound_object(
             "wireguard" => {
                 let secret_key = settings.and_then(|s| s.get("secretKey")).and_then(|v| v.as_str()).unwrap_or_default();
                 let peers = settings.and_then(|s| s.get("peers")).and_then(|v| v.as_array());
-                if !secret_key.is_empty() && peers.is_some() {
-                    for peer in peers.unwrap() {
+                if let Some(peers) = peers.filter(|_| !secret_key.is_empty()) {
+                    for peer in peers {
                         let endpoint = peer.get("endpoint").and_then(|v| v.as_str()).unwrap_or_default();
                         let pub_key = peer.get("publicKey").and_then(|v| v.as_str()).unwrap_or_default();
                         if endpoint.is_empty() || pub_key.is_empty() {

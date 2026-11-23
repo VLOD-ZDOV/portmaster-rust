@@ -34,8 +34,21 @@ impl Generator {
         let mut gen = Generator::unseeded(kind);
         let mut seed = Vec::with_capacity(KEY_SIZE + 8);
         let mut os = [0u8; KEY_SIZE];
-        getrandom::fill(&mut os).expect("failed to seed RNG from OS entropy: getrandom failed");
-        seed.extend_from_slice(&os);
+        match getrandom::fill(&mut os) {
+            Ok(()) => seed.extend_from_slice(&os),
+            Err(error) => {
+                // Degrade instead of panicking the whole core at startup
+                // (e.g. restricted container without OS entropy). Reads will
+                // reseed from the OS as soon as it becomes available.
+                tracing::error!(
+                    %error,
+                    "failed to seed RNG from OS entropy, using weak fallback seed"
+                );
+                seed.extend_from_slice(&std::process::id().to_le_bytes());
+                let stack_addr = &seed as *const _ as usize;
+                seed.extend_from_slice(&stack_addr.to_le_bytes());
+            }
+        }
         // Go mixes in the current time among other machine-specific data.
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)

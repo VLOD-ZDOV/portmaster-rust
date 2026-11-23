@@ -1,7 +1,7 @@
 //! High-performance sharded connection store, a low-contention port of Go `network/connection_store.go`.
 
 use std::collections::HashMap;
-use std::hash::{BuildHasher, Hash, Hasher};
+use std::hash::BuildHasher;
 use foldhash::fast::RandomState;
 use parking_lot::RwLock;
 
@@ -33,9 +33,7 @@ impl ConnectionStore {
 
     #[inline]
     fn shard_index(&self, id: &str) -> usize {
-        let mut h = self.hasher.build_hasher();
-        id.hash(&mut h);
-        (h.finish() as usize) % NUM_SHARDS
+        (self.hasher.hash_one(id) as usize) % NUM_SHARDS
     }
 
     pub fn add(&self, id: &str, conn: &SharedConnection) {

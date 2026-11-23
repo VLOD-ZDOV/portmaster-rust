@@ -10,11 +10,16 @@ use wasm_bindgen_futures::spawn_local;
 use crate::client::PortApiClient;
 
 /// Helper to determine the API base URL from window location or default to 127.0.0.1:817.
+/// Accepts any port on loopback hosts (the core may listen on a custom port);
+/// this mirrors the WebSocket endpoint selection in `client::ws`.
 pub fn api_base_url() -> String {
     if let Some(window) = web_sys::window() {
         let loc = window.location();
         if let Ok(host) = loc.host() {
-            if !host.is_empty() && (host.ends_with(":817") || host == "127.0.0.1:817" || host == "localhost:817") {
+            let is_loopback = host.starts_with("127.0.0.1:")
+                || host.starts_with("localhost:")
+                || host.starts_with("[::1]:");
+            if is_loopback {
                 let proto = loc.protocol().unwrap_or_else(|_| "http:".to_string());
                 return format!("{}//{}", proto, host);
             }
@@ -24,23 +29,22 @@ pub fn api_base_url() -> String {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Default)]
 pub enum ViewTab {
+    #[default]
     Apps,
     Vpn,
     Settings,
     Monitor,
 }
 
-impl Default for ViewTab {
-    fn default() -> Self {
-        Self::Apps
-    }
-}
 
 /// Navigation pages for Portmaster UI.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Default)]
 pub enum Page {
     Monitor,
+    #[default]
     Apps,
     AppDetail(String),
     Xray,
@@ -48,11 +52,6 @@ pub enum Page {
     Support,
 }
 
-impl Default for Page {
-    fn default() -> Self {
-        Self::Apps
-    }
-}
 
 /// A notification item for the notification drawer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,6 +61,8 @@ pub struct AppNotification {
     pub message: String,
     pub level: &'static str, // "info", "warning", "error"
     pub time: &'static str,
+    /// Whether this notification is an interactive connection prompt.
+    pub is_prompt: bool,
 }
 
 /// Global context holding UI signals and PortAPI interaction logic.
@@ -292,11 +293,10 @@ impl AppState {
                                 return false;
                             }
                         }
-                        if !key_str.is_empty() {
-                            if p.id == key_str || p.id == key_id || key_str.ends_with(&format!("/{}", p.id)) {
+                        if !key_str.is_empty()
+                            && (p.id == key_str || p.id == key_id || key_str.ends_with(&format!("/{}", p.id))) {
                                 return false;
                             }
-                        }
                         true
                     });
                 });
@@ -316,6 +316,8 @@ impl AppState {
         });
 
         // 5. Subscribe to settings updates
+        let set_route_default = self.set_route_by_default;
+        let set_sec_level = self.set_security_level;
         client.qsub("config:", move |frame| {
             if frame.msg_type == "del" {
                 if let Some(key) = &frame.key {
@@ -323,8 +325,32 @@ impl AppState {
                     set_settings.update(|list| {
                         list.retain(|s| s.key != setting_key);
                     });
+                    match setting_key {
+                        "splittun/use" => set_route_default.set(false),
+                        "filter/defaultAction" => {
+                            set_sec_level.set("Standard (Balanced)".to_string());
+                        }
+                        _ => {}
+                    }
                 }
             } else if let Ok(setting) = frame.parse_data::<Setting>() {
+                // Keep the quick toggles in sync with the real config,
+                // including the initial qsub snapshot.
+                let effective = setting.value.clone().unwrap_or_else(|| setting.default_value.clone());
+                match setting.key.as_str() {
+                    "splittun/use" => {
+                        set_route_default.set(effective.as_bool().unwrap_or(false));
+                    }
+                    "filter/defaultAction" => {
+                        let label = match effective.as_str().unwrap_or("permit") {
+                            "ask" => "Untrusted",
+                            "block" => "Strict (Block All)",
+                            _ => "Standard (Balanced)",
+                        };
+                        set_sec_level.set(label.to_string());
+                    }
+                    _ => {}
+                }
                 set_settings.update(|list| {
                     if let Some(pos) = list.iter().position(|s| s.key == setting.key) {
                         list[pos] = setting;
@@ -337,6 +363,7 @@ impl AppState {
 
         // 6. Subscribe to notifications updates
         let notif_set = self.set_notifications;
+        let notif_read = self.notifications;
         let notif_prompts = self.set_pending_prompts;
         client.qsub("notifications:all/", move |frame| {
             if frame.msg_type == "del" {
@@ -351,37 +378,35 @@ impl AppState {
                 let title = val.get("Title").and_then(|v| v.as_str()).unwrap_or("Notification").to_string();
                 let message = val.get("Message").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 let notif_type = val.get("Type").and_then(|v| v.as_str()).unwrap_or("info");
+                let is_prompt = notif_type == "prompt";
                 let level = match notif_type {
-                    "prompt" => {
-                        notif_prompts.update(|cnt| *cnt = cnt.saturating_add(1));
-                        "warning"
-                    }
+                    "prompt" => "warning",
                     "error" => "error",
                     "warning" => "warning",
                     _ => "info",
                 };
                 if !id.is_empty() {
                     notif_set.update(|list: &mut Vec<AppNotification>| {
+                        let item = AppNotification {
+                            id: id.clone(),
+                            title,
+                            message,
+                            level,
+                            time: "Now",
+                            is_prompt,
+                        };
                         if let Some(pos) = list.iter().position(|n| n.id == id) {
-                            list[pos] = AppNotification {
-                                id,
-                                title,
-                                message,
-                                level,
-                                time: "Now",
-                            };
+                            list[pos] = item;
                         } else {
-                            list.push(AppNotification {
-                                id,
-                                title,
-                                message,
-                                level,
-                                time: "Now",
-                            });
+                            list.push(item);
                         }
                     });
                 }
             }
+            // Derive the prompt badge from the list so updates of existing
+            // prompts do not inflate it and deletions deflated it.
+            let count = notif_read.get_untracked().iter().filter(|n| n.is_prompt).count();
+            notif_prompts.set(count);
         });
 
         // 7. Subscribe to real-time connection events via netquery/data/
@@ -485,28 +510,108 @@ impl AppState {
         self.set_side_dash_open.update(|v| *v = !*v);
     }
 
+    /// Adds a local UI notification (e.g. a failed action) to the drawer.
+    pub fn notify_local(&self, title: &str, message: &str, level: &'static str) {
+        let id = format!(
+            "ui-{}",
+            js_sys::Date::now() as u64
+        );
+        self.set_notifications.update(|list| {
+            list.push(AppNotification {
+                id,
+                title: title.to_string(),
+                message: message.to_string(),
+                level,
+                time: "Now",
+                is_prompt: false,
+            });
+        });
+    }
+
+    /// Clears the notification drawer and the prompt badge.
+    pub fn clear_notifications(&self) {
+        self.set_notifications.set(Vec::new());
+        self.set_pending_prompts.set(0);
+    }
+
+    /// Persists a profile change, rolling back the optimistic UI update and
+    /// notifying the user when the core rejects the write.
+    fn persist_profile(&self, previous: AppProfile, key: String, val: serde_json::Value) {
+        let client = self.client.clone();
+        let set_profiles = self.set_profiles;
+        let notifications = self.set_notifications;
+        spawn_local(async move {
+            if let Err(error) = client.put("update", &key, val).await {
+                set_profiles.update(|list| {
+                    if let Some(pos) = list.iter().position(|p| p.id == previous.id) {
+                        list[pos] = previous;
+                    }
+                });
+                let id = format!("ui-{}", js_sys::Date::now() as u64);
+                notifications.update(|list| {
+                    list.push(AppNotification {
+                        id,
+                        title: "Profile change rejected".to_string(),
+                        message: error,
+                        level: "error",
+                        time: "Now",
+                        is_prompt: false,
+                    });
+                });
+            }
+        });
+    }
+
     /// Toggles "Route Through VPN (Xray) by Default" global setting.
+    /// Enables the split tunnel module together with the global default,
+    /// otherwise the per-app routing flag has no effect in the core.
     pub fn toggle_route_by_default(&self) {
         let current = self.route_by_default.get_untracked();
         let new_val = !current;
         let set_route_by_default = self.set_route_by_default;
+        let state = self.clone();
 
         let client = self.client.clone();
         spawn_local(async move {
-            if client
+            let use_result = client
                 .put(
                     "update",
-                    "config:spn/use",
+                    "config:splittun/use",
                     serde_json::json!({
-                        "Key": "spn/use",
+                        "Key": "splittun/use",
                         "Value": new_val
                     }),
                 )
-                .await
-                .is_ok()
-            {
-                set_route_by_default.set(new_val);
+                .await;
+            if use_result.is_err() {
+                state.notify_local(
+                    "VPN routing",
+                    "Failed to change the default VPN routing setting.",
+                    "error",
+                );
+                return;
             }
+            if new_val
+                && client
+                    .put(
+                        "update",
+                        "config:splittun/enable",
+                        serde_json::json!({
+                            "Key": "splittun/enable",
+                            "Value": true
+                        }),
+                    )
+                    .await
+                    .is_err()
+                {
+                    state.notify_local(
+                        "VPN routing",
+                        "Failed to enable the split tunnel module.",
+                        "error",
+                    );
+                    return;
+                }
+            set_route_by_default.set(new_val);
         });
     }
 
@@ -554,33 +659,46 @@ impl AppState {
         });
     }
 
-    /// Saves a setting value to core.
+    /// Saves a setting value to core, rolling back on rejection.
     pub fn save_setting(&self, key: impl Into<String>, value: Option<serde_json::Value>) {
         let key = key.into();
         let set_settings = self.set_settings;
         let client = self.client.clone();
+        let state = self.clone();
 
+        let mut previous: Option<Option<serde_json::Value>> = None;
+        let mut db_key = String::new();
         set_settings.update(|list| {
             if let Some(s) = list.iter_mut().find(|item| item.key == key) {
+                previous = Some(s.value.clone());
                 s.value = value.clone();
-                let db_key = s.database_key();
+                db_key = s.database_key();
+            }
+        });
+        let Some(previous) = previous else { return };
 
-                spawn_local(async move {
-                    if let Some(val) = value {
-                        let _ = client
-                            .put(
-                                "update",
-                                &db_key,
-                                serde_json::json!({
-                                    "Key": key,
-                                    "Value": val,
-                                }),
-                            )
-                            .await;
-                    } else {
-                        let _ = client.delete(&db_key).await;
+        spawn_local(async move {
+            let result = if let Some(val) = value {
+                client
+                    .put(
+                        "update",
+                        &db_key,
+                        serde_json::json!({
+                            "Key": key,
+                            "Value": val,
+                        }),
+                    )
+                    .await
+            } else {
+                client.delete(&db_key).await
+            };
+            if let Err(error) = result {
+                set_settings.update(|list| {
+                    if let Some(s) = list.iter_mut().find(|item| item.key == key) {
+                        s.value = previous;
                     }
                 });
+                state.notify_local("Setting not saved", &error, "error");
             }
         });
     }
@@ -592,20 +710,7 @@ impl AppState {
 
     /// Resets a setting to default by deleting its override.
     pub fn reset_setting(&self, key: impl Into<String>) {
-        let key = key.into();
-        let set_settings = self.set_settings;
-        let client = self.client.clone();
-
-        set_settings.update(|list| {
-            if let Some(s) = list.iter_mut().find(|item| item.key == key) {
-                s.value = None;
-                let db_key = s.database_key();
-
-                spawn_local(async move {
-                    let _ = client.delete(&db_key).await;
-                });
-            }
-        });
+        self.save_setting(key, None);
     }
 
     /// Pauses protection for specified duration in minutes.
@@ -635,7 +740,11 @@ impl AppState {
                         if vpn_only {
                             set_xray_status.update(|s| s.connected = false);
                             let disc_url = format!("{}/api/v1/xray/disconnect", base_url);
-                            let _ = gloo_net::http::Request::post(&disc_url).json(&serde_json::json!({})).map(|r| r.send());
+                            if let Ok(req) = gloo_net::http::Request::post(&disc_url)
+                                .json(&serde_json::json!({}))
+                            {
+                                let _ = req.send().await;
+                            }
                         }
                     }
                 }
@@ -659,11 +768,14 @@ impl AppState {
             set_busy.set(true);
             let url = format!("{}/api/v1/xray/disconnect", base_url);
             let payload = serde_json::json!({});
+            let state = self.clone();
 
             spawn_local(async move {
+                let mut ok = false;
                 if let Ok(req) = gloo_net::http::Request::post(&url).json(&payload) {
                     if let Ok(resp) = req.send().await {
                         if resp.ok() {
+                            ok = true;
                             if let Ok(new_status) = resp.json::<XrayStatus>().await {
                                 set_status.set(new_status);
                             } else {
@@ -675,23 +787,36 @@ impl AppState {
                         }
                     }
                 }
+                if !ok {
+                    state.notify_local("VPN", "Failed to disconnect the VPN.", "error");
+                }
                 set_busy.set(false);
             });
         } else {
-            let node_id = status
+            let Some(node_id) = status
                 .node_id
                 .clone()
                 .or_else(|| self.xray_nodes.get_untracked().first().map(|n| n.id.clone()))
-                .unwrap_or_else(|| "node-nl-01".to_string());
+            else {
+                self.notify_local(
+                    "VPN",
+                    "No VPN nodes available. Add a subscription or configure a node first.",
+                    "warning",
+                );
+                return;
+            };
 
             set_busy.set(true);
             let url = format!("{}/api/v1/xray/connect", base_url);
             let payload = serde_json::json!({ "nodeId": node_id });
+            let state = self.clone();
 
             spawn_local(async move {
+                let mut ok = false;
                 if let Ok(req) = gloo_net::http::Request::post(&url).json(&payload) {
                     if let Ok(resp) = req.send().await {
                         if resp.ok() {
+                            ok = true;
                             if let Ok(new_status) = resp.json::<XrayStatus>().await {
                                 set_status.set(new_status);
                             } else {
@@ -703,6 +828,9 @@ impl AppState {
                             }
                         }
                     }
+                }
+                if !ok {
+                    state.notify_local("VPN", "Failed to connect to the VPN node.", "error");
                 }
                 set_busy.set(false);
             });
@@ -748,54 +876,50 @@ impl AppState {
     /// Toggles whether a specific application routes its traffic via VPN.
     pub fn toggle_app_vpn(&self, app_id: String) {
         let set_profiles = self.set_profiles;
-        let client = self.client.clone();
-
+        let mut change = None;
         set_profiles.update(|list| {
             if let Some(p) = list.iter_mut().find(|item| item.id == app_id) {
+                let previous = p.clone();
                 let current_vpn = p.route_via_vpn();
-                let next_vpn = !current_vpn;
-                p.set_route_via_vpn(next_vpn);
-
+                p.set_route_via_vpn(!current_vpn);
                 let key = p.database_key();
-                let profile_val = serde_json::to_value(&*p).ok();
-
-                spawn_local(async move {
-                    if let Some(val) = profile_val {
-                        let _ = client.put("update", &key, val).await;
-                    }
-                });
+                if let Ok(val) = serde_json::to_value(&*p) {
+                    change = Some((previous, key, val));
+                }
             }
         });
+        if let Some((previous, key, val)) = change {
+            self.persist_profile(previous, key, val);
+        }
     }
 
     /// Changes an application default filter action ("permit", "block", "ask").
     pub fn set_app_action(&self, app_id: String, action: String) {
         let set_profiles = self.set_profiles;
-        let client = self.client.clone();
-
+        let mut change = None;
         set_profiles.update(|list| {
             if let Some(p) = list.iter_mut().find(|item| item.id == app_id) {
+                let previous = p.clone();
                 p.set_default_action(&action);
-
                 let key = p.database_key();
-                let profile_val = serde_json::to_value(&*p).ok();
-
-                spawn_local(async move {
-                    if let Some(val) = profile_val {
-                        let _ = client.put("update", &key, val).await;
-                    }
-                });
+                if let Ok(val) = serde_json::to_value(&*p) {
+                    change = Some((previous, key, val));
+                }
             }
         });
+        if let Some((previous, key, val)) = change {
+            self.persist_profile(previous, key, val);
+        }
     }
 
     /// Saves or removes a specific setting override for an application profile.
     pub fn save_profile_config(&self, app_id: &str, cfg_key: &str, value: Option<serde_json::Value>) {
         let app_id = app_id.to_string();
         let cfg_key = cfg_key.to_string();
-        let client = self.client.clone();
+        let mut change = None;
         self.set_profiles.update(|list| {
-            if let Some(p) = list.iter_mut().find(|p| p.id == app_id || format!("{}/{}", p.source, p.id) == app_id || (app_id.contains('/') && app_id.split('/').last() == Some(&p.id))) {
+            if let Some(p) = list.iter_mut().find(|p| p.id == app_id || format!("{}/{}", p.source, p.id) == app_id || (app_id.contains('/') && app_id.split('/').next_back() == Some(&p.id))) {
+                let previous = p.clone();
                 let mut map = match p.config.take() {
                     Some(serde_json::Value::Object(m)) => m,
                     _ => serde_json::Map::new(),
@@ -807,13 +931,51 @@ impl AppState {
                 }
                 p.config = Some(serde_json::Value::Object(map));
                 let db_key = p.database_key();
-                let profile_val = serde_json::to_value(&*p).ok();
-                spawn_local(async move {
-                    if let Some(val) = profile_val {
-                        let _ = client.put("update", &db_key, val).await;
-                    }
-                });
+                if let Ok(val) = serde_json::to_value(&*p) {
+                    change = Some((previous, db_key, val));
+                }
             }
+        });
+        if let Some((previous, key, val)) = change {
+            self.persist_profile(previous, key, val);
+        }
+    }
+
+    /// Resolves a pending connection prompt by selecting the matching action
+    /// on its notification, like the Angular UI. Without this the core keeps
+    /// denying the connection until the prompt timeout even though the rule
+    /// was already saved.
+    fn resolve_prompt(&self, prof_id: &str, domain: &str, ip: &str, inbound: bool, allow: bool) {
+        let bare_prof = prof_id.rsplit('/').next().unwrap_or(prof_id);
+        let notifications = self.notifications.get_untracked();
+        let Some(prompt) = notifications.iter().find(|n| {
+            n.is_prompt
+                && n.id.starts_with("filter:prompt-")
+                && n.id.contains(bare_prof)
+                && if domain.is_empty() {
+                    n.id.contains(ip)
+                } else {
+                    n.id.contains(domain)
+                }
+        }) else {
+            return;
+        };
+        let action = match (inbound, domain.is_empty(), allow) {
+            (true, _, true) => "allow-serving-ip",
+            (true, _, false) => "block-serving-ip",
+            (false, true, true) => "allow-ip",
+            (false, true, false) => "block-ip",
+            (false, false, true) => "allow-domain-all",
+            (false, false, false) => "block-domain-all",
+        };
+        let client = self.client.clone();
+        let key = format!("notifications:all/{}", prompt.id);
+        let payload = serde_json::json!({
+            "EventID": prompt.id,
+            "SelectedActionID": action,
+        });
+        spawn_local(async move {
+            let _ = client.put("update", &key, payload).await;
         });
     }
 
@@ -822,19 +984,30 @@ impl AppState {
         let conn_id = conn_id.to_string();
         let mut target_domain = None;
         let mut target_profile = None;
+        let mut prompt_info = None;
         self.set_connections.update(|conns| {
             if let Some(c) = conns.iter_mut().find(|c| c.id == conn_id) {
                 c.verdict = "permit".to_string();
                 c.verdict_reason = "Manual Rule: Explicitly Allowed by User".to_string();
                 target_domain = c.domain.clone().or_else(|| Some(c.remote_ip.clone()));
                 target_profile = Some(c.profile_id.clone());
+                prompt_info = Some((
+                    c.profile_id.clone(),
+                    c.domain.clone().unwrap_or_default(),
+                    c.remote_ip.clone(),
+                    c.direction == "inbound",
+                ));
             }
         });
+        if let Some((prof, domain, ip, inbound)) = prompt_info {
+            self.resolve_prompt(&prof, &domain, &ip, inbound, true);
+        }
         if let (Some(domain), Some(prof_id)) = (target_domain, target_profile) {
-            let client = self.client.clone();
             let rule = format!("+ {}", domain);
+            let mut change = None;
             self.set_profiles.update(|profs| {
                 if let Some(p) = profs.iter_mut().find(|p| p.id == prof_id || p.id == prof_id.rsplit('/').next().unwrap_or(&prof_id)) {
+                    let previous = p.clone();
                     let mut map = match p.config.take() {
                         Some(serde_json::Value::Object(m)) => m,
                         _ => serde_json::Map::new(),
@@ -847,15 +1020,15 @@ impl AppState {
                         map.insert("filter/endpoints".to_string(), serde_json::json!(rules));
                         p.config = Some(serde_json::Value::Object(map.clone()));
                         let key = p.database_key();
-                        let profile_val = serde_json::to_value(&*p).ok();
-                        spawn_local(async move {
-                            if let Some(val) = profile_val {
-                                let _ = client.put("update", &key, val).await;
-                            }
-                        });
+                        if let Ok(val) = serde_json::to_value(&*p) {
+                            change = Some((previous, key, val));
+                        }
                     }
                 }
             });
+            if let Some((previous, key, val)) = change {
+                self.persist_profile(previous, key, val);
+            }
         }
     }
 
@@ -864,19 +1037,30 @@ impl AppState {
         let conn_id = conn_id.to_string();
         let mut target_domain = None;
         let mut target_profile = None;
+        let mut prompt_info = None;
         self.set_connections.update(|conns| {
             if let Some(c) = conns.iter_mut().find(|c| c.id == conn_id) {
                 c.verdict = "block".to_string();
                 c.verdict_reason = "Manual Rule: Explicitly Blocked by User".to_string();
                 target_domain = c.domain.clone().or_else(|| Some(c.remote_ip.clone()));
                 target_profile = Some(c.profile_id.clone());
+                prompt_info = Some((
+                    c.profile_id.clone(),
+                    c.domain.clone().unwrap_or_default(),
+                    c.remote_ip.clone(),
+                    c.direction == "inbound",
+                ));
             }
         });
+        if let Some((prof, domain, ip, inbound)) = prompt_info {
+            self.resolve_prompt(&prof, &domain, &ip, inbound, false);
+        }
         if let (Some(domain), Some(prof_id)) = (target_domain, target_profile) {
-            let client = self.client.clone();
             let rule = format!("- {}", domain);
+            let mut change = None;
             self.set_profiles.update(|profs| {
                 if let Some(p) = profs.iter_mut().find(|p| p.id == prof_id || p.id == prof_id.rsplit('/').next().unwrap_or(&prof_id)) {
+                    let previous = p.clone();
                     let mut map = match p.config.take() {
                         Some(serde_json::Value::Object(m)) => m,
                         _ => serde_json::Map::new(),
@@ -889,47 +1073,75 @@ impl AppState {
                         map.insert("filter/endpoints".to_string(), serde_json::json!(rules));
                         p.config = Some(serde_json::Value::Object(map.clone()));
                         let key = p.database_key();
-                        let profile_val = serde_json::to_value(&*p).ok();
-                        spawn_local(async move {
-                            if let Some(val) = profile_val {
-                                let _ = client.put("update", &key, val).await;
-                            }
-                        });
+                        if let Ok(val) = serde_json::to_value(&*p) {
+                            change = Some((previous, key, val));
+                        }
                     }
                 }
             });
+            if let Some((previous, key, val)) = change {
+                self.persist_profile(previous, key, val);
+            }
         }
     }
 
     /// Requests graceful restart of Portmaster core service.
     pub fn restart_core(&self) {
         let url = format!("{}/api/v1/core/restart", api_base_url());
+        let state = self.clone();
         spawn_local(async move {
-            let _ = gloo_net::http::Request::post(&url).json(&serde_json::json!({})).map(|r| r.send());
+            match gloo_net::http::Request::post(&url).json(&serde_json::json!({})) {
+                Ok(req) => match req.send().await {
+                    Ok(resp) if resp.ok() => {}
+                    _ => state.notify_local("Core restart", "The core rejected the restart request.", "error"),
+                },
+                Err(_) => state.notify_local("Core restart", "Failed to send the restart request.", "error"),
+            }
         });
     }
 
     /// Requests shutdown of Portmaster core service.
     pub fn shutdown_core(&self) {
         let url = format!("{}/api/v1/core/shutdown", api_base_url());
+        let state = self.clone();
         spawn_local(async move {
-            let _ = gloo_net::http::Request::post(&url).json(&serde_json::json!({})).map(|r| r.send());
+            match gloo_net::http::Request::post(&url).json(&serde_json::json!({})) {
+                Ok(req) => match req.send().await {
+                    Ok(resp) if resp.ok() => {}
+                    _ => state.notify_local("Core shutdown", "The core rejected the shutdown request.", "error"),
+                },
+                Err(_) => state.notify_local("Core shutdown", "Failed to send the shutdown request.", "error"),
+            }
         });
     }
 
     /// Triggers updates check on Portmaster core.
     pub fn check_updates(&self) {
         let url = format!("{}/api/v1/updates/check", api_base_url());
+        let state = self.clone();
         spawn_local(async move {
-            let _ = gloo_net::http::Request::post(&url).json(&serde_json::json!({})).map(|r| r.send());
+            match gloo_net::http::Request::post(&url).json(&serde_json::json!({})) {
+                Ok(req) => match req.send().await {
+                    Ok(resp) if resp.ok() => {}
+                    _ => state.notify_local("Updates", "The update check request failed.", "error"),
+                },
+                Err(_) => state.notify_local("Updates", "Failed to send the update check request.", "error"),
+            }
         });
     }
 
     /// Flushes resolver DNS cache.
     pub fn clear_dns_cache(&self) {
         let url = format!("{}/api/v1/dns/clear", api_base_url());
+        let state = self.clone();
         spawn_local(async move {
-            let _ = gloo_net::http::Request::post(&url).json(&serde_json::json!({})).map(|r| r.send());
+            match gloo_net::http::Request::post(&url).json(&serde_json::json!({})) {
+                Ok(req) => match req.send().await {
+                    Ok(resp) if resp.ok() => {}
+                    _ => state.notify_local("DNS cache", "Failed to clear the DNS cache.", "error"),
+                },
+                Err(_) => state.notify_local("DNS cache", "Failed to send the cache clear request.", "error"),
+            }
         });
     }
 
@@ -943,25 +1155,39 @@ impl AppState {
         }
     }
 
-    /// Changes active security level and persists it to runtime registry.
+    /// Changes active security level by setting the global default filter
+    /// action: Standard permits, Untrusted asks, Strict blocks everything.
     pub fn update_security_level(&self, level: &str) {
+        let previous = self.security_level.get_untracked();
         self.set_security_level.set(level.to_string());
-        let num_level = match level {
-            "Untrusted" => 1,
-            "Strict (Block All)" | "Strict" => 3,
-            _ => 2, // Standard
+        let action = match level {
+            "Untrusted" => "ask",
+            "Strict (Block All)" | "Strict" => "block",
+            _ => "permit", // Standard
         };
         let client = self.client.clone();
+        let set_level = self.set_security_level;
+        let state = self.clone();
         spawn_local(async move {
-            let _ = client
+            if client
                 .put(
                     "update",
-                    "runtime:system/security-level",
+                    "config:filter/defaultAction",
                     serde_json::json!({
-                        "SelectedSecurityLevel": num_level,
+                        "Key": "filter/defaultAction",
+                        "Value": action,
                     }),
                 )
-                .await;
+                .await
+                .is_err()
+            {
+                set_level.set(previous);
+                state.notify_local(
+                    "Security level",
+                    "The core rejected the security level change.",
+                    "error",
+                );
+            }
         });
     }
 

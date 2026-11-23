@@ -45,7 +45,7 @@ impl FailingQueries {
     /// Returns whether the query is currently failing. If the network changed,
     /// all failing queries are forgotten.
     pub fn check(&self, id: &str, network_changed: bool, now: Instant) -> Option<FailingInfo> {
-        let mut queries = self.queries.lock().expect("lock poisoned");
+        let mut queries = self.queries.lock().unwrap_or_else(|error| error.into_inner());
         if network_changed {
             queries.clear();
             return None;
@@ -64,7 +64,7 @@ impl FailingQueries {
 
     /// Registers a failure of the query.
     pub fn add(&self, id: &str, err: &str, now: Instant) {
-        let mut queries = self.queries.lock().expect("lock poisoned");
+        let mut queries = self.queries.lock().unwrap_or_else(|error| error.into_inner());
         let failing = queries.entry(id.to_string()).or_insert_with(|| FailingQuery {
             until: now,
             keep: now,
@@ -85,7 +85,7 @@ impl FailingQueries {
     /// Removes up to `max_remove` expired entries, giving up after
     /// `max_miss` entries that are still kept.
     pub fn clean(&self, mut max_remove: usize, mut max_miss: usize, now: Instant) {
-        let mut queries = self.queries.lock().expect("lock poisoned");
+        let mut queries = self.queries.lock().unwrap_or_else(|error| error.into_inner());
         let mut remove = Vec::new();
         for (key, failing) in queries.iter() {
             if now > failing.keep {
@@ -107,7 +107,7 @@ impl FailingQueries {
     }
 
     pub fn len(&self) -> usize {
-        self.queries.lock().expect("lock poisoned").len()
+        self.queries.lock().unwrap_or_else(|error| error.into_inner()).len()
     }
 
     pub fn is_empty(&self) -> bool {

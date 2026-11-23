@@ -173,10 +173,13 @@ impl Config {
         if option.validation_regex.is_empty() && !option.possible_values.is_empty() {
             // Go joins the raw values; Windows paths like `C:\Program Files\xray`
             // then turn into invalid escapes (`\x`) and the core fails to start.
+            // Escape only true regex metacharacters: unlike `regex::escape`,
+            // this leaves `-` and other harmless punctuation raw, keeping the
+            // generated regex byte-identical to Go for ordinary values.
             let values: Vec<String> = option
                 .possible_values
                 .iter()
-                .map(|possible| regex::escape(&go_value_string(&possible.value)))
+                .map(|possible| escape_regex_metachars(&go_value_string(&possible.value)))
                 .collect();
             option.validation_regex = format!("^({})$", values.join("|"));
         }
@@ -708,6 +711,24 @@ fn go_value_string(value: &Value) -> String {
         }
         Value::Object(_) => "map[]".to_string(),
     }
+}
+
+/// Escapes only characters that are special outside character classes, so a
+/// value matches literally. `-` is intentionally not escaped: it is only
+/// special inside `[...]`, and Go leaves it raw in generated validation
+/// regexes (byte-compatibility of exported options).
+fn escape_regex_metachars(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if matches!(
+            ch,
+            '\\' | '^' | '$' | '.' | '|' | '?' | '*' | '+' | '(' | ')' | '[' | ']' | '{' | '}'
+        ) {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    escaped
 }
 
 /// Writes the config file atomically.

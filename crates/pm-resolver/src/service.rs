@@ -59,14 +59,91 @@ pub enum MissingResolversState {
     NoServers,
 }
 
-/// Connection of mDNS resolvers, returning not found when unconfigured.
-struct UnsupportedConn;
+/// Connection of mDNS resolvers, querying local multicast DNS on 224.0.0.251:5353 (RFC 6762).
+pub struct MdnsResolverConn;
 
 #[async_trait]
-impl ResolverConn for UnsupportedConn {
-    async fn query(&self, _q: Query) -> Result<hickory_proto::op::Message, ResolveError> {
-        Err(ResolveError::NotFound)
+impl ResolverConn for MdnsResolverConn {
+    async fn query(&self, q: Query) -> Result<hickory_proto::op::Message, ResolveError> {
+        use hickory_proto::op::Message;
+        use std::net::SocketAddr;
+        use std::time::Duration;
+        use tokio::net::UdpSocket;
+        use tokio::time::timeout;
+
+        let query_id = crate::conn::random_u16();
+        let mut query_msg = q.to_message(query_id)?;
+        query_msg.metadata.recursion_desired = false;
+        let wire_bytes = query_msg.to_vec()?;
+
+        let v4_socket = UdpSocket::bind("0.0.0.0:0").await.ok();
+        let v6_socket = UdpSocket::bind("[::]:0").await.ok();
+
+        if v4_socket.is_none() && v6_socket.is_none() {
+            return Err(ResolveError::NotFound);
+        }
+
+        let mut any_sent = false;
+        if let Some(ref s4) = v4_socket {
+            let mdns_v4: SocketAddr = "224.0.0.251:5353".parse().unwrap();
+            if s4.send_to(&wire_bytes, mdns_v4).await.is_ok() {
+                any_sent = true;
+            }
+        }
+        if let Some(ref s6) = v6_socket {
+            let mdns_v6: SocketAddr = "[ff02::fb]:5353".parse().unwrap();
+            if s6.send_to(&wire_bytes, mdns_v6).await.is_ok() {
+                any_sent = true;
+            }
+        }
+
+        if !any_sent {
+            return Err(ResolveError::NotFound);
+        }
+
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(1500);
+        let mut buf4 = [0u8; 4096];
+        let mut buf6 = [0u8; 4096];
+
+        loop {
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return Err(ResolveError::NotFound);
+            }
+            let remaining = deadline - now;
+
+            let recv_res = timeout(remaining, async {
+                tokio::select! {
+                    res = async {
+                        match &v4_socket {
+                            Some(s) => s.recv_from(&mut buf4).await,
+                            None => std::future::pending().await,
+                        }
+                    } => res.map(|(n, _addr)| (4, n)),
+                    res = async {
+                        match &v6_socket {
+                            Some(s) => s.recv_from(&mut buf6).await,
+                            None => std::future::pending().await,
+                        }
+                    } => res.map(|(n, _addr)| (6, n)),
+                }
+            })
+            .await;
+
+            match recv_res {
+                Ok(Ok((which, n))) => {
+                    let bytes = if which == 4 { &buf4[..n] } else { &buf6[..n] };
+                    if let Ok(reply) = Message::from_vec(bytes) {
+                        if reply.id == query_id || !reply.answers.is_empty() {
+                            return Ok(reply);
+                        }
+                    }
+                }
+                _ => return Err(ResolveError::NotFound),
+            }
+        }
     }
+
     fn report_failure(&self) -> bool {
         false
     }
@@ -80,6 +157,7 @@ impl ResolverConn for UnsupportedConn {
 const ROUTER_DOMAIN: &str = "router.local.portmaster.home.arpa.";
 const CAPTIVE_PORTAL_DOMAIN: &str = "captiveportal.local.portmaster.home.arpa.";
 const INTERNAL_SPECIAL_USE_DOMAIN: &str = "portmaster.home.arpa.";
+const INTERNAL_SPECIAL_USE_SUBDOMAIN_SUFFIX: &str = ".portmaster.home.arpa.";
 
 /// Resolves synthetic internal Portmaster special-use domains like Go `envResolverConn`.
 pub struct EnvResolverConn {
@@ -94,7 +172,9 @@ impl ResolverConn for EnvResolverConn {
         use std::str::FromStr;
 
         let fqdn = q.fqdn.to_ascii_lowercase();
-        let mut msg = hickory_proto::op::Message::new(17, MessageType::Response, OpCode::Query);
+        // The message ID is not used downstream: the nameserver rebuilds the
+        // reply with the client's query ID (RRCache::from_reply drops it).
+        let mut msg = hickory_proto::op::Message::new(0, MessageType::Response, OpCode::Query);
         msg.metadata.authoritative = true;
 
         if fqdn == ROUTER_DOMAIN || fqdn == CAPTIVE_PORTAL_DOMAIN {
@@ -133,11 +213,22 @@ impl ResolverConn for EnvResolverConn {
                 msg.metadata.response_code = ResponseCode::NoError;
                 return Ok(msg);
             }
-            msg.metadata.response_code = ResponseCode::NXDomain;
+            // The name exists but has no record of the requested type: reply
+            // NODATA, not NXDOMAIN. NXDOMAIN would let dual-stack clients
+            // negatively cache the whole name (RFC 2308) and skip the A lookup
+            // after an empty AAAA answer.
+            msg.metadata.response_code = match q.qtype {
+                RecordType::A | RecordType::AAAA | RecordType::ANY => ResponseCode::NoError,
+                _ => ResponseCode::NXDomain,
+            };
             return Ok(msg);
         }
 
-        if fqdn.ends_with(INTERNAL_SPECIAL_USE_DOMAIN) {
+        // Suffix match with a label boundary: "evilportmaster.home.arpa." must
+        // not be treated as part of the internal special-use domain.
+        if fqdn == INTERNAL_SPECIAL_USE_DOMAIN
+            || fqdn.ends_with(INTERNAL_SPECIAL_USE_SUBDOMAIN_SUFFIX)
+        {
             msg.metadata.response_code = ResponseCode::NXDomain;
             return Ok(msg);
         }
@@ -245,7 +336,7 @@ impl ResolverService {
         let env_conn: Arc<dyn ResolverConn> = Arc::new(EnvResolverConn {
             env: Arc::clone(&env),
         });
-        let mdns_conn: Arc<dyn ResolverConn> = Arc::new(UnsupportedConn);
+        let mdns_conn: Arc<dyn ResolverConn> = Arc::new(MdnsResolverConn);
         ResolverService {
             inner: Arc::new(Inner {
                 settings,
@@ -364,9 +455,11 @@ impl ResolverService {
             // Load the defaults directly, overriding the config system.
             new_resolvers = self.configured_resolvers(&default_name_servers());
             if self.inner.settings.no_insecure_protocols() {
-                new_resolvers.retain(|r| match r.info.r#type.as_str() {
-                    SERVER_TYPE_DOT | SERVER_TYPE_DOH | SERVER_TYPE_ENV => true,
-                    _ => false,
+                new_resolvers.retain(|r| {
+                    matches!(
+                        r.info.r#type.as_str(),
+                        SERVER_TYPE_DOT | SERVER_TYPE_DOH | SERVER_TYPE_ENV
+                    )
                 });
             }
             if new_resolvers.is_empty() {

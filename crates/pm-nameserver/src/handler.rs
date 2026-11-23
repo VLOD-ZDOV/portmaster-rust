@@ -390,7 +390,7 @@ impl Nameserver {
             }
         };
 
-        let conn_pid = conn.lock().expect("lock poisoned").pid;
+        let conn_pid = conn.lock().unwrap_or_else(|error| error.into_inner()).pid;
         if conn_pid != 0 && conn_pid == std::process::id() as i32 {
             tracing::warn!(
                 "nameserver: detected self-directed query loop from own PID {} for {id}, dropping query",
@@ -462,7 +462,7 @@ impl Nameserver {
                     if rr_cache.is_none() {
                         tracing::trace!("nameserver: {err}");
                         conn.lock()
-                            .expect("lock poisoned")
+                            .unwrap_or_else(|error| error.into_inner())
                             .failed("domain does not exist", "");
                         let msg = format!("nxdomain: {err}");
                         return self
@@ -472,7 +472,7 @@ impl Nameserver {
                 } else if err.is_blocked() {
                     tracing::trace!("nameserver: {err}");
                     conn.lock()
-                        .expect("lock poisoned")
+                        .unwrap_or_else(|error| error.into_inner())
                         .block(&err.to_string(), "");
                     let msg = format!("blocked: {err}");
                     return self
@@ -481,7 +481,7 @@ impl Nameserver {
                 } else if err == QueryError::Localhost {
                     tracing::trace!("nameserver: returning localhost records");
                     conn.lock()
-                        .expect("lock poisoned")
+                        .unwrap_or_else(|error| error.into_inner())
                         .accept("allowing query for localhost", "");
                     return self
                         .send(request, &StaticResponder::localhost::<&str>(&[]), &[])
@@ -493,7 +493,7 @@ impl Nameserver {
                                 "nameserver: not resolving {id}, device is offline"
                             );
                             conn.lock()
-                                .expect("lock poisoned")
+                                .unwrap_or_else(|error| error.into_inner())
                                 .failed("not resolving, device is offline", "");
                             return self
                                 .send(
@@ -516,7 +516,7 @@ impl Nameserver {
                 } else {
                     tracing::warn!("nameserver: failed to resolve {id}: {err}");
                     conn.lock()
-                        .expect("lock poisoned")
+                        .unwrap_or_else(|error| error.into_inner())
                         .failed(&format!("query failed: {err}"), "");
                     self.failing.add(&id, &err.to_string(), Instant::now());
                     let msg = format!("{INTERNAL_ERROR}{err}");
@@ -606,7 +606,7 @@ impl Nameserver {
     }
 
     fn snapshot(conn: &SharedConnection) -> (Verdict, String) {
-        let conn = conn.lock().expect("lock poisoned");
+        let conn = conn.lock().unwrap_or_else(|error| error.into_inner());
         (conn.verdict, conn.reason.msg.clone())
     }
 
@@ -675,7 +675,7 @@ impl Nameserver {
             None => self.deps.resolver.resolver_ip_scope(q),
         };
         let verdict = {
-            let mut guard = conn.lock().expect("lock poisoned");
+            let mut guard = conn.lock().unwrap_or_else(|error| error.into_inner());
             if let Some(rr) = rr_cache {
                 guard.dns_context = Some(to_dns_request_context(rr));
                 guard.resolver = rr.resolver.clone();
@@ -703,7 +703,7 @@ impl Nameserver {
             Verdict::Undecided | Verdict::Accept => {
                 let Some(rr) = rr_cache else {
                     conn.lock()
-                        .expect("lock poisoned")
+                        .unwrap_or_else(|error| error.into_inner())
                         .failed(&format!("{INTERNAL_ERROR}no reply"), "");
                     return;
                 };
@@ -712,7 +712,7 @@ impl Nameserver {
                 // simple interface: they were most probably made for another
                 // process.
                 {
-                    let mut guard = conn.lock().expect("lock poisoned");
+                    let mut guard = conn.lock().unwrap_or_else(|error| error.into_inner());
                     if self.deps.attributor.is_system_resolver(&guard) {
                         guard.internal = true;
                     }

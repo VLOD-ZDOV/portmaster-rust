@@ -37,7 +37,7 @@ impl Network {
         let delete_incomplete_older_than = now - DELETE_INCOMPLETE_CONNS_AFTER_STARTED_THRESHOLD;
 
         for shared in self.conns.list() {
-            let mut conn = shared.lock().expect("lock poisoned");
+            let mut conn = shared.lock().unwrap_or_else(|error| error.into_inner());
 
             if conn.started >= ignore_newer {
                 // Skip very fresh connections to evade edge cases.
@@ -94,7 +94,7 @@ impl Network {
         }
 
         for shared in self.dns_conns.list() {
-            let mut conn = shared.lock().expect("lock poisoned");
+            let mut conn = shared.lock().unwrap_or_else(|error| error.into_inner());
             if conn.ended < delete_older_than {
                 self.delete_locked(&mut conn);
             }

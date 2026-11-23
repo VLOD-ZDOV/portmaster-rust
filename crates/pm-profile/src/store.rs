@@ -1,9 +1,19 @@
 //! Reading and writing profiles in the `core` database.
 
+use std::sync::{Arc, RwLock};
+use std::time::{Duration, Instant};
+
 use pm_database::{Interface, Key, Meta, Query, Record};
 
 use crate::profile::Profile;
 use crate::{make_profile_key, make_scoped_id, PROFILES_DB_PATH, SOURCE_LOCAL};
+
+const META_CACHE_TTL: Duration = Duration::from_secs(5);
+
+struct CachedMeta {
+    meta: crate::meta::ProfilesMetadata,
+    loaded_at: Instant,
+}
 
 /// Errors of the profile store.
 #[derive(Debug, thiserror::Error)]
@@ -24,6 +34,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Stores profiles in the `core` database under `profiles/<source>/<id>`.
 pub struct ProfileStore {
     db: Interface,
+    meta_cache: Arc<RwLock<Option<CachedMeta>>>,
 }
 
 impl ProfileStore {
@@ -31,7 +42,54 @@ impl ProfileStore {
     ///
     /// The interface should have local and internal permissions.
     pub fn new(db: Interface) -> ProfileStore {
-        ProfileStore { db }
+        ProfileStore {
+            db,
+            meta_cache: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    fn get_meta(&self) -> crate::meta::ProfilesMetadata {
+        {
+            if let Ok(guard) = self.meta_cache.read() {
+                if let Some(ref cached) = *guard {
+                    if cached.loaded_at.elapsed() < META_CACHE_TTL {
+                        return cached.meta.clone();
+                    }
+                }
+            }
+        }
+        let mut guard = self.meta_cache.write().unwrap_or_else(|p| p.into_inner());
+        if let Some(ref cached) = *guard {
+            if cached.loaded_at.elapsed() < META_CACHE_TTL {
+                return cached.meta.clone();
+            }
+        }
+        let meta = crate::meta::ProfilesMetadata::load(&self.db);
+        *guard = Some(CachedMeta {
+            meta: meta.clone(),
+            loaded_at: Instant::now(),
+        });
+        meta
+    }
+
+    fn update_meta<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut crate::meta::ProfilesMetadata) -> R,
+    {
+        let mut guard = self.meta_cache.write().unwrap_or_else(|p| p.into_inner());
+        let mut meta = match guard.take() {
+            Some(cached) if cached.loaded_at.elapsed() < META_CACHE_TTL => cached.meta,
+            _ => crate::meta::ProfilesMetadata::load(&self.db),
+        };
+        let result = f(&mut meta);
+        if let Err(error) = meta.save(&self.db) {
+            tracing::warn!(%error, "failed to save profile metadata");
+        }
+        *guard = Some(CachedMeta {
+            meta,
+            loaded_at: Instant::now(),
+        });
+        result
     }
 
     /// Reads a profile by its scoped ID (`source/id`).
@@ -74,26 +132,30 @@ impl ProfileStore {
                 profile.id
             )));
         }
-        let mut meta = crate::meta::ProfilesMetadata::load(&self.db);
-        meta.mark_seen(&profile.id);
-        let _ = meta.save(&self.db);
+        // Write the profile first; only mark it seen once the write succeeded,
+        // so a failed put cannot leave phantom metadata behind.
         self.db.put(self.encode(profile)?)?;
+        self.update_meta(|meta| {
+            meta.mark_seen(&profile.id);
+        });
         Ok(())
     }
 
     /// Deletes a profile.
     pub fn delete(&self, profile: &Profile) -> Result<()> {
-        let mut meta = crate::meta::ProfilesMetadata::load(&self.db);
-        meta.mark_deleted(&profile.id);
-        let _ = meta.save(&self.db);
+        // Delete the record first; a failed delete must not mark a still
+        // existing profile as deleted.
         self.db
             .delete(&make_profile_key(&profile.source, &profile.id))?;
+        self.update_meta(|meta| {
+            meta.mark_deleted(&profile.id);
+        });
         Ok(())
     }
 
     /// Checks if a profile ID is marked as deleted.
     pub fn is_deleted(&self, id: &str) -> bool {
-        let meta = crate::meta::ProfilesMetadata::load(&self.db);
+        let meta = self.get_meta();
         meta.is_deleted(id)
     }
 

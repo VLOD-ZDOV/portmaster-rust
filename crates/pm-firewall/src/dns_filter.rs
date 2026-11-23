@@ -264,6 +264,13 @@ pub fn filter_resolved_dns(
         return Some(rr_cache);
     }
 
+    // Special grant for connectivity domains, before any filtering: during
+    // network bootstrap (portal state) these queries must succeed even if a
+    // filter list or CNAME would block them, like Go `FilterResolvedDNS`.
+    if check_connectivity_domain(conn, profile, env, &mut Decision::default()) {
+        return Some(rr_cache);
+    }
+
     // Only filter critical things if the request comes from the system resolver.
     let sys_resolver = conn.process.as_deref().is_some_and(is_system_resolver);
 
@@ -276,14 +283,6 @@ pub fn filter_resolved_dns(
     // Block by CNAMEs.
     if !sys_resolver {
         may_block_cnames(conn, profile);
-    }
-    if conn.verdict == Verdict::Block {
-        return Some(rr_cache);
-    }
-
-    // Special grant for connectivity domains if not explicitly blocked.
-    if check_connectivity_domain(conn, profile, env, &mut Decision::default()) {
-        return Some(rr_cache);
     }
 
     Some(rr_cache)

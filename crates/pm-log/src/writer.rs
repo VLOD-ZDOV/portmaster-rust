@@ -187,7 +187,6 @@ fn open_tmp_mirror() -> Option<Box<dyn IoWrite + Send>> {
 
     // Open with O_NOFOLLOW to ensure we never follow a symlink.
     let open_res = OpenOptions::new()
-        .write(true)
         .create(true)
         .append(true)
         .custom_flags(libc::O_NOFOLLOW)

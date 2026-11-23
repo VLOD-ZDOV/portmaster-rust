@@ -41,7 +41,7 @@ pub fn AppDetailView(app_id: String) -> impl IntoView {
         list.into_iter().find(|p| {
             p.id == id_clone
                 || format!("{}/{}", p.source, p.id) == id_clone
-                || (id_clone.contains('/') && id_clone.split('/').last() == Some(&p.id))
+                || (id_clone.contains('/') && id_clone.split('/').next_back() == Some(&p.id))
         })
     });
 

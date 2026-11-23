@@ -737,7 +737,11 @@ impl PacketEnv for CoreFirewallEnv {
                 }
             }
             let info = pkt.info();
-            let dst = info.dst.unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+            // A packet without a destination cannot be matched to any
+            // listener; drop it instead of submitting a phantom 0.0.0.0.
+            let Some(dst) = info.dst else {
+                return false;
+            };
             let remote = info.remote_ip().unwrap_or(dst);
             let packet = Box::new(CoreIcmpPacket {
                 outbound: !info.inbound,
