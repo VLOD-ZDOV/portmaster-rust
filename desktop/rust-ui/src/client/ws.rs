@@ -100,8 +100,10 @@ impl PortApiClient {
                     if let Ok(host) = loc.host() {
                         let is_allowed_host = host == "127.0.0.1:817"
                             || host == "localhost:817"
+                            || host == "[::1]:817"
                             || host.starts_with("127.0.0.1:")
-                            || host.starts_with("localhost:");
+                            || host.starts_with("localhost:")
+                            || host.starts_with("[::1]:");
                         if is_allowed_host {
                             let proto = if loc.protocol().unwrap_or_default() == "https:" { "wss:" } else { "ws:" };
                             return format!("{}//{}/api/database/v1", proto, host);

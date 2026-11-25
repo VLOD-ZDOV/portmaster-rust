@@ -22,7 +22,6 @@ pub fn AppSwitcher() -> impl IntoView {
 
     // Filter tab: "all", "active", "vpn", "blocked"
     let (active_tab, set_active_tab) = signal("all".to_string());
-    let (manage_menu_open, set_manage_menu_open) = signal(false);
 
     view! {
         <div class="space-y-4">
@@ -125,38 +124,6 @@ pub fn AppSwitcher() -> impl IntoView {
                             {move || if route_by_default.get() { "ON" } else { "OFF" }}
                         </span>
                     </button>
-
-                    <div class="relative">
-                        <button
-                            on:click=move |_| set_manage_menu_open.update(|v| *v = !*v)
-                            class="btn-pm !bg-[#222222] hover:!bg-[#2c2c2c] text-[#ababab] hover:text-white flex items-center space-x-1"
-                        >
-                            <span>"Manage"</span>
-                            <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
-                            </svg>
-                        </button>
-
-                        {move || {
-                            if manage_menu_open.get() {
-                                view! {
-                                    <div class="absolute right-0 mt-1 w-44 bg-[#1b1b1b] border border-[#2c2c2c] rounded shadow-xl py-1 z-50 text-xs">
-                                        <button on:click=move |_| set_manage_menu_open.set(false) class="w-full text-left px-3 py-1.5 hover:bg-[#222222] text-white">
-                                            "Create Profile"
-                                        </button>
-                                        <button on:click=move |_| set_manage_menu_open.set(false) class="w-full text-left px-3 py-1.5 hover:bg-[#222222] text-white">
-                                            "Import Profile"
-                                        </button>
-                                        <button on:click=move |_| set_manage_menu_open.set(false) class="w-full text-left px-3 py-1.5 hover:bg-[#222222] text-white">
-                                            "Merge Profiles"
-                                        </button>
-                                    </div>
-                                }.into_any()
-                            } else {
-                                view! { <span/> }.into_any()
-                            }
-                        }}
-                    </div>
                 </div>
             </div>
 
@@ -193,7 +160,7 @@ pub fn AppSwitcher() -> impl IntoView {
                                     });
                                     p.count_alive_connections() > 0 || has_live
                                 }
-                                "vpn" => p.route_via_vpn(),
+                                "vpn" => p.route_via_vpn_with_default(route_by_default.get()),
                                 "blocked" => p.default_action() == "block"
                                     || p.stats.map(|s| s.blocked_count > 0).unwrap_or(false)
                                     || conns.iter().any(|c| c.is_blocked() && (c.profile_id == p.id || c.profile_id.ends_with(&format!("/{}", p.id)))),
@@ -218,7 +185,7 @@ pub fn AppSwitcher() -> impl IntoView {
                             let app_name = p.display_name().to_string();
                             let initials = p.name.chars().take(2).collect::<String>().to_uppercase();
                             let path_desc = if !p.presentation_path.is_empty() { p.presentation_path.clone() } else { p.source.clone() };
-                            let is_vpn = p.route_via_vpn();
+                            let is_vpn = p.route_via_vpn_with_default(route_by_default.get());
                             let default_action = p.default_action();
                             let is_blocked = default_action == "block";
 

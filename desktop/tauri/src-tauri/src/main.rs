@@ -38,14 +38,16 @@ use traymenu::setup_tray_menu;
 use window::{close_splash_window, create_main_window, hide_splash_window, create_debounced_window_state_saver};
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
+
 #[macro_use]
 extern crate lazy_static;
 
 const FALLBACK_TO_OLD_UI_EXIT_CODE: i32 = 77;
 
+
 // Window state configuration: save all properties except visibility to avoid 
 // interference with the "--background" command line argument
-const WINDOW_STATE_FLAGS_TO_SAVE: StateFlags = StateFlags::from_bits_truncate(
+pub(crate) const WINDOW_STATE_FLAGS_TO_SAVE: StateFlags = StateFlags::from_bits_truncate(
     StateFlags::all().bits() & !StateFlags::VISIBLE.bits()
 );
 // Default timeout for debounced window state saving
@@ -318,14 +320,9 @@ fn main() {
                     return;
                 }
 
-                // Do not let the user close the window, instead send an event to the main
-                // window so we can show the "will not stop portmaster" dialog and let the window
-                // close itself using
-                //
-                //    window.__TAURI__.window.getCurrent().close()
-                //
-                // Note: the above javascript does NOT trigger the CloseRequested event so
-                // there's no need to handle that case here.
+                // Close hides/unloads the webview into the tray, not exits the
+                // UI process: destroy the window and let `ExitRequested`
+                // (code=None) keep the tray alive.
                 if let WindowEvent::CloseRequested { api, .. } = event {
                     debug!(
                         "window (label={}) close request received",
@@ -348,14 +345,21 @@ fn main() {
 
                     api.prevent_close();
                     if let Some(window) = handle.get_webview_window(label.as_str()) {
-                        // Immediately hide the window so the user experiences an instant, reliable close to tray.
-                        let _ = window.hide();
+                        // Save window state and destroy window on close to completely unload WebKit/WebView and free RAM.
+                        let _ = handle.save_window_state(WINDOW_STATE_FLAGS_TO_SAVE);
+                        let _ = window.destroy();
                     } else {
                         error!("window was None");
                     }
                 }
             }
-            RunEvent::ExitRequested { .. } => {
+            RunEvent::ExitRequested { api, code, .. } => {
+                // `app.exit(code)` is explicit and must proceed; destroying the
+                // last window reports no exit code and must leave the tray alive.
+                if code.is_none() {
+                    api.prevent_exit();
+                    return;
+                }
                 debug!("Application exit requested, shutting down websocket");
                 portmaster::websocket::shutdown_websocket();
             }

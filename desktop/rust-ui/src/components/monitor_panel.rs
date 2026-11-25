@@ -375,6 +375,7 @@ pub fn MonitorPanel() -> impl IntoView {
                                                     let s2 = state_act.clone();
                                                     let id_a = c_id_allow.clone();
                                                     let id_b = c_id_block.clone();
+                                                    let is_ip_only = c.domain.as_deref().unwrap_or("").is_empty();
 
                                                     view! {
                                                         <tr class="bg-[#121213] border-y border-[#2c2c2c]">
@@ -402,7 +403,7 @@ pub fn MonitorPanel() -> impl IntoView {
                                                                         }
                                                                         class="btn-pm !bg-[#143d24] text-[#1de966] hover:!bg-[#18823d] border border-[#1de966]/30"
                                                                     >
-                                                                        "Always Permit this Domain"
+                                                                        {if is_ip_only { "Always Permit this IP" } else { "Always Permit this Domain" }}
                                                                     </button>
                                                                     <button
                                                                         on:click=move |ev| {
@@ -411,7 +412,7 @@ pub fn MonitorPanel() -> impl IntoView {
                                                                         }
                                                                         class="btn-pm !bg-[#3d1414] text-[#e01d1d] hover:!bg-[#811818] border border-[#e01d1d]/30"
                                                                     >
-                                                                        "Block this Domain"
+                                                                        {if is_ip_only { "Block this IP" } else { "Block this Domain" }}
                                                                     </button>
                                                                 </div>
                                                             </td>

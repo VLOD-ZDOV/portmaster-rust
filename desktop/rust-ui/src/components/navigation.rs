@@ -369,9 +369,6 @@ pub fn Navigation() -> impl IntoView {
                                         } class="w-full text-left px-3 py-2 hover:bg-[#222222] text-white flex items-center space-x-2">
                                             <span>"Check Updates"</span>
                                         </button>
-                                        <button on:click=move |_| set_tools_open.set(false) class="w-full text-left px-3 py-2 hover:bg-[#222222] text-white flex items-center space-x-2">
-                                            <span>"View Changelog"</span>
-                                        </button>
                                         <div class="border-t border-[#2c2c2c] my-1"></div>
                                         <button on:click=move |_| {
                                             if let Some(win) = web_sys::window() {

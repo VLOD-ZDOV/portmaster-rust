@@ -28,6 +28,31 @@ pub fn api_base_url() -> String {
     "http://127.0.0.1:817".to_string()
 }
 
+/// Formats a netquery `Started` timestamp as an age string.
+fn relative_time(started: &Option<String>) -> String {
+    let Some(started) = started else {
+        return String::new();
+    };
+    // The HTTP netquery path serializes SQLite time as `YYYY-MM-DD HH:MM:SS`
+    // in UTC; JavaScript would otherwise parse it as local time.
+    let normalized = if started.contains('T') {
+        started.clone()
+    } else {
+        format!("{}Z", started.replace(' ', "T"))
+    };
+    let then = js_sys::Date::parse(&normalized);
+    if !then.is_finite() {
+        return String::new();
+    }
+    let seconds = ((js_sys::Date::now() - then) / 1000.0).max(0.0) as u64;
+    match seconds {
+        0..=59 => "just now".to_string(),
+        60..=3599 => format!("{}m ago", seconds / 60),
+        3600..=86399 => format!("{}h ago", seconds / 3600),
+        _ => format!("{}d ago", seconds / 86400),
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[derive(Default)]
 pub enum ViewTab {
@@ -63,6 +88,8 @@ pub struct AppNotification {
     pub time: &'static str,
     /// Whether this notification is an interactive connection prompt.
     pub is_prompt: bool,
+    /// Unix expiry time, if the notification has one.
+    pub expires_at: Option<i64>,
 }
 
 /// Global context holding UI signals and PortAPI interaction logic.
@@ -86,6 +113,8 @@ pub struct AppState {
     pub set_security_level: WriteSignal<String>,
     pub is_paused: ReadSignal<bool>,
     pub set_paused: WriteSignal<bool>,
+    pub vpn_paused: ReadSignal<bool>,
+    pub set_vpn_paused: WriteSignal<bool>,
     pub pause_until: ReadSignal<Option<String>>,
     pub set_pause_until: WriteSignal<Option<String>>,
     pub notifications: ReadSignal<Vec<AppNotification>>,
@@ -120,6 +149,7 @@ impl AppState {
         let (expertise_level, set_expertise_level) = signal(ExpertiseLevel::User);
         let (security_level, set_security_level) = signal("Standard (Balanced)".to_string());
         let (is_paused, set_paused) = signal(false);
+        let (vpn_paused, set_vpn_paused) = signal(false);
         let (pause_until, set_pause_until) = signal(None);
 
         let (notifications, set_notifications) = signal(Vec::<AppNotification>::new());
@@ -151,6 +181,8 @@ impl AppState {
             set_security_level,
             is_paused,
             set_paused,
+            vpn_paused,
+            set_vpn_paused,
             pause_until,
             set_pause_until,
             notifications,
@@ -225,7 +257,7 @@ impl AppState {
                 "select": [
                     "id", "profile", "profile_name", "domain", "remote_ip", "remote_port",
                     "ip_protocol", "direction", "scope", "country", "verdict",
-                    "bytes_sent", "bytes_received", "active"
+                    "bytes_sent", "bytes_received", "active", "started"
                 ]
             });
             if let Ok(resp) = gloo_net::http::Request::post(&nq_url)
@@ -243,6 +275,11 @@ impl AppState {
                     if let Some(mut conns) = nq.results {
                         // Reverse so newest connections are on top
                         conns.reverse();
+                        for conn in &mut conns {
+                            if conn.time_ago.is_empty() {
+                                conn.time_ago = relative_time(&conn.started);
+                            }
+                        }
                         nq_set_conns.set(conns.clone());
 
                         // Update or populate profiles bandwidth & active counts from real connections
@@ -326,7 +363,7 @@ impl AppState {
                         list.retain(|s| s.key != setting_key);
                     });
                     match setting_key {
-                        "splittun/use" => set_route_default.set(false),
+                        "spn/use" => set_route_default.set(false),
                         "filter/defaultAction" => {
                             set_sec_level.set("Standard (Balanced)".to_string());
                         }
@@ -338,7 +375,7 @@ impl AppState {
                 // including the initial qsub snapshot.
                 let effective = setting.value.clone().unwrap_or_else(|| setting.default_value.clone());
                 match setting.key.as_str() {
-                    "splittun/use" => {
+                    "spn/use" => {
                         set_route_default.set(effective.as_bool().unwrap_or(false));
                     }
                     "filter/defaultAction" => {
@@ -365,6 +402,9 @@ impl AppState {
         let notif_set = self.set_notifications;
         let notif_read = self.notifications;
         let notif_prompts = self.set_pending_prompts;
+        let control_set_paused = self.set_paused;
+        let control_set_vpn_paused = self.set_vpn_paused;
+        let control_set_pause_until = self.set_pause_until;
         client.qsub("notifications:all/", move |frame| {
             if frame.msg_type == "del" {
                 if let Some(key) = &frame.key {
@@ -372,35 +412,106 @@ impl AppState {
                     notif_set.update(|list: &mut Vec<AppNotification>| {
                         list.retain(|n| n.id != id_to_remove);
                     });
+                    if id_to_remove == "control:paused" || id_to_remove == "control:resumed" {
+                        control_set_paused.set(false);
+                        control_set_vpn_paused.set(false);
+                        control_set_pause_until.set(None);
+                    }
                 }
             } else if let Ok(val) = frame.parse_data::<serde_json::Value>() {
                 let id = val.get("EventID").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 let title = val.get("Title").and_then(|v| v.as_str()).unwrap_or("Notification").to_string();
                 let message = val.get("Message").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let notif_type = val.get("Type").and_then(|v| v.as_str()).unwrap_or("info");
-                let is_prompt = notif_type == "prompt";
+                // Notification.Type is a numeric enum: 0 info, 1 warning,
+                // 2 prompt, 3 error (pm-notifications::TYPE_*).
+                let notif_type = val.get("Type").and_then(|v| v.as_u64()).unwrap_or(0);
+                let is_prompt = notif_type == 2;
                 let level = match notif_type {
-                    "prompt" => "warning",
-                    "error" => "error",
-                    "warning" => "warning",
+                    1 | 2 => "warning",
+                    3 => "error",
                     _ => "info",
                 };
+                let state = val
+                    .get("State")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("active");
+                let selected = val
+                    .get("SelectedActionID")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
+                let expires_at = val
+                    .get("Expires")
+                    .and_then(|value| value.as_i64())
+                    .filter(|value| *value > 0);
+                let now = (js_sys::Date::now() / 1000.0) as i64;
+                let active_prompt = is_prompt
+                    && state == "active"
+                    && selected.is_empty()
+                    && expires_at.map(|expires| expires > now).unwrap_or(true);
                 if !id.is_empty() {
-                    notif_set.update(|list: &mut Vec<AppNotification>| {
-                        let item = AppNotification {
-                            id: id.clone(),
-                            title,
-                            message,
-                            level,
-                            time: "Now",
-                            is_prompt,
-                        };
-                        if let Some(pos) = list.iter().position(|n| n.id == id) {
-                            list[pos] = item;
-                        } else {
-                            list.push(item);
-                        }
-                    });
+                    if is_prompt && !active_prompt {
+                        // Answered, cancelled or expired prompts must disappear
+                        // immediately; otherwise the badge stays forever.
+                        notif_set.update(|list: &mut Vec<AppNotification>| {
+                            list.retain(|item| item.id != id);
+                        });
+                    } else {
+                        notif_set.update(|list: &mut Vec<AppNotification>| {
+                            let item = AppNotification {
+                                id: id.clone(),
+                                title,
+                                message,
+                                level,
+                                time: "Now",
+                                is_prompt: active_prompt,
+                                expires_at,
+                            };
+                            if let Some(pos) = list.iter().position(|n| n.id == id) {
+                                list[pos] = item;
+                            } else {
+                                list.push(item);
+                            }
+                        });
+                    }
+                }
+                // Keep the Pause state in sync with the control module,
+                // including the initial qsub snapshot and automatic resume.
+                match id.as_str() {
+                    "control:paused" => {
+                        let event = val.get("EventData");
+                        let interception = event
+                            .and_then(|data| data.get("Interception"))
+                            .and_then(|value| value.as_bool())
+                            .unwrap_or(true);
+                        let spn = event
+                            .and_then(|data| data.get("SPN"))
+                            .and_then(|value| value.as_bool())
+                            .unwrap_or(false);
+                        control_set_paused.set(interception || spn);
+                        control_set_vpn_paused.set(spn && !interception);
+                        let until = event
+                            .and_then(|data| data.get("TillTime"))
+                            .and_then(|value| value.as_str())
+                            .map(|value| {
+                                let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_str(value));
+                                if date.get_time().is_nan() {
+                                    "Paused".to_string()
+                                } else {
+                                    format!(
+                                        "Paused until {:02}:{:02}",
+                                        date.get_hours(),
+                                        date.get_minutes()
+                                    )
+                                }
+                            });
+                        control_set_pause_until.set(until);
+                    }
+                    "control:resumed" => {
+                        control_set_paused.set(false);
+                        control_set_vpn_paused.set(false);
+                        control_set_pause_until.set(None);
+                    }
+                    _ => {}
                 }
             }
             // Derive the prompt badge from the list so updates of existing
@@ -413,16 +524,21 @@ impl AppState {
         let live_set_conns = set_connections;
         let live_set_profiles = set_profiles;
         client.qsub("netquery/data/", move |frame| {
-            if let Ok(conn) = frame.parse_data::<ConnectionRecord>() {
+            if let Ok(mut conn) = frame.parse_data::<ConnectionRecord>() {
+                if conn.time_ago.is_empty() {
+                    conn.time_ago = relative_time(&conn.started);
+                }
                 let c_clone = conn.clone();
                 let mut prev_sent = 0u64;
                 let mut prev_recv = 0u64;
+                let mut prev_active = false;
                 let mut is_new = false;
 
                 live_set_conns.update(|list| {
                     if let Some(pos) = list.iter().position(|c| c.id == conn.id) {
                         prev_sent = list[pos].bytes_sent;
                         prev_recv = list[pos].bytes_received;
+                        prev_active = list[pos].active;
                         list[pos] = conn;
                     } else {
                         is_new = true;
@@ -461,6 +577,13 @@ impl AppState {
                         stats.bytes_sent = stats.bytes_sent.saturating_add(c_clone.bytes_sent);
                         stats.bytes_received = stats.bytes_received.saturating_add(c_clone.bytes_received);
                     } else {
+                        if c_clone.active != prev_active {
+                            if c_clone.active {
+                                stats.connections_count = stats.connections_count.saturating_add(1);
+                            } else {
+                                stats.connections_count = stats.connections_count.saturating_sub(1);
+                            }
+                        }
                         let delta_sent = c_clone.bytes_sent.saturating_sub(prev_sent);
                         let delta_recv = c_clone.bytes_received.saturating_sub(prev_recv);
                         stats.bytes_sent = stats.bytes_sent.saturating_add(delta_sent);
@@ -524,14 +647,32 @@ impl AppState {
                 level,
                 time: "Now",
                 is_prompt: false,
+                expires_at: None,
             });
         });
     }
 
-    /// Clears the notification drawer and the prompt badge.
+    /// Clears non-prompt notifications from the drawer. Active connection
+    /// prompts stay visible: hiding them would strand the waiting connection
+    /// until the core prompt timeout.
     pub fn clear_notifications(&self) {
-        self.set_notifications.set(Vec::new());
-        self.set_pending_prompts.set(0);
+        let now = (js_sys::Date::now() / 1000.0) as i64;
+        self.set_notifications.update(|list| {
+            list.retain(|item| {
+                item.is_prompt
+                    && item
+                        .expires_at
+                        .map(|expires| expires > now)
+                        .unwrap_or(true)
+            })
+        });
+        let count = self
+            .notifications
+            .get_untracked()
+            .iter()
+            .filter(|item| item.is_prompt)
+            .count();
+        self.set_pending_prompts.set(count);
     }
 
     /// Persists a profile change, rolling back the optimistic UI update and
@@ -556,6 +697,7 @@ impl AppState {
                         level: "error",
                         time: "Now",
                         is_prompt: false,
+                        expires_at: None,
                     });
                 });
             }
@@ -563,8 +705,8 @@ impl AppState {
     }
 
     /// Toggles "Route Through VPN (Xray) by Default" global setting.
-    /// Enables the split tunnel module together with the global default,
-    /// otherwise the per-app routing flag has no effect in the core.
+    /// This is `spn/use` (the same option the Angular UI edits), not the Split
+    /// Tunnel option. The VPN must already be connected separately.
     pub fn toggle_route_by_default(&self) {
         let current = self.route_by_default.get_untracked();
         let new_val = !current;
@@ -573,44 +715,24 @@ impl AppState {
 
         let client = self.client.clone();
         spawn_local(async move {
-            let use_result = client
+            let result = client
                 .put(
                     "update",
-                    "config:splittun/use",
+                    "config:spn/use",
                     serde_json::json!({
-                        "Key": "splittun/use",
+                        "Key": "spn/use",
                         "Value": new_val
                     }),
                 )
                 .await;
-            if use_result.is_err() {
+            if let Err(error) = result {
                 state.notify_local(
                     "VPN routing",
-                    "Failed to change the default VPN routing setting.",
+                    &format!("Failed to change the default VPN routing setting: {error}"),
                     "error",
                 );
                 return;
             }
-            if new_val
-                && client
-                    .put(
-                        "update",
-                        "config:splittun/enable",
-                        serde_json::json!({
-                            "Key": "splittun/enable",
-                            "Value": true
-                        }),
-                    )
-                    .await
-                    .is_err()
-                {
-                    state.notify_local(
-                        "VPN routing",
-                        "Failed to enable the split tunnel module.",
-                        "error",
-                    );
-                    return;
-                }
             set_route_by_default.set(new_val);
         });
     }
@@ -620,6 +742,7 @@ impl AppState {
     pub fn pause_protection(&self, seconds: u64) {
         let set_paused = self.set_paused;
         let set_pause_until = self.set_pause_until;
+        let set_vpn_paused = self.set_vpn_paused;
         let url = format!("{}/api/v1/control/pause", api_base_url());
         let payload = serde_json::json!({
             "duration": seconds,
@@ -633,6 +756,7 @@ impl AppState {
                         let mins = seconds / 60;
                         let time_str = format!("Paused for {}m", mins);
                         set_paused.set(true);
+                        set_vpn_paused.set(false);
                         set_pause_until.set(Some(time_str));
                     }
                 }
@@ -644,17 +768,29 @@ impl AppState {
     pub fn resume_protection(&self) {
         let set_paused = self.set_paused;
         let set_pause_until = self.set_pause_until;
+        let set_vpn_paused = self.set_vpn_paused;
         let url = format!("{}/api/v1/control/resume", api_base_url());
         let payload = serde_json::json!({});
+        let state = self.clone();
 
         spawn_local(async move {
+            let mut ok = false;
             if let Ok(req) = gloo_net::http::Request::post(&url).json(&payload) {
                 if let Ok(resp) = req.send().await {
                     if resp.ok() {
+                        ok = true;
                         set_paused.set(false);
+                        set_vpn_paused.set(false);
                         set_pause_until.set(None);
                     }
                 }
+            }
+            if !ok {
+                state.notify_local(
+                    "Resume",
+                    "The core rejected the resume request.",
+                    "error",
+                );
             }
         });
     }
@@ -717,7 +853,7 @@ impl AppState {
     pub fn pause(&self, minutes: u32, vpn_only: bool) {
         let set_paused = self.set_paused;
         let set_pause_until = self.set_pause_until;
-        let set_xray_status = self.set_xray_status;
+        let set_vpn_paused = self.set_vpn_paused;
         let base_url = api_base_url();
         let url = format!("{}/api/v1/control/pause", base_url);
         let seconds = minutes as u64 * 60;
@@ -725,29 +861,31 @@ impl AppState {
             "duration": seconds,
             "onlySPN": vpn_only,
         });
+        let state = self.clone();
 
         spawn_local(async move {
+            let mut ok = false;
             if let Ok(req) = gloo_net::http::Request::post(&url).json(&payload) {
                 if let Ok(resp) = req.send().await {
                     if resp.ok() {
+                        ok = true;
                         let label = if vpn_only {
                             format!("VPN Paused for {}m", minutes)
                         } else {
                             format!("Paused for {}m", minutes)
                         };
                         set_paused.set(true);
+                        set_vpn_paused.set(vpn_only);
                         set_pause_until.set(Some(label));
-                        if vpn_only {
-                            set_xray_status.update(|s| s.connected = false);
-                            let disc_url = format!("{}/api/v1/xray/disconnect", base_url);
-                            if let Ok(req) = gloo_net::http::Request::post(&disc_url)
-                                .json(&serde_json::json!({}))
-                            {
-                                let _ = req.send().await;
-                            }
-                        }
                     }
                 }
+            }
+            if !ok {
+                state.notify_local(
+                    "Pause",
+                    "The core rejected the pause request.",
+                    "error",
+                );
             }
         });
     }
@@ -847,11 +985,14 @@ impl AppState {
         set_busy.set(true);
         let url = format!("{}/api/v1/xray/connect", base_url);
         let payload = serde_json::json!({ "nodeId": node_id });
+        let state = self.clone();
 
         spawn_local(async move {
+            let mut ok = false;
             if let Ok(req) = gloo_net::http::Request::post(&url).json(&payload) {
                 if let Ok(resp) = req.send().await {
                     if resp.ok() {
+                        ok = true;
                         if let Ok(new_status) = resp.json::<XrayStatus>().await {
                             set_status.set(new_status);
                         } else {
@@ -869,6 +1010,9 @@ impl AppState {
                     }
                 }
             }
+            if !ok {
+                state.notify_local("VPN", "Failed to connect to the selected node.", "error");
+            }
             set_busy.set(false);
         });
     }
@@ -876,11 +1020,12 @@ impl AppState {
     /// Toggles whether a specific application routes its traffic via VPN.
     pub fn toggle_app_vpn(&self, app_id: String) {
         let set_profiles = self.set_profiles;
+        let global_default = self.route_by_default.get_untracked();
         let mut change = None;
         set_profiles.update(|list| {
             if let Some(p) = list.iter_mut().find(|item| item.id == app_id) {
                 let previous = p.clone();
-                let current_vpn = p.route_via_vpn();
+                let current_vpn = p.route_via_vpn_with_default(global_default);
                 p.set_route_via_vpn(!current_vpn);
                 let key = p.database_key();
                 if let Ok(val) = serde_json::to_value(&*p) {
@@ -942,23 +1087,29 @@ impl AppState {
     }
 
     /// Resolves a pending connection prompt by selecting the matching action
-    /// on its notification, like the Angular UI. Without this the core keeps
-    /// denying the connection until the prompt timeout even though the rule
-    /// was already saved.
-    fn resolve_prompt(&self, prof_id: &str, domain: &str, ip: &str, inbound: bool, allow: bool) {
+    /// on its notification, like the Angular UI. Returns `false` when there is
+    /// no matching prompt, so the caller can create the rule directly.
+    fn resolve_prompt(&self, prof_id: &str, domain: &str, ip: &str, inbound: bool, allow: bool) -> bool {
         let bare_prof = prof_id.rsplit('/').next().unwrap_or(prof_id);
+        let mut candidates = Vec::new();
+        if inbound || domain.is_empty() {
+            candidates.push(format!("filter:prompt-{bare_prof}-{inbound}-{ip}"));
+            if bare_prof != prof_id {
+                candidates.push(format!("filter:prompt-{prof_id}-{inbound}-{ip}"));
+            }
+        } else {
+            candidates.push(format!("filter:prompt-{bare_prof}-{domain}"));
+            if bare_prof != prof_id {
+                candidates.push(format!("filter:prompt-{prof_id}-{domain}"));
+            }
+        }
+
         let notifications = self.notifications.get_untracked();
-        let Some(prompt) = notifications.iter().find(|n| {
-            n.is_prompt
-                && n.id.starts_with("filter:prompt-")
-                && n.id.contains(bare_prof)
-                && if domain.is_empty() {
-                    n.id.contains(ip)
-                } else {
-                    n.id.contains(domain)
-                }
-        }) else {
-            return;
+        let Some(prompt) = notifications
+            .iter()
+            .find(|n| n.is_prompt && candidates.iter().any(|candidate| candidate == &n.id))
+        else {
+            return false;
         };
         let action = match (inbound, domain.is_empty(), allow) {
             (true, _, true) => "allow-serving-ip",
@@ -969,120 +1120,120 @@ impl AppState {
             (false, false, false) => "block-domain-all",
         };
         let client = self.client.clone();
-        let key = format!("notifications:all/{}", prompt.id);
+        let set_notifications = self.set_notifications;
+        let prompt_id = prompt.id.clone();
+        let key = format!("notifications:all/{prompt_id}");
         let payload = serde_json::json!({
-            "EventID": prompt.id,
+            "EventID": prompt_id,
             "SelectedActionID": action,
         });
         spawn_local(async move {
-            let _ = client.put("update", &key, payload).await;
+            if let Err(error) = client.put("update", &key, payload).await {
+                let id = format!("ui-{}", js_sys::Date::now() as u64);
+                set_notifications.update(|list| {
+                    list.push(AppNotification {
+                        id,
+                        title: "Connection prompt".to_string(),
+                        message: format!("Failed to send the decision to the core: {error}"),
+                        level: "error",
+                        time: "Now",
+                        is_prompt: false,
+                        expires_at: None,
+                    });
+                });
+            }
         });
+        true
+    }
+
+    /// Applies a manual allow/block decision to a connection. When the core is
+    /// waiting for a prompt answer, only the notification is updated: the core
+    /// saves the correct endpoint rule itself. Otherwise a rule is added to the
+    /// profile so the decision applies to future connections.
+    fn set_connection_decision(&self, conn_id: &str, allow: bool) {
+        let mut decision = None;
+        self.set_connections.update(|conns| {
+            if let Some(c) = conns.iter_mut().find(|c| c.id == conn_id) {
+                c.verdict = if allow { "permit" } else { "block" }.to_string();
+                c.verdict_reason = if allow {
+                    "Manual Rule: Explicitly Allowed by User"
+                } else {
+                    "Manual Rule: Explicitly Blocked by User"
+                }
+                .to_string();
+                decision = Some((
+                    c.profile_id.clone(),
+                    c.domain.clone().unwrap_or_default(),
+                    c.remote_ip.clone(),
+                    c.direction == "inbound",
+                ));
+            }
+        });
+
+        let Some((profile_id, domain, ip, inbound)) = decision else {
+            return;
+        };
+        if self.resolve_prompt(&profile_id, &domain, &ip, inbound, allow) {
+            return;
+        }
+        self.add_endpoint_rule(&profile_id, &domain, &ip, inbound, allow);
+    }
+
+    /// Adds an endpoint rule to the profile when no core prompt was waiting.
+    fn add_endpoint_rule(&self, profile_id: &str, domain: &str, ip: &str, inbound: bool, allow: bool) {
+        let (rule, service) = match (inbound, domain.is_empty(), allow) {
+            (true, _, true) => (format!("+ {ip}"), true),
+            (true, _, false) => (format!("- {ip}"), true),
+            (false, true, true) => (format!("+ {ip}"), false),
+            (false, true, false) => (format!("- {ip}"), false),
+            (false, false, true) => (format!("+ .{domain}"), false),
+            (false, false, false) => (format!("- .{domain}"), false),
+        };
+        if rule.trim_end() == "+" || rule.trim_end() == "-" {
+            return;
+        }
+        let list_key = if service {
+            "filter/serviceEndpoints"
+        } else {
+            "filter/endpoints"
+        };
+        let bare = profile_id.rsplit('/').next().unwrap_or(profile_id);
+        let mut change = None;
+        self.set_profiles.update(|profs| {
+            if let Some(p) = profs.iter_mut().find(|p| p.id == profile_id || p.id == bare) {
+                let previous = p.clone();
+                let mut map = match p.config.take() {
+                    Some(serde_json::Value::Object(m)) => m,
+                    _ => serde_json::Map::new(),
+                };
+                let mut rules: Vec<String> = map
+                    .get(list_key)
+                    .and_then(|value| serde_json::from_value(value.clone()).ok())
+                    .unwrap_or_default();
+                if !rules.contains(&rule) {
+                    rules.push(rule.clone());
+                    map.insert(list_key.to_string(), serde_json::json!(rules));
+                    p.config = Some(serde_json::Value::Object(map));
+                    let key = p.database_key();
+                    if let Ok(value) = serde_json::to_value(&*p) {
+                        change = Some((previous, key, value));
+                    }
+                }
+            }
+        });
+        if let Some((previous, key, value)) = change {
+            self.persist_profile(previous, key, value);
+        }
     }
 
     /// Explicitly permits a connection and updates its record and profile endpoint rule.
     pub fn allow_connection(&self, conn_id: &str) {
-        let conn_id = conn_id.to_string();
-        let mut target_domain = None;
-        let mut target_profile = None;
-        let mut prompt_info = None;
-        self.set_connections.update(|conns| {
-            if let Some(c) = conns.iter_mut().find(|c| c.id == conn_id) {
-                c.verdict = "permit".to_string();
-                c.verdict_reason = "Manual Rule: Explicitly Allowed by User".to_string();
-                target_domain = c.domain.clone().or_else(|| Some(c.remote_ip.clone()));
-                target_profile = Some(c.profile_id.clone());
-                prompt_info = Some((
-                    c.profile_id.clone(),
-                    c.domain.clone().unwrap_or_default(),
-                    c.remote_ip.clone(),
-                    c.direction == "inbound",
-                ));
-            }
-        });
-        if let Some((prof, domain, ip, inbound)) = prompt_info {
-            self.resolve_prompt(&prof, &domain, &ip, inbound, true);
-        }
-        if let (Some(domain), Some(prof_id)) = (target_domain, target_profile) {
-            let rule = format!("+ {}", domain);
-            let mut change = None;
-            self.set_profiles.update(|profs| {
-                if let Some(p) = profs.iter_mut().find(|p| p.id == prof_id || p.id == prof_id.rsplit('/').next().unwrap_or(&prof_id)) {
-                    let previous = p.clone();
-                    let mut map = match p.config.take() {
-                        Some(serde_json::Value::Object(m)) => m,
-                        _ => serde_json::Map::new(),
-                    };
-                    let mut rules: Vec<String> = map.get("filter/endpoints")
-                        .and_then(|v| serde_json::from_value(v.clone()).ok())
-                        .unwrap_or_default();
-                    if !rules.contains(&rule) {
-                        rules.push(rule.clone());
-                        map.insert("filter/endpoints".to_string(), serde_json::json!(rules));
-                        p.config = Some(serde_json::Value::Object(map.clone()));
-                        let key = p.database_key();
-                        if let Ok(val) = serde_json::to_value(&*p) {
-                            change = Some((previous, key, val));
-                        }
-                    }
-                }
-            });
-            if let Some((previous, key, val)) = change {
-                self.persist_profile(previous, key, val);
-            }
-        }
+        self.set_connection_decision(conn_id, true);
     }
 
     /// Explicitly blocks a connection and updates its record and profile endpoint rule.
     pub fn block_connection(&self, conn_id: &str) {
-        let conn_id = conn_id.to_string();
-        let mut target_domain = None;
-        let mut target_profile = None;
-        let mut prompt_info = None;
-        self.set_connections.update(|conns| {
-            if let Some(c) = conns.iter_mut().find(|c| c.id == conn_id) {
-                c.verdict = "block".to_string();
-                c.verdict_reason = "Manual Rule: Explicitly Blocked by User".to_string();
-                target_domain = c.domain.clone().or_else(|| Some(c.remote_ip.clone()));
-                target_profile = Some(c.profile_id.clone());
-                prompt_info = Some((
-                    c.profile_id.clone(),
-                    c.domain.clone().unwrap_or_default(),
-                    c.remote_ip.clone(),
-                    c.direction == "inbound",
-                ));
-            }
-        });
-        if let Some((prof, domain, ip, inbound)) = prompt_info {
-            self.resolve_prompt(&prof, &domain, &ip, inbound, false);
-        }
-        if let (Some(domain), Some(prof_id)) = (target_domain, target_profile) {
-            let rule = format!("- {}", domain);
-            let mut change = None;
-            self.set_profiles.update(|profs| {
-                if let Some(p) = profs.iter_mut().find(|p| p.id == prof_id || p.id == prof_id.rsplit('/').next().unwrap_or(&prof_id)) {
-                    let previous = p.clone();
-                    let mut map = match p.config.take() {
-                        Some(serde_json::Value::Object(m)) => m,
-                        _ => serde_json::Map::new(),
-                    };
-                    let mut rules: Vec<String> = map.get("filter/endpoints")
-                        .and_then(|v| serde_json::from_value(v.clone()).ok())
-                        .unwrap_or_default();
-                    if !rules.contains(&rule) {
-                        rules.push(rule.clone());
-                        map.insert("filter/endpoints".to_string(), serde_json::json!(rules));
-                        p.config = Some(serde_json::Value::Object(map.clone()));
-                        let key = p.database_key();
-                        if let Ok(val) = serde_json::to_value(&*p) {
-                            change = Some((previous, key, val));
-                        }
-                    }
-                }
-            });
-            if let Some((previous, key, val)) = change {
-                self.persist_profile(previous, key, val);
-            }
-        }
+        self.set_connection_decision(conn_id, false);
     }
 
     /// Requests graceful restart of Portmaster core service.
@@ -1196,15 +1347,18 @@ impl AppState {
         let set_connections = self.set_connections;
         let url = format!("{}/api/v1/netquery/history/clear", api_base_url());
         let payload = serde_json::json!({});
+        let state = self.clone();
 
         spawn_local(async move {
             if let Ok(req) = gloo_net::http::Request::post(&url).json(&payload) {
                 if let Ok(resp) = req.send().await {
                     if resp.ok() {
                         set_connections.set(Vec::new());
+                        return;
                     }
                 }
             }
+            state.notify_local("History", "Failed to clear the network history.", "error");
         });
     }
 
@@ -1229,11 +1383,14 @@ impl AppState {
         let sub_url = format!("{}/api/v1/xray/subscriptions", base_url);
         let nodes_url = format!("{}/api/v1/xray/nodes", base_url);
         let payload = serde_json::json!({ "url": url });
+        let state = self.clone();
 
         spawn_local(async move {
+            let mut ok = false;
             if let Ok(req) = gloo_net::http::Request::post(&sub_url).json(&payload) {
                 if let Ok(resp) = req.send().await {
                     if resp.ok() {
+                        ok = true;
                         if let Ok(nodes_resp) = gloo_net::http::Request::get(&nodes_url).send().await {
                             if let Ok(nodes) = nodes_resp.json::<Vec<XrayNode>>().await {
                                 set_xray_nodes.set(nodes);
@@ -1241,6 +1398,13 @@ impl AppState {
                         }
                     }
                 }
+            }
+            if !ok {
+                state.notify_local(
+                    "VPN subscription",
+                    "Failed to add the subscription. Check the URL and the core log.",
+                    "error",
+                );
             }
         });
     }

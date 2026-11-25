@@ -26,9 +26,8 @@ use crate::{
         types::{Request, Response},
     },
     portmaster::PortmasterExt,
-    window::{create_main_window, may_navigate_to_ui, open_window},
+    window::{create_main_window, may_navigate_to_ui, open_window, open_window_target},
 };
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
 pub type AppIcon = TrayIcon<Wry>;
 pub type ContextMenu = Menu<Wry>;
@@ -46,6 +45,9 @@ enum IconColor {
 static CURRENT_ICON_COLOR: RwLock<IconColor> = RwLock::new(IconColor::Red);
 pub static USER_THEME: RwLock<dark_light::Mode> = RwLock::new(dark_light::Mode::Unspecified);
 const OPEN_KEY: &str = "open";
+const OPEN_ANGULAR_KEY: &str = "open_angular";
+const OPEN_RUST_KEY: &str = "open_rust";
+const OPEN_BROWSER_KEY: &str = "open_browser";
 const EXIT_UI_KEY: &str = "exit_ui";
 const SPN_STATUS_KEY: &str = "spn_status";
 const SPN_BUTTON_KEY: &str = "spn_toggle";
@@ -149,7 +151,9 @@ fn build_tray_menu(
 ) -> core::result::Result<ContextMenu, Box<dyn std::error::Error>> {
     load_theme(app);
 
-    let open_btn = MenuItemBuilder::with_id(OPEN_KEY, "Open App").build(app)?;
+    let open_angular_btn = MenuItemBuilder::with_id(OPEN_ANGULAR_KEY, "Open Angular UI").build(app)?;
+    let open_rust_btn = MenuItemBuilder::with_id(OPEN_RUST_KEY, "Open Rust Pilot UI (WASM)").build(app)?;
+    let open_browser_btn = MenuItemBuilder::with_id(OPEN_BROWSER_KEY, "Open in Web Browser").build(app)?;
     let exit_ui_btn = MenuItemBuilder::with_id(EXIT_UI_KEY, "Exit UI").build(app)?;
     let shutdown_btn = MenuItemBuilder::with_id(SHUTDOWN_KEY, "Shut Down Portmaster").build(app)?;
 
@@ -289,7 +293,9 @@ fn build_tray_menu(
     items.push(&theme_menu);
     items.push(&s);
     
-    items.push(&open_btn);
+    items.push(&open_angular_btn);
+    items.push(&open_rust_btn);
+    items.push(&open_browser_btn);
     items.push(&s);
 
     items.push(&exit_ui_btn);
@@ -315,8 +321,14 @@ pub fn setup_tray_menu(
             EXIT_UI_KEY => {
                 app.exit(0);
             }
-            OPEN_KEY => {
-                let _ = open_window(app);
+            OPEN_KEY | OPEN_ANGULAR_KEY => {
+                let _ = open_window_target(app, "http://127.0.0.1:817");
+            }
+            OPEN_RUST_KEY => {
+                let _ = open_window_target(app, "http://127.0.0.1:817/pilot");
+            }
+            OPEN_BROWSER_KEY => {
+                let _ = open::that_detached("http://127.0.0.1:817");
             }
             RELOAD_KEY => {
                 if let Ok(mut win) = open_window(app) {
@@ -337,11 +349,11 @@ pub fn setup_tray_menu(
                 };
             }
             SPN_BUTTON_KEY => {
-                if SPN_STATE.load(Ordering::Acquire) {
-                    app.portmaster().set_spn_enabled(false);
-                } else {
-                    app.portmaster().set_spn_enabled(true);
-                }
+                let current_state = SPN_STATE.load(Ordering::Acquire);
+                let target_enabled = !current_state;
+                // The config subscription updates SPN_STATE (and the icon) once
+                // the core accepts the change; do not show a fake state here.
+                app.portmaster().set_spn_enabled(target_enabled);
             }
             SHUTDOWN_KEY => {
                 app.portmaster().trigger_shutdown();
@@ -370,8 +382,6 @@ pub fn setup_tray_menu(
             }
         })
         .on_tray_icon_event(|tray, event| {
-            // not supported on linux
-
             if let tauri::tray::TrayIconEvent::Click {
                 id: _,
                 position: _,
@@ -381,7 +391,21 @@ pub fn setup_tray_menu(
             } = event
             {
                 if let (MouseButton::Left, MouseButtonState::Down) = (button, button_state) {
-                    let _ = open_window(tray.app_handle());
+                    let app = tray.app_handle();
+                    if let Some(win) = app.get_webview_window("main") {
+                        if win.is_minimized().unwrap_or(false) {
+                            let _ = win.unminimize();
+                            let _ = win.show();
+                            let _ = win.set_focus();
+                        } else if win.is_visible().unwrap_or(false) {
+                            let _ = app.save_window_state(crate::WINDOW_STATE_FLAGS_TO_SAVE);
+                            let _ = win.destroy();
+                        } else {
+                            let _ = open_window(app);
+                        }
+                    } else {
+                        let _ = open_window(app);
+                    }
                 }
             }
         })

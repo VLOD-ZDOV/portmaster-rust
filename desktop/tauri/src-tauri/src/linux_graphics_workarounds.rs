@@ -52,11 +52,14 @@
 
 use std::path::Path;
 
-/// The workaround to apply. See the module documentation for the alternatives
-/// (`__NV_DISABLE_EXPLICIT_SYNC`, `WEBKIT_DISABLE_COMPOSITING_MODE`).
-const WORKAROUND_ENV_VAR: &str = "WEBKIT_DISABLE_DMABUF_RENDERER";
-/// "1" enables all three known variables, so this does not need to change
-/// when switching `WORKAROUND_ENV_VAR`.
+/// The workarounds to apply. Setting both DMABUF renderer disable and
+/// compositing mode disable prevents WebKitGTK Wayland Protocol Error 71
+/// and avoids the blank/black window rendering bug on Wayland with NVIDIA.
+const WORKAROUND_ENV_VARS: &[&str] = &[
+    "WEBKIT_DISABLE_DMABUF_RENDERER",
+    "WEBKIT_DISABLE_COMPOSITING_MODE",
+];
+/// "1" enables all known variables.
 const WORKAROUND_ENV_VALUE: &str = "1";
 /// Present when the NVIDIA kernel module (proprietary or open) is loaded.
 const NVIDIA_MODULE_SYSFS: &str = "/sys/module/nvidia";
@@ -77,20 +80,21 @@ pub fn apply() -> Vec<String> {
         return messages;
     }
 
-    if let Ok(value) = std::env::var(WORKAROUND_ENV_VAR) {
-        messages.push(format!(
-            "linux graphics workarounds: {}={:?} already set in environment, leaving it untouched",
-            WORKAROUND_ENV_VAR, value
-        ));
-        return messages;
+    for &var in WORKAROUND_ENV_VARS {
+        if let Ok(value) = std::env::var(var) {
+            messages.push(format!(
+                "linux graphics workarounds: {}={:?} already set in environment, leaving it untouched",
+                var, value
+            ));
+        } else {
+            // Safe: called from the start of main() before any other thread exists.
+            std::env::set_var(var, WORKAROUND_ENV_VALUE);
+            messages.push(format!(
+                "linux graphics workarounds: NVIDIA driver on Wayland detected, set {}={} to avoid WebKitGTK crash / black screen (issues #1898, #2021)",
+                var, WORKAROUND_ENV_VALUE
+            ));
+        }
     }
-
-    // Safe: called from the start of main() before any other thread exists.
-    std::env::set_var(WORKAROUND_ENV_VAR, WORKAROUND_ENV_VALUE);
-    messages.push(format!(
-        "linux graphics workarounds: NVIDIA driver on Wayland detected, set {}={} to avoid WebKitGTK 'Error 71' crash (see issue #1898); webview GPU acceleration is disabled",
-        WORKAROUND_ENV_VAR, WORKAROUND_ENV_VALUE
-    ));
 
     messages
 }

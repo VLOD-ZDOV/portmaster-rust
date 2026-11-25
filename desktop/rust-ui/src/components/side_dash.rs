@@ -20,7 +20,18 @@ pub fn SideDash() -> impl IntoView {
     let security_level = state.security_level;
     let conn_state = state.client.state;
     let is_paused = state.is_paused;
+    let vpn_paused = state.vpn_paused;
+    let settings = state.settings;
     let is_connected = move || conn_state.get() == crate::client::ConnectionState::Connected;
+    let protection_paused = move || is_paused.get() && !vpn_paused.get();
+    let history_enabled = move || {
+        settings
+            .get()
+            .iter()
+            .find(|setting| setting.key == "history/enable")
+            .map(|setting| setting.effective_value().as_bool().unwrap_or(true))
+            .unwrap_or(true)
+    };
 
     let (scout_search, set_scout_search) = signal(String::new());
     let (sort_by, set_sort_by) = signal("Activity".to_string());
@@ -86,7 +97,9 @@ pub fn SideDash() -> impl IntoView {
                 </div>
 
                 <div class="text-center space-y-0.5">
-                    <h2 class="text-sm font-semibold text-white">"Protected"</h2>
+                    <h2 class="text-sm font-semibold text-white">
+                        {move || if !is_connected() { "Not connected" } else if protection_paused() { "Paused" } else { "Protected" }}
+                    </h2>
                     <p class="text-[11px] text-[#ababab]">
                         {move || format!("Profile: {}", security_level.get())}
                     </p>
@@ -148,13 +161,13 @@ pub fn SideDash() -> impl IntoView {
                     <span>
                         {move || {
                             let mut count = 0;
-                            if is_connected() && !is_paused.get() {
+                            if is_connected() && !protection_paused() {
                                 count += 2;
                             }
                             if xray_status.get().connected {
                                 count += 1;
                             }
-                            if is_connected() {
+                            if is_connected() && !protection_paused() && history_enabled() {
                                 count += 1;
                             }
                             format!("{}/4 Active", count)
@@ -168,7 +181,7 @@ pub fn SideDash() -> impl IntoView {
                         <span class=move || {
                             if !is_connected() {
                                 "w-2 h-2 rounded-full bg-[#e01d1d]"
-                            } else if is_paused.get() {
+                            } else if protection_paused() {
                                 "w-2 h-2 rounded-full bg-[#e9d81d]"
                             } else {
                                 "w-2 h-2 rounded-full bg-[#1de966]"
@@ -177,7 +190,7 @@ pub fn SideDash() -> impl IntoView {
                         <div class="min-w-0">
                             <div class="text-[11px] font-medium text-white truncate">"Secure DNS"</div>
                             <div class="text-[9px] text-[#888888]">
-                                {move || if !is_connected() { "Offline" } else if is_paused.get() { "Paused" } else { "DoT / Quad9" }}
+                                {move || if !is_connected() { "Offline" } else if protection_paused() { "Paused" } else { "Active" }}
                             </div>
                         </div>
                     </div>
@@ -187,7 +200,7 @@ pub fn SideDash() -> impl IntoView {
                         <span class=move || {
                             if !is_connected() {
                                 "w-2 h-2 rounded-full bg-[#e01d1d]"
-                            } else if is_paused.get() {
+                            } else if protection_paused() {
                                 "w-2 h-2 rounded-full bg-[#e9d81d]"
                             } else {
                                 "w-2 h-2 rounded-full bg-[#1de966]"
@@ -196,7 +209,7 @@ pub fn SideDash() -> impl IntoView {
                         <div class="min-w-0">
                             <div class="text-[11px] font-medium text-white truncate">"Privacy Filter"</div>
                             <div class="text-[9px] text-[#888888]">
-                                {move || if !is_connected() { "Offline" } else if is_paused.get() { "Paused" } else { "EasyList Active" }}
+                                {move || if !is_connected() { "Offline" } else if protection_paused() { "Paused" } else { "Active" }}
                             </div>
                         </div>
                     </div>
@@ -230,6 +243,10 @@ pub fn SideDash() -> impl IntoView {
                         <span class=move || {
                             if !is_connected() {
                                 "w-2 h-2 rounded-full bg-[#e01d1d]"
+                            } else if protection_paused() {
+                                "w-2 h-2 rounded-full bg-[#e9d81d]"
+                            } else if !history_enabled() {
+                                "w-2 h-2 rounded-full bg-[#888888]"
                             } else {
                                 "w-2 h-2 rounded-full bg-[#1de966]"
                             }
@@ -237,7 +254,7 @@ pub fn SideDash() -> impl IntoView {
                         <div class="min-w-0">
                             <div class="text-[11px] font-medium text-white truncate">"Net History"</div>
                             <div class="text-[9px] text-[#888888]">
-                                {move || if !is_connected() { "Offline" } else { "Logging Active" }}
+                                {move || if !is_connected() { "Offline" } else if protection_paused() { "Paused" } else if history_enabled() { "Logging Active" } else { "Disabled" }}
                             </div>
                         </div>
                     </div>
@@ -341,7 +358,7 @@ pub fn SideDash() -> impl IntoView {
                                     let app_id = p.id.clone();
                                     let app_name = p.display_name().to_string();
                                     let initials = p.name.chars().take(2).collect::<String>().to_uppercase();
-                                    let is_vpn = p.route_via_vpn();
+                                    let is_vpn = p.route_via_vpn_with_default(state.route_by_default.get());
                                     let is_blocked = p.default_action() == "block";
                                     let conn_count = p.count_alive_connections();
 

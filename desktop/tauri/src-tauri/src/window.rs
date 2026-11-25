@@ -224,11 +224,27 @@ pub fn open_window(app: &AppHandle) -> Result<WebviewWindow> {
 
     if app.portmaster().is_reachable() {
         app.portmaster().show_window();
-        create_main_window(app)
+        let win = create_main_window(app)?;
+        let _ = win.show();
+        let _ = win.set_focus();
+        set_window_icon(&win);
+        Ok(win)
     } else {
         debug!("Show splash screen");
         create_splash_window(app)
     }
+}
+
+/// Opens the window and navigates to the specified target URL.
+pub fn open_window_target(app: &AppHandle, target_url: &str) -> Result<WebviewWindow> {
+    let win = open_window(app)?;
+    // Do not replace the splash or a working window with an unreachable UI URL.
+    if win.label().eq("main") && app.portmaster().is_reachable() {
+        if let Ok(url) = target_url.parse() {
+            let _ = win.navigate(url);
+        }
+    }
+    Ok(win)
 }
 
 /// If the Portmaster Websocket database API is reachable the window will be navigated

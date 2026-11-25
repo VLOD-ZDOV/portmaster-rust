@@ -78,7 +78,7 @@ pub fn AppDetailView(app_id: String) -> impl IntoView {
                 };
 
                 let app_id = p.id.clone();
-                let is_vpn = p.route_via_vpn();
+                let is_vpn = p.route_via_vpn_with_default(state.route_by_default.get());
                 let action = p.default_action().to_string();
                 let display_name = p.display_name().to_string();
                 let display_name_match = display_name.clone();
@@ -117,9 +117,9 @@ pub fn AppDetailView(app_id: String) -> impl IntoView {
                     let r = s.bytes_received.max(conn_recv);
                     let sent = s.bytes_sent.max(conn_sent);
                     let alive = if s.connections_count > 0 { s.connections_count } else { conn_alive as u64 };
-                    let pct = if s.connections_count > 0 {
-                        s.blocked_percent()
-                    } else if !app_conns_summary.is_empty() {
+                    // Derive the percentage from the current connection list;
+                    // profile stats are cumulative and can double count pushes.
+                    let pct = if !app_conns_summary.is_empty() {
                         (conn_blocked as f64 / app_conns_summary.len() as f64) * 100.0
                     } else {
                         0.0
@@ -440,7 +440,6 @@ pub fn AppDetailView(app_id: String) -> impl IntoView {
                                         .and_then(|v| serde_json::from_value(v.clone()).ok())
                                         .unwrap_or_default();
                                     let app_id_add = cur_p.id.clone();
-                                    let rules_add = rules.clone();
 
                                     view! {
                                         <div class="space-y-4">
@@ -460,13 +459,11 @@ pub fn AppDetailView(app_id: String) -> impl IntoView {
                                                 >
                                                     <option value="permit">"Permit"</option>
                                                     <option value="block">"Block"</option>
-                                                    <option value="drop">"Drop"</option>
                                                 </select>
                                                 <button
                                                     on:click={
                                                         let s = state.clone();
                                                         let app_id_str = app_id_add.clone();
-                                                        let mut current_rules = rules_add.clone();
                                                         move |_| {
                                                             let pattern = new_rule.get().trim().to_string();
                                                             if !pattern.is_empty() {
@@ -475,6 +472,16 @@ pub fn AppDetailView(app_id: String) -> impl IntoView {
                                                                     _ => "-",
                                                                 };
                                                                 let rule_str = format!("{} {}", prefix, pattern);
+                                                                let bare = app_id_str.rsplit('/').next().unwrap_or(&app_id_str);
+                                                                let mut current_rules: Vec<String> = s
+                                                                    .profiles
+                                                                    .get_untracked()
+                                                                    .into_iter()
+                                                                    .find(|p| p.id == app_id_str || p.id == bare)
+                                                                    .and_then(|p| p.config)
+                                                                    .and_then(|c| c.get("filter/endpoints").cloned())
+                                                                    .and_then(|v| serde_json::from_value(v).ok())
+                                                                    .unwrap_or_default();
                                                                 if !current_rules.contains(&rule_str) {
                                                                     current_rules.push(rule_str);
                                                                     s.save_profile_config(&app_id_str, "filter/endpoints", Some(serde_json::json!(current_rules)));
@@ -525,7 +532,7 @@ pub fn AppDetailView(app_id: String) -> impl IntoView {
                                                                     <tr class="hover:bg-[#222222] transition-colors">
                                                                         <td class="py-2.5 px-3 font-mono text-white">{pattern}</td>
                                                                         <td class=action_class>{action_label}</td>
-                                                                        <td class="py-2.5 px-3 text-[#888888]">"Internet"</td>
+                                                                        <td class="py-2.5 px-3 text-[#888888]">"Any"</td>
                                                                         <td class="py-2.5 px-3 text-right">
                                                                             <button
                                                                                 on:click={
@@ -570,7 +577,11 @@ pub fn AppDetailView(app_id: String) -> impl IntoView {
                                         .and_then(|c| c.get("dns/servers"))
                                         .and_then(|v| {
                                             if let Some(arr) = v.as_array() {
-                                                arr.first().and_then(|s| s.as_str()).map(String::from)
+                                                let servers: Vec<String> = arr
+                                                    .iter()
+                                                    .filter_map(|value| value.as_str().map(String::from))
+                                                    .collect();
+                                                Some(servers.join(", "))
                                             } else {
                                                 v.as_str().map(String::from)
                                             }
@@ -628,11 +639,16 @@ pub fn AppDetailView(app_id: String) -> impl IntoView {
                                                         let s = state.clone();
                                                         let pid = app_id_cfg3.clone();
                                                         move |ev| {
-                                                            let val = event_target_value(&ev).trim().to_string();
-                                                            if val.is_empty() {
+                                                            let servers: Vec<String> = event_target_value(&ev)
+                                                                .split(',')
+                                                                .map(str::trim)
+                                                                .filter(|value| !value.is_empty())
+                                                                .map(String::from)
+                                                                .collect();
+                                                            if servers.is_empty() {
                                                                 s.save_profile_config(&pid, "dns/servers", None);
                                                             } else {
-                                                                s.save_profile_config(&pid, "dns/servers", Some(serde_json::json!([val])));
+                                                                s.save_profile_config(&pid, "dns/servers", Some(serde_json::json!(servers)));
                                                             }
                                                         }
                                                     }

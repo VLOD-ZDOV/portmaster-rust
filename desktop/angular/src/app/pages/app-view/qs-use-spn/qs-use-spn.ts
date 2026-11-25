@@ -3,9 +3,7 @@ import { takeUntilDestroyed } from "@angular/core/rxjs-interop";
 import { BoolSetting, ConfigService, Setting, getActualValue } from "@safing/portmaster-api";
 import { SaveSettingEvent } from "src/app/shared/config/generic-setting/generic-setting";
 
-const interferingSettingsWhenOn = [
-  'spn/usagePolicy'
-]
+const interferingSettingsWhenOn: string[] = []
 
 @Component({
   selector: 'app-qs-use-spn',

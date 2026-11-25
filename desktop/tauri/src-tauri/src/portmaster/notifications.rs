@@ -2,7 +2,9 @@ use crate::portapi::client::*;
 use crate::portapi::message::*;
 use crate::portapi::models::notification::*;
 use crate::portapi::types::*;
-use log::{error, warn};
+use log::error;
+#[cfg(windows)]
+use log::warn;
 use serde_json::json;
 use tauri::async_runtime;
 
@@ -57,7 +59,23 @@ pub async fn notification_handler(cli: PortAPI) {
 pub async fn show_notification(cli: &PortAPI, key: String, n: Notification) {
     let mut notif = notify_rust::Notification::new();
     notif.body(&n.message);
-    notif.timeout(notify_rust::Timeout::Never); // TODO(ppacher): use n.expires to calculate the timeout.
+    // Use the notification's own expiry instead of keeping it on screen forever.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let timeout_ms = n
+        .expires
+        .saturating_sub(now)
+        .saturating_mul(1000)
+        .min(u64::from(u32::MAX)) as u32;
+    notif.timeout(if n.expires == 0 {
+        notify_rust::Timeout::Never
+    } else if timeout_ms == 0 {
+        notify_rust::Timeout::Milliseconds(1000)
+    } else {
+        notify_rust::Timeout::Milliseconds(timeout_ms)
+    });
     notif.summary(&n.title);
     notif.icon("portmaster");
 

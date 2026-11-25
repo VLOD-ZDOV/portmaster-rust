@@ -187,21 +187,29 @@ impl<R: Runtime> PortmasterInterface<R> {
         }
     }
 
-    /// Enables or disables the SPN.
+    /// Enables or disables the SPN / Xray VPN.
     pub fn set_spn_enabled(&self, enabled: bool) {
-        if let Some(api) = self.get_api() {
-            let body: Result<Payload, serde_json::Error> = BooleanValue {
-                value: Some(enabled),
-            }
-            .try_into();
+        let Some(api) = self.get_api() else {
+            error!("[tauri] cannot change the VPN state: Portmaster API is not connected");
+            return;
+        };
+        let body: Result<Payload, serde_json::Error> = BooleanValue {
+            value: Some(enabled),
+        }
+        .try_into();
 
-            if let Ok(payload) = body {
+        match body {
+            Ok(payload) => {
                 tauri::async_runtime::spawn(async move {
-                    _ = api
+                    if let Err(err) = api
                         .request(Request::Update("config:spn/enable".to_string(), payload))
-                        .await;
+                        .await
+                    {
+                        error!("failed to change config:spn/enable: {}", err);
+                    }
                 });
             }
+            Err(err) => error!("failed to build config:spn/enable payload: {}", err),
         }
     }
 

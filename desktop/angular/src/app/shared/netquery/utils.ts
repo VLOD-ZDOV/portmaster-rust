@@ -17,7 +17,7 @@ export const connectionFieldTranslation: { [key: string]: string } = {
   encrypted: 'Encrypted',
   internal: 'Internal',
   asn: 'ASN',
-  tunneled: 'SPN Active',
+  tunneled: 'Xray Active',
   active: 'Active',
   allowed: 'Allowed',
   from: 'From',
