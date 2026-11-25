@@ -34,7 +34,7 @@ const CHECK_PID_BASE_WAIT: Duration = Duration::from_millis(5);
 const ERROR_LOG_RATE_LIMIT: Duration = Duration::from_secs(10);
 
 fn log_table_error(limiter: &Mutex<Option<Instant>>, stack: Stack, error: &dyn std::fmt::Display) {
-    let mut last = limiter.lock().expect("lock poisoned");
+    let mut last = limiter.lock().unwrap_or_else(|error| error.into_inner());
     let should_log = match *last {
         Some(instant) => instant.elapsed() >= ERROR_LOG_RATE_LIMIT,
         None => true,
@@ -143,21 +143,21 @@ impl TcpTable {
 
     fn current(&self) -> (Vec<Arc<ConnectionInfo>>, Vec<Arc<BindInfo>>) {
         (
-            self.connections.read().expect("lock poisoned").clone(),
-            self.listeners.read().expect("lock poisoned").clone(),
+            self.connections.read().unwrap_or_else(|error| error.into_inner()).clone(),
+            self.listeners.read().unwrap_or_else(|error| error.into_inner()).clone(),
         )
     }
 
     fn up_to_date(&self, packet: &PacketInfo) -> bool {
         self.last_update
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .is_some_and(|updated| updated >= packet.seen_at)
     }
 
     fn update(&self, procfs: &ProcFs) -> (Vec<Arc<ConnectionInfo>>, Vec<Arc<BindInfo>>) {
         {
-            let mut limiter = self.limiter.lock().expect("lock poisoned");
+            let mut limiter = self.limiter.lock().unwrap_or_else(|error| error.into_inner());
             if let Some(last) = *limiter {
                 let elapsed = last.elapsed();
                 if elapsed < MIN_DURATION_BETWEEN_TABLE_UPDATES {
@@ -176,11 +176,11 @@ impl TcpTable {
 
             match res {
                 Ok((connections, listeners)) => {
-                    *self.connections.write().expect("lock poisoned") =
+                    *self.connections.write().unwrap_or_else(|error| error.into_inner()) =
                         connections.into_iter().map(Arc::new).collect();
-                    *self.listeners.write().expect("lock poisoned") =
+                    *self.listeners.write().unwrap_or_else(|error| error.into_inner()) =
                         listeners.into_iter().map(Arc::new).collect();
-                    *self.last_update.lock().expect("lock poisoned") = Some(SystemTime::now());
+                    *self.last_update.lock().unwrap_or_else(|error| error.into_inner()) = Some(SystemTime::now());
                 }
                 Err(error) => {
                     log_table_error(&self.last_error_log, self.stack, &error);
@@ -224,19 +224,19 @@ impl UdpTable {
     }
 
     fn current(&self) -> Vec<Arc<BindInfo>> {
-        self.binds.read().expect("lock poisoned").clone()
+        self.binds.read().unwrap_or_else(|error| error.into_inner()).clone()
     }
 
     fn up_to_date(&self, packet: &PacketInfo) -> bool {
         self.last_update
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .is_some_and(|updated| updated >= packet.seen_at)
     }
 
     fn update(&self, procfs: &ProcFs) -> Vec<Arc<BindInfo>> {
         {
-            let mut limiter = self.limiter.lock().expect("lock poisoned");
+            let mut limiter = self.limiter.lock().unwrap_or_else(|error| error.into_inner());
             if let Some(last) = *limiter {
                 let elapsed = last.elapsed();
                 if elapsed < MIN_DURATION_BETWEEN_TABLE_UPDATES {
@@ -258,9 +258,9 @@ impl UdpTable {
 
             match res {
                 Ok(binds) => {
-                    *self.binds.write().expect("lock poisoned") =
+                    *self.binds.write().unwrap_or_else(|error| error.into_inner()) =
                         binds.into_iter().map(Arc::new).collect();
-                    *self.last_update.lock().expect("lock poisoned") = Some(SystemTime::now());
+                    *self.last_update.lock().unwrap_or_else(|error| error.into_inner()) = Some(SystemTime::now());
                 }
                 Err(error) => {
                     log_table_error(&self.last_error_log, self.stack, &error);
@@ -273,7 +273,7 @@ impl UdpTable {
     fn get_conn_state(&self, bind: &BindInfo, remote: Address) -> Option<UdpState> {
         self.states
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .get(&(bind.local.ip, bind.local.port))
             .and_then(|remotes| remotes.get(&(remote.ip, remote.port)))
             .copied()
@@ -281,7 +281,7 @@ impl UdpTable {
 
     fn get_direction(&self, bind: &BindInfo, packet: &PacketInfo) -> bool {
         let should_clean = {
-            let mut lc = self.last_clean.lock().expect("lock poisoned");
+            let mut lc = self.last_clean.lock().unwrap_or_else(|error| error.into_inner());
             match *lc {
                 Some(last) if last.elapsed() >= UDP_STATES_CLEAN_INTERVAL => {
                     *lc = Some(Instant::now());
@@ -298,7 +298,7 @@ impl UdpTable {
             self.clean_states(SystemTime::now());
         }
 
-        let mut states = self.states.lock().expect("lock poisoned");
+        let mut states = self.states.lock().unwrap_or_else(|error| error.into_inner());
         let remotes = states.entry((bind.local.ip, bind.local.port)).or_default();
         let remote = (packet.remote_ip(), packet.remote_port());
         match remotes.get_mut(&remote) {
@@ -339,12 +339,12 @@ impl UdpTable {
         let active_binds: Vec<(IpAddr, u16)> = self
             .binds
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .iter()
             .map(|bind| (bind.local.ip, bind.local.port))
             .collect();
 
-        let mut states = self.states.lock().expect("lock poisoned");
+        let mut states = self.states.lock().unwrap_or_else(|error| error.into_inner());
         states.retain(|local, remotes| {
             if !active_binds.is_empty() && !active_binds.contains(local) {
                 return false;

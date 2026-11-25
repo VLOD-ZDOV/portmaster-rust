@@ -211,7 +211,7 @@ impl Controller {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         self.hooks
             .write()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .push(RegisteredHook { id, query, hook });
         HookHandle {
             controller: Arc::downgrade(self),
@@ -222,7 +222,7 @@ impl Controller {
     fn remove_hook(&self, id: u64) {
         self.hooks
             .write()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .retain(|hook| hook.id != id);
     }
 
@@ -237,7 +237,7 @@ impl Controller {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         self.subscriptions
             .write()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .push(SubscriptionEntry {
                 id,
                 query,
@@ -251,7 +251,7 @@ impl Controller {
     pub(crate) fn remove_subscription(&self, id: u64) {
         self.subscriptions
             .write()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .retain(|subscription| subscription.id != id);
     }
 
@@ -276,7 +276,7 @@ impl Controller {
     }
 
     fn notify_subscribers(&self, record: &Record) {
-        let subscriptions = self.subscriptions.read().expect("lock poisoned");
+        let subscriptions = self.subscriptions.read().unwrap_or_else(|error| error.into_inner());
         for subscription in subscriptions.iter() {
             if record
                 .meta
@@ -291,7 +291,7 @@ impl Controller {
     }
 
     fn run_pre_get_hooks(&self, db_key: &str) -> Result<()> {
-        let hooks = self.hooks.read().expect("lock poisoned");
+        let hooks = self.hooks.read().unwrap_or_else(|error| error.into_inner());
         for registered in hooks.iter() {
             if !registered.hook.uses_pre_get() || !registered.query.matches_key(db_key) {
                 continue;
@@ -302,7 +302,7 @@ impl Controller {
     }
 
     fn run_post_get_hooks(&self, mut record: Record) -> Result<Record> {
-        let hooks = self.hooks.read().expect("lock poisoned");
+        let hooks = self.hooks.read().unwrap_or_else(|error| error.into_inner());
         for registered in hooks.iter() {
             if !registered.hook.uses_post_get() || !registered.query.matches(&record) {
                 continue;
@@ -313,7 +313,7 @@ impl Controller {
     }
 
     fn run_pre_put_hooks(&self, mut record: Record) -> Result<Record> {
-        let hooks = self.hooks.read().expect("lock poisoned");
+        let hooks = self.hooks.read().unwrap_or_else(|error| error.into_inner());
         for registered in hooks.iter() {
             if !registered.hook.uses_pre_put() || !registered.query.matches(&record) {
                 continue;

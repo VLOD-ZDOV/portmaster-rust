@@ -46,8 +46,13 @@ impl Layer {
     /// the error is recorded. Otherwise, the last error is recorded and
     /// everything else stays usable.
     fn parse(profile: Arc<Profile>, config: &Arc<Config>, global: &GlobalProfileConfig) -> Layer {
-        let (perspective, perspective_error) =
-            config.perspective(&Value::Object(profile.config.clone()));
+        // Older builds wrote `splittun/usagePolicy` as a string ("vpn"/"direct")
+        // although the option is a string array. Perspective parsing rejects
+        // the whole profile on a type mismatch, which would silently drop
+        // spn/use, endpoints and filter rules.
+        let profile_config =
+            Value::Object(crate::profile::sanitize_legacy_config(profile.config.clone()));
+        let (perspective, perspective_error) = config.perspective(&profile_config);
         let mut layer = Layer {
             profile,
             perspective,
@@ -150,13 +155,13 @@ impl LayeredProfile {
     }
 
     fn layers(&self) -> Vec<Arc<Layer>> {
-        self.inner.read().expect("lock poisoned").layers.clone()
+        self.inner.read().unwrap_or_else(|error| error.into_inner()).layers.clone()
     }
 
     /// Returns the first layer result of `find`, without copying the layers.
     /// `find` must be cheap and must not call back into this profile.
     fn first_layer<T>(&self, find: impl Fn(&Layer) -> Option<T>) -> Option<T> {
-        let inner = self.inner.read().expect("lock poisoned");
+        let inner = self.inner.read().unwrap_or_else(|error| error.into_inner());
         inner.layers.iter().find_map(|layer| find(layer))
     }
 
@@ -229,19 +234,19 @@ impl LayeredProfile {
 
     /// Returns the local profile.
     pub fn local_profile(&self) -> Arc<Profile> {
-        let inner = self.inner.read().expect("lock poisoned");
+        let inner = self.inner.read().unwrap_or_else(|error| error.into_inner());
         Arc::clone(&inner.layers[0].profile)
     }
 
     /// Returns the first error that occurred parsing the local profile config.
     pub fn config_error(&self) -> Option<String> {
-        let inner = self.inner.read().expect("lock poisoned");
+        let inner = self.inner.read().unwrap_or_else(|error| error.into_inner());
         inner.layers[0].error.clone()
     }
 
     /// Returns the current revision counter.
     pub fn revision(&self) -> u64 {
-        self.inner.read().expect("lock poisoned").revision
+        self.inner.read().unwrap_or_else(|error| error.into_inner()).revision
     }
 
     /// Returns the security level. Go never raises it (it stays 0), and the
@@ -252,7 +257,7 @@ impl LayeredProfile {
 
     /// Returns whether a layer is outdated or the global config changed.
     pub fn needs_update(&self) -> bool {
-        let inner = self.inner.read().expect("lock poisoned");
+        let inner = self.inner.read().unwrap_or_else(|error| error.into_inner());
         inner.global_generation != self.config.generation()
             || inner.layers.iter().any(|layer| layer.profile.is_outdated())
     }
@@ -267,7 +272,7 @@ impl LayeredProfile {
     /// The write lock is held while `load_local` runs, so the closure must not
     /// use this layered profile (it would deadlock).
     pub fn update(&self, mut load_local: impl FnMut(&str) -> Result<Profile, String>) -> u64 {
-        let mut inner = self.inner.write().expect("lock poisoned");
+        let mut inner = self.inner.write().unwrap_or_else(|error| error.into_inner());
         let mut changed = false;
 
         for index in 0..inner.layers.len() {

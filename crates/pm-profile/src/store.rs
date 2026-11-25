@@ -121,6 +121,41 @@ impl ProfileStore {
         Ok(profiles)
     }
 
+    /// Rewrites profiles that still contain legacy wrongly-typed options.
+    /// Returns the number of migrated records.
+    pub fn migrate_legacy_configs(&self) -> Result<usize> {
+        let records = self.db.query(&Query::new(PROFILES_DB_PATH))?;
+        let mut migrated = 0;
+        for record in records {
+            let mut profile: Profile = match serde_json::from_slice(&record.data) {
+                Ok(profile) => profile,
+                Err(_) => continue,
+            };
+            // Go migrations only rewrite local profiles.
+            if profile.source != crate::SOURCE_LOCAL {
+                continue;
+            }
+            if profile.id.is_empty() {
+                let key_str = &record.key.key;
+                if let Some(id) = key_str.strip_prefix(&format!("profiles/{}/", profile.source)) {
+                    profile.id = id.to_string();
+                } else if let Some(last_slash) = key_str.rfind('/') {
+                    profile.id = key_str[last_slash + 1..].to_string();
+                }
+            }
+            if profile.id.is_empty() {
+                continue;
+            }
+            let clean = crate::profile::sanitize_legacy_config(profile.config.clone());
+            if clean != profile.config {
+                profile.config = clean;
+                self.db.put(encode_profile(&profile)?)?;
+                migrated += 1;
+            }
+        }
+        Ok(migrated)
+    }
+
     /// Saves a profile.
     pub fn save(&self, profile: &Profile) -> Result<()> {
         if profile.id.is_empty() {
@@ -134,7 +169,9 @@ impl ProfileStore {
         }
         // Write the profile first; only mark it seen once the write succeeded,
         // so a failed put cannot leave phantom metadata behind.
-        self.db.put(self.encode(profile)?)?;
+        let mut clean = profile.clone();
+        clean.config = crate::profile::sanitize_legacy_config(clean.config);
+        self.db.put(self.encode(&clean)?)?;
         self.update_meta(|meta| {
             meta.mark_seen(&profile.id);
         });
@@ -165,6 +202,7 @@ impl ProfileStore {
 
     fn decode(record: &Record) -> Result<Profile> {
         let mut profile: Profile = serde_json::from_slice(&record.data)?;
+        profile.config = crate::profile::sanitize_legacy_config(profile.config);
         if profile.id.is_empty() {
             let key_str = &record.key.key;
             if let Some(id) = key_str.strip_prefix(&format!("profiles/{}/", profile.source)) {

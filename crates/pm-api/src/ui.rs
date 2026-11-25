@@ -68,7 +68,7 @@ impl UiArchives {
     pub fn close_archives(&self) {
         self.archives
             .write()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .clear();
     }
 
@@ -77,7 +77,7 @@ impl UiArchives {
         if let Some(archive) = self
             .archives
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .get(module)
             .cloned()
         {
@@ -120,7 +120,7 @@ impl UiArchives {
         let archive = Arc::new(Archive::load(&path, module)?);
         self.archives
             .write()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .insert(module.to_string(), Arc::clone(&archive));
         Ok(archive)
     }

@@ -161,7 +161,7 @@ impl StateMgr {
         }
 
         {
-            let mut states = self.states.lock().expect("lock poisoned");
+            let mut states = self.states.lock().unwrap_or_else(|error| error.into_inner());
             match states.iter_mut().find(|existing| existing.id == state.id) {
                 Some(existing) => *existing = state,
                 None => states.push(state),
@@ -173,7 +173,7 @@ impl StateMgr {
     /// Removes the state with the given ID.
     pub fn remove(&self, id: &str) {
         let removed = {
-            let mut states = self.states.lock().expect("lock poisoned");
+            let mut states = self.states.lock().unwrap_or_else(|error| error.into_inner());
             if states.is_empty() {
                 return;
             }
@@ -190,7 +190,7 @@ impl StateMgr {
     /// Removes all states.
     pub fn clear(&self) {
         {
-            let mut states = self.states.lock().expect("lock poisoned");
+            let mut states = self.states.lock().unwrap_or_else(|error| error.into_inner());
             states.clear();
         }
         // Submit without the lock; callbacks may change the states again.
@@ -201,7 +201,7 @@ impl StateMgr {
     pub fn export(&self) -> StateUpdate {
         StateUpdate {
             module: self.module_name.clone(),
-            states: self.states.lock().expect("lock poisoned").clone(),
+            states: self.states.lock().unwrap_or_else(|error| error.into_inner()).clone(),
         }
     }
 }

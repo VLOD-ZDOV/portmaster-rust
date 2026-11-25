@@ -562,7 +562,32 @@ fn icon_data_url(sync: &Sync, icon: &Icon) -> Result<String> {
             if ignored_icon(&icon.value) {
                 return Err(SyncError::new(500, "icon is ignored".to_string()));
             }
-            let path = sync.icon_dir.join(&icon.value);
+            let requested = std::path::Path::new(&icon.value);
+            if requested.is_absolute()
+                || requested.components().any(|component| {
+                    matches!(
+                        component,
+                        std::path::Component::ParentDir
+                            | std::path::Component::RootDir
+                            | std::path::Component::Prefix(_)
+                    )
+                })
+            {
+                return Err(SyncError::new(500, "invalid icon path".to_string()));
+            }
+            let base = std::fs::canonicalize(&sync.icon_dir)
+                .map_err(|error| SyncError::new(500, error.to_string()))?;
+            let path = std::fs::canonicalize(base.join(requested))
+                .map_err(|error| SyncError::new(500, error.to_string()))?;
+            if !path.starts_with(&base) {
+                return Err(SyncError::new(500, "invalid icon path".to_string()));
+            }
+            if std::fs::metadata(&path)
+                .map(|metadata| metadata.len() > 10 * 1024 * 1024)
+                .unwrap_or(true)
+            {
+                return Err(SyncError::new(500, "icon is too large".to_string()));
+            }
             let data = std::fs::read(&path)
                 .map_err(|error| SyncError::new(500, error.to_string()))?;
             Ok(encode_data_url(&data))

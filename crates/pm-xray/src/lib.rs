@@ -188,7 +188,11 @@ pub fn register_options(config: &Config) -> pm_config::Result<()> {
         )
         .with_expertise_level(pm_config::EXPERTISE_LEVEL_DEVELOPER)
         .with_annotation(pm_config::DISPLAY_ORDER_ANNOTATION, json!(30))
-        .with_annotation(pm_config::CATEGORY_ANNOTATION, json!("Development")),
+        .with_annotation(pm_config::CATEGORY_ANNOTATION, json!("Development"))
+        .with_validation_func(|value| match value.as_i64() {
+            Some(port) if (1..=i64::from(u16::MAX)).contains(&port) => Ok(()),
+            _ => Err("Xray local port must be between 1 and 65535".to_string()),
+        }),
     )?;
     config.register(
         ConfigOption::new(
@@ -470,9 +474,6 @@ pub struct Xray {
     pub store: SubscriptionStore,
     pub manager: XrayManager,
     pub geoip: Arc<GeoIp>,
-    pub enabled: bool,
-    pub inbound_port: u16,
-    pub inbound: InboundProtocol,
     /// Source of traffic statistics: real gRPC client when a stats port is
     /// configured, [`NoopTrafficStats`] otherwise.
     pub stats: Arc<dyn StatsService>,
@@ -490,7 +491,6 @@ impl Xray {
         data_dir: PathBuf,
         bin_dir: PathBuf,
     ) -> Arc<Xray> {
-        let enabled = config.get_as_bool(CFG_XRAY_ENABLE, false)();
         let configured_binary = {
             let b = config.get_as_string(CFG_XRAY_BINARY_NAMESPACED, "")();
             if b.is_empty() {
@@ -500,17 +500,6 @@ impl Xray {
             }
         };
         let binary = resolve_binary(&configured_binary, &data_dir, &bin_dir).unwrap_or_default();
-        let inbound_port = config
-            .get_as_int(CFG_XRAY_INBOUND_PORT, i64::from(DEFAULT_INBOUND_PORT))()
-            .clamp(1, u16::MAX as i64) as u16;
-        let inbound = if config
-            .get_as_string(CFG_XRAY_INBOUND_PROTOCOL, "socks")()
-            .eq_ignore_ascii_case("http")
-        {
-            InboundProtocol::Http
-        } else {
-            InboundProtocol::Socks
-        };
         let stats_port = config
             .get_as_int(CFG_XRAY_STATS_PORT, i64::from(DEFAULT_STATS_PORT))()
             .clamp(0, u16::MAX as i64) as u16;
@@ -526,9 +515,6 @@ impl Xray {
                 .expect("register xray database"),
             manager: XrayManager::system_with_stats_port(binary, data_dir.clone(), stats_port),
             geoip,
-            enabled,
-            inbound_port,
-            inbound,
             stats,
             data_dir,
             bin_dir,
@@ -573,17 +559,51 @@ impl Xray {
                 .expect("register xray database"),
             manager: XrayManager::with_stats_port(binary, data_dir.clone(), adapter, 0),
             geoip,
-            enabled: true,
-            inbound_port: DEFAULT_INBOUND_PORT,
-            inbound: InboundProtocol::Socks,
             stats,
             data_dir,
             bin_dir,
         })
     }
 
-    /// Downloads the latest official Xray-core binary from GitHub, extracts it into
-    /// the Portmaster bin or data directory, marks it executable, and updates the manager.
+    /// Returns the SHA-256 digest GitHub publishes for the latest release asset.
+    fn latest_asset_digest(agent: &ureq::Agent, asset_name: &str) -> Result<String> {
+        use std::io::Read;
+        let mut response = agent
+            .get("https://api.github.com/repos/XTLS/Xray-core/releases/latest")
+            .header("User-Agent", "Portmaster-Rust")
+            .header("Accept", "application/vnd.github+json")
+            .call()
+            .map_err(|e| Error::Fetch(format!("failed to fetch Xray release metadata: {e}")))?;
+        let mut body = Vec::new();
+        response
+            .body_mut()
+            .as_reader()
+            .take(2 * 1024 * 1024)
+            .read_to_end(&mut body)
+            .map_err(|e| Error::Fetch(format!("failed to read Xray release metadata: {e}")))?;
+        let release: serde_json::Value = serde_json::from_slice(&body)
+            .map_err(|e| Error::Fetch(format!("invalid Xray release metadata: {e}")))?;
+        let digest = release
+            .get("assets")
+            .and_then(|assets| assets.as_array())
+            .and_then(|assets| {
+                assets.iter().find(|asset| {
+                    asset.get("name").and_then(|name| name.as_str()) == Some(asset_name)
+                })
+            })
+            .and_then(|asset| asset.get("digest"))
+            .and_then(|digest| digest.as_str())
+            .ok_or_else(|| Error::Fetch(format!("no digest for {asset_name}")))?;
+        digest
+            .strip_prefix("sha256:")
+            .map(str::to_string)
+            .ok_or_else(|| Error::Fetch(format!("unsupported digest for {asset_name}: {digest}")))
+    }
+
+    /// Downloads the latest official Xray-core binary from GitHub, extracts it
+    /// into `<data-dir>/xray`, marks it executable, and updates the manager.
+    /// The upstream release asset is not signed; this is a separate trust path
+    /// from the signed Portmaster update index.
     pub fn download_and_install_binary(&self) -> Result<String> {
         use std::io::Read;
 
@@ -604,18 +624,34 @@ impl Xray {
 
         tracing::info!(%download_url, "downloading Xray-core release binary");
         let agent = ureq::Agent::new_with_defaults();
+        let expected_digest = Self::latest_asset_digest(&agent, &asset_name)?;
         let mut response = agent
             .get(&download_url)
             .header("User-Agent", "Portmaster-Rust")
             .call()
             .map_err(|e| Error::Fetch(format!("failed to download {asset_name}: {e}")))?;
 
+        const MAX_DOWNLOAD_SIZE: u64 = 64 * 1024 * 1024;
         let mut zip_bytes = Vec::new();
-        response
+        let mut reader = response
             .body_mut()
             .as_reader()
+            .take(MAX_DOWNLOAD_SIZE + 1);
+        reader
             .read_to_end(&mut zip_bytes)
             .map_err(|e| Error::Process(format!("failed to read zip payload: {e}")))?;
+        if zip_bytes.len() as u64 > MAX_DOWNLOAD_SIZE {
+            return Err(Error::Process("Xray release archive is too large".to_string()));
+        }
+        {
+            use sha2::{Digest, Sha256};
+            let actual = hex::encode(Sha256::digest(&zip_bytes));
+            if !actual.eq_ignore_ascii_case(&expected_digest) {
+                return Err(Error::Process(format!(
+                    "Xray release checksum mismatch: expected {expected_digest}, got {actual}"
+                )));
+            }
+        }
 
         let cursor = std::io::Cursor::new(zip_bytes);
         let mut archive = zip::ZipArchive::new(cursor)
@@ -637,17 +673,28 @@ impl Xray {
                 Err(_) => continue,
             };
             if raw_name == inner_binary_name || raw_name.ends_with(&format!("/{inner_binary_name}")) {
+                if file.size() > 128 * 1024 * 1024 {
+                    return Err(Error::Process("Xray binary inside archive is too large".to_string()));
+                }
                 let mut buf = Vec::new();
                 file.read_to_end(&mut buf)
                     .map_err(|e| Error::Process(format!("failed to extract binary: {e}")))?;
                 binary_bytes = Some(buf);
             } else if raw_name == "geoip.dat" || raw_name.ends_with("/geoip.dat") {
+                if file.size() > 32 * 1024 * 1024 {
+                    return Err(Error::Process("Xray geoip.dat is too large".to_string()));
+                }
                 let mut buf = Vec::new();
-                let _ = file.read_to_end(&mut buf);
+                file.read_to_end(&mut buf)
+                    .map_err(|e| Error::Process(format!("failed to extract geoip.dat: {e}")))?;
                 geoip_bytes = Some(buf);
             } else if raw_name == "geosite.dat" || raw_name.ends_with("/geosite.dat") {
+                if file.size() > 32 * 1024 * 1024 {
+                    return Err(Error::Process("Xray geosite.dat is too large".to_string()));
+                }
                 let mut buf = Vec::new();
-                let _ = file.read_to_end(&mut buf);
+                file.read_to_end(&mut buf)
+                    .map_err(|e| Error::Process(format!("failed to extract geosite.dat: {e}")))?;
                 geosite_bytes = Some(buf);
             }
         }
@@ -660,6 +707,12 @@ impl Xray {
         let xray_dir = self.data_dir.join("xray");
         std::fs::create_dir_all(&xray_dir)
             .map_err(|e| Error::Process(format!("failed to create dir {}: {e}", xray_dir.display())))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&xray_dir, std::fs::Permissions::from_mode(0o700))
+                .map_err(|e| Error::Process(format!("failed to secure xray dir: {e}")))?;
+        }
         let final_path = xray_dir.join(target_binary_name);
         std::fs::write(&final_path, &binary_data)
             .map_err(|e| Error::Process(format!("failed to write binary {}: {e}", final_path.display())))?;
@@ -731,7 +784,17 @@ impl Xray {
         let fallback = HttpFetcher::new();
         let fetcher = fetcher.unwrap_or(&fallback);
         match self.store.refresh(id, fetcher, Some(&self.geoip)) {
-            Ok(count) => count,
+            Ok(count) => {
+                // replace_nodes clears the active pointer when the selected
+                // node disappeared. Stop the old process too instead of
+                // keeping a stale connection with no selectable node.
+                if self.is_connected() && self.store.active_node_id().is_none() {
+                    tracing::warn!("xray: active node disappeared during subscription refresh");
+                    let _ = self.manager.disconnect();
+                    self.reset_vpn_config();
+                }
+                count
+            }
             Err(error) => {
                 tracing::warn!(%error, "xray: subscription refresh failed");
                 0
@@ -739,68 +802,174 @@ impl Xray {
         }
     }
 
+    /// Returns true if Xray is currently running/connected.
+    pub fn is_connected(&self) -> bool {
+        self.manager.status().connected
+    }
+
+    /// Returns the running child's inbound port/protocol.
+    pub fn active_inbound(&self) -> Option<(u16, InboundProtocol)> {
+        self.manager.active_inbound()
+    }
+
+    /// Clears VPN state only. Split Tunnel settings are intentionally left
+    /// untouched, so disconnecting Xray does not disable Split Tunnel.
+    pub(crate) fn reset_vpn_config(&self) {
+        let _ = self.config.set_config_option("spn/enable", serde_json::Value::Bool(false));
+        let port = self.config.get_as_int("xray/inboundPort", 1080)().clamp(1, i64::from(u16::MAX));
+        let scheme = if matches!(self.configured_inbound(), InboundProtocol::Http) {
+            "http"
+        } else {
+            "socks5"
+        };
+        let xray_proxy = format!("{scheme}://127.0.0.1:{port}");
+        if self.config.get_as_string("splittun/proxy", "")() == xray_proxy {
+            let _ = self.config.set_config_option(
+                "splittun/proxy",
+                serde_json::Value::String(String::new()),
+            );
+        }
+    }
+
+    /// Returns whether the Xray integration is enabled in the current config.
+    pub fn is_enabled(&self) -> bool {
+        self.config.get_as_bool(CFG_XRAY_ENABLE, true)()
+    }
+
+    /// Returns the configured local inbound port, clamped to a valid u16.
+    pub fn configured_inbound_port(&self) -> u16 {
+        self.config
+            .get_as_int(CFG_XRAY_INBOUND_PORT, i64::from(DEFAULT_INBOUND_PORT))()
+            .clamp(1, u16::MAX as i64) as u16
+    }
+
+    /// Returns the configured local inbound protocol.
+    pub fn configured_inbound(&self) -> InboundProtocol {
+        if self
+            .config
+            .get_as_string(CFG_XRAY_INBOUND_PROTOCOL, "socks")()
+            .eq_ignore_ascii_case("http")
+        {
+            InboundProtocol::Http
+        } else {
+            InboundProtocol::Socks
+        }
+    }
+
+    /// Connects to the last selected/active node using stored routing rules and inbound settings.
+    pub fn connect_last(self: &Arc<Self>) -> Result<XrayStatus> {
+        if !self.is_enabled() {
+            self.reset_vpn_config();
+            return Err(crate::Error::Disabled);
+        }
+        if !self.manager.binary_available() {
+            self.reset_vpn_config();
+            return Err(crate::Error::Process(format!("binary not found: {XRAY_BINARY_NAME}")));
+        }
+        let node_id = self
+            .store
+            .last_node_id()
+            .ok_or_else(|| {
+                self.reset_vpn_config();
+                crate::Error::Process("no previous active node found to connect".into())
+            })?;
+
+        let node = match self.store.get_node(&node_id) {
+            Ok(node) => node,
+            Err(error) => {
+                // A stale last_node_id must not leave spn/enable=true behind:
+                // the firewall would keep rerouting all VPN traffic to a proxy
+                // that is not running.
+                self.store.clear_last_node();
+                self.store.clear_active();
+                self.reset_vpn_config();
+                return Err(error);
+            }
+        };
+        tracing::info!(node = %node.name, "xray: connecting to node");
+        let rules = self.routing_rules();
+        let custom_rules = if rules.is_empty() { None } else { Some(rules.as_slice()) };
+        let inbound_port = self.configured_inbound_port();
+        if let Err(error) = self.manager.connect_with_rules(
+            &node,
+            inbound_port,
+            self.configured_inbound(),
+            custom_rules,
+        ) {
+            self.store.clear_active();
+            self.reset_vpn_config();
+            return Err(error);
+        }
+        let _ = self.store.set_active(&node.subscription_id, &node.id);
+        let _ = self.config.set_config_option("spn/enable", serde_json::Value::Bool(true));
+        // Xray is VPN routing, not Split Tunnel. Do not enable the Split Tunnel
+        // module or point its upstream proxy at Xray. The VPN path is resolved
+        // per app by CoreProfiles::split_tun_proxy().
+        let port = self.config.get_as_int("xray/inboundPort", 1080)().clamp(1, i64::from(u16::MAX));
+        let scheme = if matches!(self.configured_inbound(), InboundProtocol::Http) {
+            "http"
+        } else {
+            "socks5"
+        };
+        let xray_proxy = format!("{scheme}://127.0.0.1:{port}");
+        if self.config.get_as_string("splittun/proxy", "")() == xray_proxy {
+            let _ = self.config.set_config_option("splittun/proxy", serde_json::Value::String(String::new()));
+        }
+        let probe = Arc::clone(self);
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            probe.manager.probe_exit_ip(Some(&probe.geoip));
+        });
+        Ok(self.manager.status())
+    }
+
+    /// Disconnects Xray and resets proxy/spn config while preserving last_node_id in database.
+    pub fn disconnect(&self) -> XrayStatus {
+        let _ = self.manager.disconnect();
+        self.store.clear_active();
+        self.reset_vpn_config();
+        self.manager.status()
+    }
+
+    /// Toggles Xray on or off. If connected, disconnects; if disconnected, connects to last node.
+    pub fn toggle(self: &Arc<Self>) -> Result<XrayStatus> {
+        if self.is_connected() {
+            Ok(self.disconnect())
+        } else {
+            self.connect_last()
+        }
+    }
+
     /// Starts the service: restores the last selected node when one exists and auto-connect is enabled.
-    pub fn start(&self) {
+    pub fn start(self: &Arc<Self>) {
+        if !self.is_enabled() {
+            tracing::info!("xray: integration is disabled in settings");
+            self.reset_vpn_config();
+            return;
+        }
         if !self.manager.binary_available() {
             tracing::warn!(
                 binary = XRAY_BINARY_NAME,
                 "xray: binary not found; integration stays inactive"
             );
-            let _ = self.config.set_config_option("spn/enable", serde_json::Value::Bool(false));
-            let _ = self.config.set_config_option("splittun/enable", serde_json::Value::Bool(false));
-            let _ = self.config.set_config_option("splittun/proxy", serde_json::Value::String(String::new()));
+            self.reset_vpn_config();
             return;
         }
         let auto_connect = self.config.get_as_bool(CFG_XRAY_AUTO_CONNECT, true)();
         if !auto_connect {
             tracing::info!("xray: auto-connect is disabled in settings");
-            let _ = self.config.set_config_option("spn/enable", serde_json::Value::Bool(false));
-            let _ = self.config.set_config_option("splittun/enable", serde_json::Value::Bool(false));
-            let _ = self.config.set_config_option("splittun/proxy", serde_json::Value::String(String::new()));
+            self.reset_vpn_config();
             return;
         }
-        let Some(node_id) = self.store.last_node_id() else {
-            tracing::info!("xray: no previous active node found to restore");
-            let _ = self.config.set_config_option("spn/enable", serde_json::Value::Bool(false));
-            let _ = self.config.set_config_option("splittun/enable", serde_json::Value::Bool(false));
-            let _ = self.config.set_config_option("splittun/proxy", serde_json::Value::String(String::new()));
-            return;
-        };
-        match self.store.get_node(&node_id) {
-            Ok(node) => {
-                tracing::info!(node = %node.name, "xray: auto-connecting to last selected node");
-                let rules = self.routing_rules();
-                let custom_rules = if rules.is_empty() { None } else { Some(rules.as_slice()) };
-                if let Err(error) = self.manager.connect_with_rules(&node, self.inbound_port, self.inbound, custom_rules) {
-                    tracing::warn!(%error, "xray: failed to restore selected node");
-                    let _ = self.config.set_config_option("spn/enable", serde_json::Value::Bool(false));
-                    let _ = self.config.set_config_option("splittun/enable", serde_json::Value::Bool(false));
-                    let _ = self.config.set_config_option("splittun/proxy", serde_json::Value::String(String::new()));
-                } else {
-                    let _ = self.store.set_active(&node.subscription_id, &node.id);
-                    let _ = self.config.set_config_option("spn/enable", serde_json::Value::Bool(true));
-                    let _ = self.config.set_config_option("splittun/enable", serde_json::Value::Bool(true));
-                    let _ = self.config.set_config_option(
-                        "splittun/proxy",
-                        serde_json::Value::String(format!("socks5://127.0.0.1:{}", self.inbound_port)),
-                    );
-                }
-            }
-            Err(error) => {
-                tracing::warn!(%error, "xray: stored active node is gone");
-                let _ = self.config.set_config_option("spn/enable", serde_json::Value::Bool(false));
-                let _ = self.config.set_config_option("splittun/enable", serde_json::Value::Bool(false));
-                let _ = self.config.set_config_option("splittun/proxy", serde_json::Value::String(String::new()));
-            }
+        if let Err(error) = self.connect_last() {
+            tracing::info!(%error, "xray: auto-connect skipped or no previous active node");
         }
     }
 
     /// Stops the child process; called when the core shuts down.
     pub fn stop(&self) {
         self.manager.stop();
-        let _ = self.config.set_config_option("spn/enable", serde_json::Value::Bool(false));
-        let _ = self.config.set_config_option("splittun/enable", serde_json::Value::Bool(false));
-        let _ = self.config.set_config_option("splittun/proxy", serde_json::Value::String(String::new()));
+        self.reset_vpn_config();
     }
 }
 

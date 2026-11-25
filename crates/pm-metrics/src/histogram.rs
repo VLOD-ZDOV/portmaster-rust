@@ -72,7 +72,7 @@ impl Histogram {
             return;
         }
         let bucket_index = (value.log10() - E10_MIN as f64) * BUCKETS_PER_DECIMAL as f64;
-        let mut inner = self.inner.lock().expect("lock poisoned");
+        let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
         inner.sum += value;
         if bucket_index < 0.0 {
             inner.lower += 1;
@@ -117,7 +117,7 @@ impl Metric for Histogram {
     }
 
     fn write_prometheus(&self, out: &mut String) {
-        let inner = self.inner.lock().expect("lock poisoned");
+        let inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
         let (name, labels) = match self.base.labeled_id().find('{') {
             Some(index) => (&self.base.labeled_id()[..index], &self.base.labeled_id()[index..]),
             None => (self.base.labeled_id(), ""),

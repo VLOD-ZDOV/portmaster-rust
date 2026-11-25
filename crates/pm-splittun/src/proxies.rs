@@ -52,9 +52,9 @@ impl Proxies {
 
     /// Starts the proxies on the given port; `0` selects a free port.
     ///
-    /// Ports follow Go: TCP listens on the wildcard address, UDP on
-    /// `127.0.0.17`/`::1` on Linux so that conntrack's reverse NAT sees the
-    /// redirected destination, and on the wildcard address elsewhere.
+    /// Ports follow Go: TCPv4 listens on the wildcard address; on Linux TCPv6
+    /// binds `::1` and UDP binds `127.0.0.17`/`::1` so conntrack's reverse NAT
+    /// sees the redirected destination. Other platforms use wildcard.
     pub async fn start_on(
         &self,
         port: u16,
@@ -79,6 +79,12 @@ impl Proxies {
             IpAddr::V6(Ipv6Addr::UNSPECIFIED)
         };
 
+        let tcp6_ip = if cfg!(target_os = "linux") {
+            Ipv6Addr::LOCALHOST
+        } else {
+            Ipv6Addr::UNSPECIFIED
+        };
+
         let result: Result<(), String> = async {
             let tcp4 = TcpProxy::bind(
                 SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)),
@@ -96,21 +102,33 @@ impl Proxies {
             .map_err(|error| format!("failed to start UDPv4 proxy: {error}"))?;
 
             let (tcp6, udp6) = if env.ipv6_enabled() {
-                let tcp6 = TcpProxy::bind(
-                    SocketAddr::from((Ipv6Addr::UNSPECIFIED, port)),
+                let tcp6 = match TcpProxy::bind(
+                    SocketAddr::new(IpAddr::V6(tcp6_ip), port),
                     Arc::clone(&decider),
                     TcpProxyConfig::default(),
                 )
                 .await
-                .map_err(|error| format!("failed to start TCPv6 proxy: {error}"))?;
-                let udp6 = UdpProxy::bind(
+                {
+                    Ok(proxy) => Some(proxy),
+                    Err(error) => {
+                        tracing::warn!(%error, "splittun: TCPv6 proxy unavailable, continuing without it");
+                        None
+                    }
+                };
+                let udp6 = match UdpProxy::bind(
                     SocketAddr::new(udp6_ip, port),
                     Arc::clone(&decider),
                     UdpProxyConfig::default(),
                 )
                 .await
-                .map_err(|error| format!("failed to start UDPv6 proxy: {error}"))?;
-                (Some(tcp6), Some(udp6))
+                {
+                    Ok(proxy) => Some(proxy),
+                    Err(error) => {
+                        tracing::warn!(%error, "splittun: UDPv6 proxy unavailable, continuing without it");
+                        None
+                    }
+                };
+                (tcp6, udp6)
             } else {
                 (None, None)
             };

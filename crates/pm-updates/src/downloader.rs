@@ -71,11 +71,17 @@ impl HttpClient for HttpsClient {
             })?;
 
         let mut data = Vec::new();
-        response
+        const MAX_DOWNLOAD_SIZE: u64 = 64 * 1024 * 1024;
+        let mut reader = response
             .body_mut()
             .as_reader()
+            .take(MAX_DOWNLOAD_SIZE + 1);
+        reader
             .read_to_end(&mut data)
             .map_err(|error| format!("failed to read body of response: {error}"))?;
+        if data.len() as u64 > MAX_DOWNLOAD_SIZE {
+            return Err("response is too large".to_string());
+        }
         Ok(data)
     }
 }

@@ -100,20 +100,21 @@ pub fn check_split_tunneling(conn: &mut Connection, env: &dyn SplitTunnelEnv) {
         EpResult::Permitted | EpResult::NoMatch => {}
     }
 
-    let interface = env.split_tun_interface(conn);
     let upstream_proxy = env.split_tun_proxy(conn);
-    if interface.trim().is_empty() && upstream_proxy.trim().is_empty() {
-        return;
-    }
 
-    // UDP cannot be relayed through the upstream proxy; allow it to bypass
-    // the proxy directly so that online games (CS2, Steam), voice calls
-    // (Discord), and real-time UDP traffic continue to work instead of being
-    // blackholed.
+    // UDP cannot be relayed through the upstream proxy. Go blocks it instead
+    // of silently bypassing the proxy; a direct UDP fallback would leak traffic
+    // that the user explicitly configured to be tunneled.
     if conn.ip_protocol == protocol::UDP && !upstream_proxy.is_empty() {
+        conn.block(
+            "UDP cannot be relayed through the Split Tunnel proxy",
+            pm_profile::options::CFG_OPTION_SPLIT_TUN_PROXY_KEY,
+        );
         return;
     }
 
+    // An empty interface and proxy are valid: the split tunnel module picks the
+    // best physical default interface when no explicit binding is configured.
     conn.save_when_finished = true;
     conn.verdict = Verdict::RerouteToSplitTun;
 }

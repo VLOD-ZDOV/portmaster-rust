@@ -164,7 +164,7 @@ impl Databases {
             return Err(Error::InvalidName(info.name));
         }
 
-        let mut registry = self.registry.write().expect("lock poisoned");
+        let mut registry = self.registry.write().unwrap_or_else(|error| error.into_inner());
         match registry.get_mut(&info.name) {
             Some(existing) => {
                 existing.description = info.description;
@@ -189,7 +189,7 @@ impl Databases {
 
     /// Returns information about all registered databases, sorted by name.
     pub fn databases(&self) -> Vec<DatabaseInfo> {
-        let registry = self.registry.read().expect("lock poisoned");
+        let registry = self.registry.read().unwrap_or_else(|error| error.into_inner());
         let mut all: Vec<DatabaseInfo> = registry.values().cloned().collect();
         all.sort_by(|a, b| a.name.cmp(&b.name));
         all
@@ -198,17 +198,17 @@ impl Databases {
     pub fn is_registered(&self, name: &str) -> bool {
         self.registry
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .contains_key(name)
     }
 
     /// Returns the controller of a database, opening the storage on first use.
     pub fn controller(&self, name: &str) -> Result<Arc<Controller>> {
-        if let Some(controller) = self.controllers.read().expect("lock poisoned").get(name) {
+        if let Some(controller) = self.controllers.read().unwrap_or_else(|error| error.into_inner()).get(name) {
             return Ok(Arc::clone(controller));
         }
 
-        let mut controllers = self.controllers.write().expect("lock poisoned");
+        let mut controllers = self.controllers.write().unwrap_or_else(|error| error.into_inner());
         if let Some(controller) = controllers.get(name) {
             return Ok(Arc::clone(controller));
         }
@@ -219,7 +219,7 @@ impl Databases {
         let info = self
             .registry
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .get(name)
             .cloned()
             .ok_or_else(|| Error::NotRegistered(name.to_string()))?;
@@ -248,7 +248,7 @@ impl Databases {
 
     /// Injects an already running storage as a database.
     pub fn inject(&self, name: &str, storage: Box<dyn Storage>) -> Result<Arc<Controller>> {
-        let mut controllers = self.controllers.write().expect("lock poisoned");
+        let mut controllers = self.controllers.write().unwrap_or_else(|error| error.into_inner());
         if self.shutting_down.load(Ordering::SeqCst) {
             return Err(Error::ShuttingDown);
         }
@@ -259,7 +259,7 @@ impl Databases {
         let mut info = self
             .registry
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .get(name)
             .cloned()
             .ok_or_else(|| Error::NotRegistered(name.to_string()))?;
@@ -283,14 +283,14 @@ impl Databases {
         let injected = self
             .controllers
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .get(name)
             .map(|controller| controller.injected())
             .unwrap_or(false);
         if injected {
             self.controllers
                 .write()
-                .expect("lock poisoned")
+                .unwrap_or_else(|error| error.into_inner())
                 .remove(name);
         }
     }
@@ -348,7 +348,7 @@ impl Databases {
     fn snapshot(&self) -> Vec<Arc<Controller>> {
         self.controllers
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .values()
             .cloned()
             .collect()

@@ -220,7 +220,7 @@ impl Notifier {
     /// Useful for injecting a fake in tests or a client with a client
     /// certificate in production.
     pub fn set_client(&self, client: Arc<dyn HttpClient>) {
-        *self.client.write().expect("notifier client lock poisoned") = Some(client);
+        *self.client.write().unwrap_or_else(|error| error.into_inner()) = Some(client);
     }
 
     /// Returns the injected client, lazily creating the default one if needed.
@@ -228,13 +228,13 @@ impl Notifier {
     /// The lock is released before any await point.
     fn client(&self) -> Arc<dyn HttpClient> {
         {
-            let guard = self.client.read().expect("notifier client lock poisoned");
+            let guard = self.client.read().unwrap_or_else(|error| error.into_inner());
             if let Some(client) = guard.as_ref() {
                 return Arc::clone(client);
             }
         }
 
-        let mut guard = self.client.write().expect("notifier client lock poisoned");
+        let mut guard = self.client.write().unwrap_or_else(|error| error.into_inner());
         Arc::clone(
             guard
                 .get_or_insert_with(|| Arc::new(ReqwestClient::default()))

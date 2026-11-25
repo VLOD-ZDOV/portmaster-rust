@@ -218,7 +218,7 @@ impl Metrics {
                 ..Options::default()
             }),
         )?;
-        *self.scrapes.write().expect("lock poisoned") = Some(scrapes);
+        *self.scrapes.write().unwrap_or_else(|error| error.into_inner()) = Some(scrapes);
 
         // Go starts a pusher when core/metrics/push is configured (`metricsWriter`).
         if !self.values.push.is_empty() {
@@ -249,7 +249,7 @@ impl Metrics {
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => {
                 let handle = handle.spawn(async move { publisher.run(cancel).await });
-                *self.push_handle.lock().expect("lock poisoned") = Some(handle);
+                *self.push_handle.lock().unwrap_or_else(|error| error.into_inner()) = Some(handle);
                 tracing::info!(%url, "metrics: push worker started");
             }
             Err(_) => {
@@ -262,7 +262,7 @@ impl Metrics {
 
     /// Counts a `/metrics` scrape, if the counter has been registered.
     pub fn note_scrape(&self) {
-        if let Some(counter) = self.scrapes.read().expect("lock poisoned").as_ref() {
+        if let Some(counter) = self.scrapes.read().unwrap_or_else(|error| error.into_inner()).as_ref() {
             counter.inc();
         }
     }
@@ -283,7 +283,7 @@ impl Metrics {
         self.push_cancel.cancel();
         // Take the handle out of the lock scope before awaiting, otherwise the
         // MutexGuard would be held across the await and make this future !Send.
-        let handle = self.push_handle.lock().expect("lock poisoned").take();
+        let handle = self.push_handle.lock().unwrap_or_else(|error| error.into_inner()).take();
         if let Some(handle) = handle {
             if tokio::time::timeout(Duration::from_secs(2), handle)
                 .await
@@ -299,7 +299,7 @@ impl Metrics {
     pub fn push_worker_running(&self) -> bool {
         self.push_handle
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .as_ref()
             .is_some_and(|handle| !handle.is_finished())
     }

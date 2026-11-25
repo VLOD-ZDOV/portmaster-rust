@@ -245,7 +245,7 @@ impl NftHook {
             self.runner
                 .run(IPTABLES, &args)
                 .map_err(|error| format!("failed to insert iptables fallback rule: {error}"))?;
-            *self.iptables_ip.lock().expect("lock poisoned") = Some(wg_ip.clone());
+            *self.iptables_ip.lock().unwrap_or_else(|error| error.into_inner()) = Some(wg_ip.clone());
             tracing::debug!(
                 address = %wg_ip,
                 "IVPN: Inserted iptables SPN compatibility rule for WireGuard"
@@ -275,7 +275,7 @@ impl NftHook {
     }
 
     fn remove_iptables_rule(&self, has_iptables: bool) {
-        let ip = self.iptables_ip.lock().expect("lock poisoned").take();
+        let ip = self.iptables_ip.lock().unwrap_or_else(|error| error.into_inner()).take();
         let Some(ip) = ip else {
             return;
         };
@@ -299,7 +299,7 @@ impl NftHook {
 
     /// IP of the currently installed iptables fallback rule, for diagnostics/tests.
     pub fn installed_iptables_ip(&self) -> Option<String> {
-        self.iptables_ip.lock().expect("lock poisoned").clone()
+        self.iptables_ip.lock().unwrap_or_else(|error| error.into_inner()).clone()
     }
 }
 
@@ -328,11 +328,11 @@ mod tests {
         }
 
         fn commands(&self) -> Vec<Vec<String>> {
-            self.log.lock().expect("lock poisoned").clone()
+            self.log.lock().unwrap_or_else(|error| error.into_inner()).clone()
         }
 
         fn fail_on(&self, first_arg: &str) {
-            *self.fail_first_arg.lock().expect("lock poisoned") = Some(first_arg.to_string());
+            *self.fail_first_arg.lock().unwrap_or_else(|error| error.into_inner()) = Some(first_arg.to_string());
         }
     }
 
@@ -345,18 +345,18 @@ mod tests {
             let command: Vec<String> = std::iter::once(program.to_string())
                 .chain(args.iter().map(|argument| (*argument).to_string()))
                 .collect();
-            self.log.lock().expect("lock poisoned").push(command);
+            self.log.lock().unwrap_or_else(|error| error.into_inner()).push(command);
             if self
                 .fail_first_arg
                 .lock()
-                .expect("lock poisoned")
+                .unwrap_or_else(|error| error.into_inner())
                 .as_deref()
                 == args.first().copied()
             {
                 return Err(format!("{program}: permission denied"));
             }
             let stdout = if program == NFT && args.contains(&"insert") {
-                self.insert_output.lock().expect("lock poisoned").as_bytes().to_vec()
+                self.insert_output.lock().unwrap_or_else(|error| error.into_inner()).as_bytes().to_vec()
             } else {
                 Vec::new()
             };

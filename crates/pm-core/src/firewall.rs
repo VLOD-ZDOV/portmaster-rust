@@ -45,6 +45,23 @@ use pm_resolver::ResolverService;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+/// True when the process is Xray itself, so its own proxy connections are not
+/// rerouted again (self-loop prevention).
+fn is_xray_process(process: &Process) -> bool {
+    let base = process
+        .path
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or_default();
+    [process.exec_name.as_str(), process.name.as_str(), base]
+        .iter()
+        .any(|name| {
+            let name = name.strip_suffix(".exe").unwrap_or(*name);
+            name.eq_ignore_ascii_case("xray") || name.eq_ignore_ascii_case("xray-rust")
+        })
+        || process.path.to_ascii_lowercase().contains("xray")
+}
+
 /// Returns the fixed profile ID for special processes, like Go
 /// `Process.getSpecialProfileID`. UI/notifier parent-walk detection is not
 /// available in the Rust process model, so only PID- and path-based specials
@@ -137,6 +154,11 @@ impl CoreProfiles {
         global: Arc<GlobalProfileConfig>,
         store: ProfileStore,
     ) -> Result<CoreProfiles, String> {
+        if let Ok(migrated) = store.migrate_legacy_configs() {
+            if migrated > 0 {
+                tracing::info!(migrated, "profile: migrated legacy config values");
+            }
+        }
         let profiles = store.all(SOURCE_LOCAL).map_err(|error| error.to_string())?;
         Ok(CoreProfiles {
             config,
@@ -454,33 +476,45 @@ impl SplitTunnelProfiles for CoreProfiles {
     }
 
     fn use_split_tun(&self, process: &Process) -> bool {
-        // Exclude xray process from split tunneling to prevent self-looping
-        if process.exec_name == "xray"
-            || process.exec_name == "xray-rust"
-            || process.name == "xray"
-            || process.name == "xray-rust"
-            || process.path.contains("xray")
-        {
+        if is_xray_process(process) {
             return false;
         }
 
+        // Only the Split Tunnel module controls Split Tunnel. VPN/Xray is
+        // handled separately below; do not treat `spn/use` as Split Tunnel.
         let splittun_enabled = self.config.get_as_bool("splittun/enable", false)();
-        let spn_enabled = self.config.get_as_bool("spn/enable", false)();
-        if !splittun_enabled && !spn_enabled {
+        if !splittun_enabled {
             return false;
         }
 
-        self.layered_for(process).is_some_and(|layered| {
-            let use_st = splittun_enabled && layered.use_split_tun();
-            let use_spn = spn_enabled && layered.use_spn();
-            use_st || use_spn
-        })
+        self.layered_for(process).is_some_and(|layered| layered.use_split_tun())
     }
 
     fn split_tun_proxy(&self, process: &Process) -> String {
-        self.layered_for(process)
-            .map(|layered| layered.split_tun_proxy())
-            .unwrap_or_default()
+        let layered = self.layered_for(process);
+        let Some(layered) = layered else {
+            return String::new();
+        };
+
+        // VPN apps must use the Xray proxy, not the Split Tunnel upstream.
+        if self.config.get_as_bool("spn/enable", false)() && layered.use_spn() {
+            let port = self
+                .config
+                .get_as_int("xray/inboundPort", 1080)()
+                .clamp(1, i64::from(u16::MAX));
+            let scheme = if self
+                .config
+                .get_as_string("xray/inboundProtocol", "socks")()
+                .eq_ignore_ascii_case("http")
+            {
+                "http"
+            } else {
+                "socks5"
+            };
+            return format!("{scheme}://127.0.0.1:{port}");
+        }
+
+        layered.split_tun_proxy()
     }
 
     fn split_tun_interface(&self, process: &Process) -> String {
@@ -503,6 +537,7 @@ impl SplitTunnelProfiles for CoreProfiles {
 /// Environment of the core firewall.
 pub struct CoreFirewallEnv {
     own_pid: i32,
+    config: Arc<Config>,
     addresses: Arc<pm_netenv::AddressCache>,
     custom_lists: ServiceCustomLists,
     profiles: Arc<CoreProfiles>,
@@ -547,6 +582,7 @@ impl CoreFirewallEnv {
 
         CoreFirewallEnv {
             own_pid: std::process::id() as i32,
+            config: Arc::clone(config),
             addresses: Arc::clone(&pm_netenv::network().addresses),
             custom_lists,
             profiles,
@@ -709,6 +745,55 @@ impl PacketEnv for CoreFirewallEnv {
 
     fn dns_query_interception(&self) -> bool {
         self.dns_interception.load(Ordering::SeqCst)
+    }
+
+    /// VPN/Xray routing. The Rust core uses the split-tunnel proxy as the
+    /// transport for Xray, because Xray exposes a SOCKS endpoint and the
+    /// firewall DNATs raw TCP. This keeps VPN apps separate from Split Tunnel
+    /// apps: VPN wins before Split Tunnel is considered.
+    fn check_tunneling(&self, conn: &mut pm_network::Connection) {
+        let is_local_or_lan = conn
+            .entity
+            .as_ref()
+            .is_some_and(|entity| entity.ip_scope.is_localhost() || entity.ip_scope.is_lan());
+
+        if is_local_or_lan
+            || conn.inbound
+            || conn.verdict != pm_network::Verdict::Accept
+            || (conn.ip_protocol != pm_network::protocol::TCP
+                && conn.ip_protocol != pm_network::protocol::UDP)
+            || conn.pid == self.own_pid
+        {
+            return;
+        }
+
+        if !self.config.get_as_bool("spn/enable", false)() {
+            return;
+        }
+
+        let Some(process) = conn.process.as_ref() else {
+            return;
+        };
+        if is_xray_process(process) {
+            return;
+        }
+
+        let layered = self.profiles.layered_for(process);
+        if layered.is_some_and(|layered| layered.use_spn()) {
+            // The local proxy path cannot relay UDP through Xray, and falling
+            // back to a direct connection would leak traffic outside the VPN.
+            if conn.ip_protocol == pm_network::protocol::UDP {
+                conn.save_when_finished = true;
+                conn.block(
+                    "UDP cannot be relayed through the Xray proxy",
+                    pm_profile::options::CFG_OPTION_USE_SPN_KEY,
+                );
+                return;
+            }
+            conn.save_when_finished = true;
+            conn.tunneled = true;
+            conn.verdict = pm_network::Verdict::RerouteToSplitTun;
+        }
     }
 
     fn submit_icmp(&self, pkt: &dyn QueuedPacket) -> bool {
@@ -1090,6 +1175,12 @@ impl Firewall {
         self.started.load(Ordering::SeqCst)
     }
 
+    /// Flushes unmarked conntrack entries so routing changes apply to existing
+    /// flows. Called after a successful resume.
+    pub fn delete_unmarked(&self) -> std::io::Result<usize> {
+        self.conntrack.delete_unmarked(self.env.ipv6_enabled())
+    }
+
     /// Returns whether the current interception cancellation token is cancelled.
     pub fn is_cancelled(&self) -> bool {
         self.cancel
@@ -1189,12 +1280,21 @@ impl Firewall {
         if let Err(error) = self.conntrack.delete_all_marked(ipv6) {
             tracing::warn!(%error, "filter: failed to delete marked conntrack entries");
         }
-        // Deliberately NOT calling delete_unmarked() here. Go's own TODO says
-        // it is only needed when DNAT-based features (SPN, split-tunneling)
-        // are active, and it *disconnects every existing non-loopback flow*.
-        // In this port SPN is replaced by xray and split-tunneling is off by
-        // default, so unconditionally deleting all unmarked conntrack entries
-        // kills the user's live connections on every start.
+        // Delete unmarked conntrack entries when DNAT-based routing is active:
+        // otherwise flows established before startup bypass Xray/split tunnel
+        // until the application closes them. When neither feature is enabled,
+        // keep the user's live connections intact.
+        let routing_active = self.env.config.get_as_bool("spn/enable", false)()
+            || self.env.config.get_as_bool("splittun/enable", false)();
+        if routing_active {
+            match self.conntrack.delete_unmarked(ipv6) {
+                Ok(deleted) if deleted > 0 => {
+                    tracing::info!(deleted, "filter: reset unmarked conntrack entries for rerouting");
+                }
+                Ok(_) => {}
+                Err(error) => tracing::warn!(%error, "filter: failed to delete unmarked conntrack entries"),
+            }
+        }
 
         let (tx, mut rx) = mpsc::channel::<pm_interception::queue::QueuedPacket>(16384);
         let mut queues = Vec::new();

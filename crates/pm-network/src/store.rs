@@ -92,7 +92,7 @@ impl ConnectionStore {
         for shard in self.shards.iter() {
             let conns: Vec<SharedConnection> = shard.read().values().cloned().collect();
             for conn in conns {
-                if conn.lock().expect("lock poisoned").ended != 0 {
+                if conn.lock().unwrap_or_else(|error| error.into_inner()).ended != 0 {
                     count += 1;
                 }
             }

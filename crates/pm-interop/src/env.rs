@@ -91,13 +91,13 @@ impl TestEnv {
 
     /// Sets the DNS listen address.
     pub fn with_dns_listen(mut self, address: &str) -> TestEnv {
-        *self.dns_listen.get_mut().expect("lock poisoned") = address.to_string();
+        *self.dns_listen.get_mut().unwrap_or_else(|error| error.into_inner()) = address.to_string();
         self
     }
 
     /// Sets the configured custom DNS servers.
     pub fn with_dns_servers(self, servers: &[&str]) -> TestEnv {
-        *self.dns_servers.lock().expect("lock poisoned") =
+        *self.dns_servers.lock().unwrap_or_else(|error| error.into_inner()) =
             servers.iter().map(|value| (*value).to_string()).collect();
         self
     }
@@ -111,11 +111,11 @@ impl TestEnv {
 
 impl InteropEnv for TestEnv {
     fn dns_listen_address(&self) -> String {
-        self.dns_listen.lock().expect("lock poisoned").clone()
+        self.dns_listen.lock().unwrap_or_else(|error| error.into_inner()).clone()
     }
 
     fn dns_name_servers(&self) -> Vec<String> {
-        self.dns_servers.lock().expect("lock poisoned").clone()
+        self.dns_servers.lock().unwrap_or_else(|error| error.into_inner()).clone()
     }
 
     fn interception_started(&self) -> bool {

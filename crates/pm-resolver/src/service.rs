@@ -62,6 +62,51 @@ pub enum MissingResolversState {
 /// Connection of mDNS resolvers, querying local multicast DNS on 224.0.0.251:5353 (RFC 6762).
 pub struct MdnsResolverConn;
 
+/// Returns whether an mDNS reply actually belongs to the query.
+///
+/// Multicast DNS is unauthenticated: any host on the LAN can send a packet.
+/// Accepting every reply with a non-empty answer section lets another host
+/// poison the cache entry of the queried name. Like the Go implementation, the
+/// reply must match the message ID (or use ID 0) and either repeat the matching
+/// question or, for legacy responders without a question, contain an answer
+/// owned by the queried name.
+fn mdns_reply_matches(
+    reply: &hickory_proto::op::Message,
+    fqdn: &str,
+    qtype: hickory_proto::rr::RecordType,
+    query_id: u16,
+) -> bool {
+    use hickory_proto::rr::RecordType;
+
+    if reply.id != query_id && reply.id != 0 {
+        return false;
+    }
+
+    let name_matches = |name: &hickory_proto::rr::Name| {
+        name.to_ascii().eq_ignore_ascii_case(fqdn)
+    };
+    let type_matches = |candidate: RecordType| {
+        candidate == qtype || candidate == RecordType::ANY || qtype == RecordType::ANY
+    };
+
+    if reply
+        .queries
+        .iter()
+        .any(|question| name_matches(question.name()) && type_matches(question.query_type()))
+    {
+        return true;
+    }
+
+    // Some legacy responders omit the question section. In that case require
+    // an answer owned by the queried name; a random answer must not be cached
+    // under our domain.
+    reply.queries.is_empty()
+        && reply
+            .answers
+            .iter()
+            .any(|answer| name_matches(&answer.name))
+}
+
 #[async_trait]
 impl ResolverConn for MdnsResolverConn {
     async fn query(&self, q: Query) -> Result<hickory_proto::op::Message, ResolveError> {
@@ -134,7 +179,7 @@ impl ResolverConn for MdnsResolverConn {
                 Ok(Ok((which, n))) => {
                     let bytes = if which == 4 { &buf4[..n] } else { &buf6[..n] };
                     if let Ok(reply) = Message::from_vec(bytes) {
-                        if reply.id == query_id || !reply.answers.is_empty() {
+                        if mdns_reply_matches(&reply, &q.fqdn, q.qtype, query_id) {
                             return Ok(reply);
                         }
                     }
@@ -378,7 +423,7 @@ impl ResolverService {
 
     /// The state about missing resolvers set by the last load.
     pub fn missing_resolvers_state(&self) -> MissingResolversState {
-        *self.inner.missing_state.lock().expect("lock poisoned")
+        *self.inner.missing_state.lock().unwrap_or_else(|error| error.into_inner())
     }
 
     pub fn store(&self) -> &NameRecordStore {
@@ -474,7 +519,7 @@ impl ResolverService {
                 missing = MissingResolversState::UsingDefaults;
             }
         }
-        *self.inner.missing_state.lock().expect("lock poisoned") = missing;
+        *self.inner.missing_state.lock().unwrap_or_else(|error| error.into_inner()) = missing;
 
         let global: Vec<Arc<Resolver>> = new_resolvers.into_iter().map(Arc::new).collect();
         let (local, system, scopes) = self.scoped_resolvers(&global);
@@ -499,7 +544,7 @@ impl ResolverService {
         }
 
         let (config_changed, all_failing) = {
-            let mut state = self.inner.state.write().expect("lock poisoned");
+            let mut state = self.inner.state.write().unwrap_or_else(|error| error.into_inner());
             // Compare and update under one lock, so concurrent loads cannot both see a change.
             let config_changed =
                 !state.current_config.is_empty() && state.current_config != new_config;
@@ -574,7 +619,7 @@ impl ResolverService {
         self.inner
             .state
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .global
             .clone()
     }
@@ -584,7 +629,7 @@ impl ResolverService {
         self.inner
             .state
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .local
             .clone()
     }
@@ -594,7 +639,7 @@ impl ResolverService {
         self.inner
             .state
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .system
             .clone()
     }
@@ -604,7 +649,7 @@ impl ResolverService {
         self.inner
             .state
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .scopes
             .clone()
     }
@@ -614,7 +659,7 @@ impl ResolverService {
         self.inner
             .state
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .active
             .get(id)
             .cloned()
@@ -622,7 +667,7 @@ impl ResolverService {
 
     /// Returns whether the IP and port match a configured resolver.
     pub fn is_resolver_address(&self, ip: IpAddr, port: u16) -> bool {
-        let state = self.inner.state.read().expect("lock poisoned");
+        let state = self.inner.state.read().unwrap_or_else(|error| error.into_inner());
         state
             .global
             .iter()
@@ -644,14 +689,14 @@ impl ResolverService {
     /// Returns whether all configured resolvers are failing. `false` if there
     /// are no configured resolvers.
     pub fn all_configured_resolvers_are_failing(&self) -> bool {
-        all_configured_failing(&self.inner.state.read().expect("lock poisoned"))
+        all_configured_failing(&self.inner.state.read().unwrap_or_else(|error| error.into_inner()))
     }
 
     /// Returns all resolvers that are in scope to resolve the query, the
     /// primary source and whether all of them should be tried, like Go
     /// `GetResolversInScope`.
     pub fn get_resolvers_in_scope(&self, q: &Query) -> (Vec<Arc<Resolver>>, &'static str, bool) {
-        let state = self.inner.state.read().expect("lock poisoned");
+        let state = self.inner.state.read().unwrap_or_else(|error| error.into_inner());
         let dot_prefixed = dot_prefixed_fqdn(&q.fqdn);
         let mut selected: Vec<Arc<Resolver>> = Vec::new();
 
@@ -854,5 +899,53 @@ fn fqdn(domain: &str) -> String {
         domain.to_string()
     } else {
         format!("{domain}.")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hickory_proto::op::{Message, MessageType, OpCode, Query as DnsQuery};
+    use hickory_proto::rr::{rdata::A, Name, RData, Record, RecordType};
+    use std::str::FromStr;
+
+    fn reply(id: u16, with_question: bool, answer_name: &str) -> Message {
+        let mut message = Message::new(id, MessageType::Response, OpCode::Query);
+        if with_question {
+            message.add_query(DnsQuery::query(
+                Name::from_str("host.local.").unwrap(),
+                RecordType::A,
+            ));
+        }
+        message.add_answer(Record::from_rdata(
+            Name::from_str(answer_name).unwrap(),
+            120,
+            RData::A(A::new(192, 0, 2, 1)),
+        ));
+        message
+    }
+
+    #[test]
+    fn mdns_accepts_matching_question() {
+        let message = reply(17, true, "host.local.");
+        assert!(mdns_reply_matches(&message, "host.local.", RecordType::A, 17));
+    }
+
+    #[test]
+    fn mdns_rejects_foreign_answer() {
+        let message = reply(17, false, "attacker.local.");
+        assert!(!mdns_reply_matches(&message, "host.local.", RecordType::A, 17));
+    }
+
+    #[test]
+    fn mdns_accepts_legacy_answer_without_question() {
+        let message = reply(0, false, "host.local.");
+        assert!(mdns_reply_matches(&message, "host.local.", RecordType::A, 17));
+    }
+
+    #[test]
+    fn mdns_rejects_wrong_message_id_without_question() {
+        let message = reply(99, false, "host.local.");
+        assert!(!mdns_reply_matches(&message, "host.local.", RecordType::A, 17));
     }
 }

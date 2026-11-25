@@ -86,7 +86,7 @@ impl NetworkStorage {
     }
 
     fn connection_record(conn: &SharedConnection) -> Option<Record> {
-        let conn = conn.lock().expect("lock poisoned");
+        let conn = conn.lock().unwrap_or_else(|error| error.into_inner());
         if !conn.data_complete {
             return None;
         }

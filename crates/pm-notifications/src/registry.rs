@@ -50,17 +50,17 @@ pub struct NotificationHandle {
 impl NotificationHandle {
     /// Returns a copy of the notification data.
     pub fn snapshot(&self) -> Notification {
-        self.notification.lock().expect("lock poisoned").clone()
+        self.notification.lock().unwrap_or_else(|error| error.into_inner()).clone()
     }
 
     /// Returns the metadata of the notification record.
     pub fn meta(&self) -> Meta {
-        *self.meta.lock().expect("lock poisoned")
+        *self.meta.lock().unwrap_or_else(|error| error.into_inner())
     }
 
     /// Returns whether the notification was deleted.
     pub fn is_deleted(&self) -> bool {
-        self.meta.lock().expect("lock poisoned").is_deleted()
+        self.meta.lock().unwrap_or_else(|error| error.into_inner()).is_deleted()
     }
 
     /// Returns a receiver for the selected action ID.
@@ -75,7 +75,7 @@ impl NotificationHandle {
 
     /// Sets the handler that is called when an action is selected.
     pub fn set_action_handler(&self, handler: ActionHandler) {
-        *self.action_handler.lock().expect("lock poisoned") = Some(handler);
+        *self.action_handler.lock().unwrap_or_else(|error| error.into_inner()) = Some(handler);
     }
 
     /// Returns the database record of the notification.
@@ -126,7 +126,7 @@ impl Notifications {
 
     /// Sets the database controller that receives notification updates.
     pub fn set_db_controller(&self, controller: Arc<Controller>) {
-        *self.db.write().expect("lock poisoned") = Some(controller);
+        *self.db.write().unwrap_or_else(|error| error.into_inner()) = Some(controller);
     }
 
     /// Sets whether notifications may be shown on the system.
@@ -143,7 +143,7 @@ impl Notifications {
     pub fn get(&self, event_id: &str) -> Option<Arc<NotificationHandle>> {
         self.notifications
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .get(event_id)
             .cloned()
     }
@@ -152,7 +152,7 @@ impl Notifications {
     pub fn all(&self) -> Vec<Arc<NotificationHandle>> {
         self.notifications
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .values()
             .cloned()
             .collect()
@@ -217,8 +217,8 @@ impl Notifications {
     /// Deletes the notification.
     pub fn delete_handle(&self, handle: &Arc<NotificationHandle>, push_update: bool) {
         {
-            let mut notification = handle.notification.lock().expect("lock poisoned");
-            let mut meta = handle.meta.lock().expect("lock poisoned");
+            let mut notification = handle.notification.lock().unwrap_or_else(|error| error.into_inner());
+            let mut meta = handle.meta.lock().unwrap_or_else(|error| error.into_inner());
             if meta.is_deleted() {
                 return;
             }
@@ -233,7 +233,7 @@ impl Notifications {
         let _ = handle.response.send(None);
         self.notifications
             .write()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .remove(&handle.snapshot().event_id);
 
         if push_update {
@@ -256,8 +256,8 @@ impl Notifications {
             return;
         };
         {
-            let mut notification = handle.notification.lock().expect("lock poisoned");
-            let meta = handle.meta.lock().expect("lock poisoned");
+            let mut notification = handle.notification.lock().unwrap_or_else(|error| error.into_inner());
+            let meta = handle.meta.lock().unwrap_or_else(|error| error.into_inner());
             if notification.state != STATE_ACTIVE {
                 return;
             }
@@ -267,7 +267,7 @@ impl Notifications {
             }
             notification.expires = expires;
         }
-        let mut meta = handle.meta.lock().expect("lock poisoned");
+        let mut meta = handle.meta.lock().unwrap_or_else(|error| error.into_inner());
         meta.modified = now_secs;
         drop(meta);
         self.push_update(&handle);
@@ -280,13 +280,13 @@ impl Notifications {
         };
 
         let handler = {
-            let mut notification = handle.notification.lock().expect("lock poisoned");
+            let mut notification = handle.notification.lock().unwrap_or_else(|error| error.into_inner());
             if notification.state != STATE_ACTIVE {
                 return false;
             }
             notification.state = STATE_RESPONDED.to_string();
             notification.selected_action_id = action_id.to_string();
-            handle.action_handler.lock().expect("lock poisoned").clone()
+            handle.action_handler.lock().unwrap_or_else(|error| error.into_inner()).clone()
         };
 
         // Go dispatches the action function asynchronously and counts that as
@@ -307,12 +307,12 @@ impl Notifications {
         }
 
         {
-            let mut notification = handle.notification.lock().expect("lock poisoned");
+            let mut notification = handle.notification.lock().unwrap_or_else(|error| error.into_inner());
             if executed && notification.state == STATE_RESPONDED {
                 notification.state = STATE_EXECUTED.to_string();
             }
         }
-        let mut meta = handle.meta.lock().expect("lock poisoned");
+        let mut meta = handle.meta.lock().unwrap_or_else(|error| error.into_inner());
         meta.modified = now();
         drop(meta);
         self.push_update(&handle);
@@ -341,7 +341,7 @@ impl Notifications {
         }
 
         {
-            let mut notification = existing.notification.lock().expect("lock poisoned");
+            let mut notification = existing.notification.lock().unwrap_or_else(|error| error.into_inner());
             if notification.state == STATE_EXECUTED {
                 return Err(Error::AlreadyExecuted);
             }
@@ -417,14 +417,14 @@ impl Notifications {
             action_handler: Mutex::new(None),
         });
         {
-            let mut meta = handle.meta.lock().expect("lock poisoned");
+            let mut meta = handle.meta.lock().unwrap_or_else(|error| error.into_inner());
             meta.modified = now();
             meta.created = meta.modified;
         }
 
         self.notifications
             .write()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .insert(event_id, Arc::clone(&handle));
 
         if push_update {
@@ -434,7 +434,7 @@ impl Notifications {
     }
 
     fn push_update(&self, handle: &Arc<NotificationHandle>) {
-        let controller = self.db.read().expect("lock poisoned").clone();
+        let controller = self.db.read().unwrap_or_else(|error| error.into_inner()).clone();
         let Some(controller) = controller else {
             return;
         };

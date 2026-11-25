@@ -192,12 +192,17 @@ impl SubscriptionFetcher for HttpFetcher {
 
             match request.call() {
                 Ok(mut response) => {
+                    const MAX_SUBSCRIPTION_SIZE: u64 = 16 * 1024 * 1024;
                     let mut data = Vec::new();
-                    if let Err(err) = response.body_mut().as_reader().read_to_end(&mut data) {
+                    let mut reader = response
+                        .body_mut()
+                        .as_reader()
+                        .take(MAX_SUBSCRIPTION_SIZE + 1);
+                    if let Err(err) = reader.read_to_end(&mut data) {
                         last_error = format!("failed to read body: {err}");
                         continue;
                     }
-                    if data.len() > 16 * 1024 * 1024 {
+                    if data.len() as u64 > MAX_SUBSCRIPTION_SIZE {
                         return Err("subscription is too large (over 16 MiB)".to_string());
                     }
                     return Ok(String::from_utf8_lossy(&data).into_owned());
@@ -986,6 +991,19 @@ impl SubscriptionStore {
                 self.db.delete(&format!("{XRAY_DB}:{key}"))?;
             }
         }
+
+        // If the refresh removed the active node, clear both pointers so the
+        // next connect_last() does not keep falling back to a stale record.
+        if let Some(active) = self.active_raw() {
+            if let Some((active_sub, active_node)) = active.split_once(':') {
+                if active_sub == subscription_id
+                    && !nodes.iter().any(|node| node.id == active_node)
+                {
+                    self.clear_active();
+                    self.clear_last_node();
+                }
+            }
+        }
         Ok(())
     }
 
@@ -1033,6 +1051,12 @@ impl SubscriptionStore {
 
     pub fn clear_active(&self) {
         let _ = self.db.delete(&full_key(ACTIVE_KEY));
+    }
+
+    /// Removes the remembered last node. Used when the stored node no longer
+    /// exists, so the next connect attempt does not repeat the same failure.
+    pub fn clear_last_node(&self) {
+        let _ = self.db.delete(&full_key(LAST_NODE_KEY));
     }
 
     fn save(&self, subscription: &Subscription) -> Result<()> {

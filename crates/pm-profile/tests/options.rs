@@ -34,12 +34,42 @@ fn options_match_go_export() {
         })
         .collect();
     assert_eq!(ours.len(), expected.len());
+    // This fork replaces the SPN wording with Xray. Keep the rest of the
+    // Go export byte-compatible, but do not pretend these descriptions still
+    // match upstream.
+    const XRAY_DESCRIPTION_KEYS: &[&str] = &[
+        "spn/exitHubPolicy",
+        "spn/routingAlgorithm",
+        "spn/transitHubPolicy",
+        "spn/usagePolicy",
+        "spn/use",
+        "splittun/networkInterface",
+        "splittun/proxy",
+        "splittun/use",
+        "splittun/usagePolicy",
+    ];
     for (ours, expected) in ours.iter().zip(expected) {
         // This fork enables network history by default in the local/free mode;
         // the Go fixture still carries upstream's `false`.
         let mut expected = expected.clone();
         if ours.key == CFG_OPTION_ENABLE_HISTORY_KEY {
             expected["DefaultValue"] = json!(true);
+        }
+        if XRAY_DESCRIPTION_KEYS.contains(&ours.key.as_str()) {
+            let ours_value = serde_json::to_value(ours).unwrap();
+            let description = ours_value["Description"].as_str().unwrap_or("");
+            let expected_token = match ours.key.as_str() {
+                "spn/exitHubPolicy" | "spn/routingAlgorithm" | "spn/transitHubPolicy" => "Legacy",
+                "splittun/networkInterface" | "splittun/proxy" | "splittun/use"
+                | "splittun/usagePolicy" => "Split Tunnel",
+                _ => "Xray",
+            };
+            assert!(
+                description.contains(expected_token),
+                "fork description for {} must mention {expected_token}: {description}",
+                ours.key
+            );
+            expected["Description"] = ours_value["Description"].clone();
         }
         assert_eq!(
             go_json(&serde_json::to_value(ours).unwrap()),

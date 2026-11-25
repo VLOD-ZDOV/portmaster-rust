@@ -32,18 +32,16 @@ Current Features:
 - Block direct access to public DNS resolvers
 
 Please note that DNS bypass attempts might be additionally blocked in the System DNS Client App."####;
-pub(crate) const DESC_USE_SPN: &str = "Protect network traffic with the Safing Privacy Network. If the SPN is not available or the connection is interrupted, network traffic will be blocked.";
-pub(crate) const DESC_SPN_USAGE_POLICY: &str = r####"Customize rules which connections should or should not be routed through the SPN. Only active if "Use SPN" is enabled."####;
-pub(crate) const DESC_TRANSIT_HUB_POLICY: &str = r####"Customize which countries should or should not be used as Transit Nodes. Transit Nodes are used to transit the SPN from your Home to your Exit Node."####;
-pub(crate) const DESC_EXIT_HUB_POLICY: &str = r####"Customize which countries should or should not be used for your Exit Nodes. Exit Nodes are used to exit the SPN and establish a connection to your destination.
-
-By default, the Portmaster tries to choose the node closest to the destination as the Exit Node. This reduces your exposure to the open Internet. Exit Nodes are chosen for every destination separately."####;
-pub(crate) const DESC_ROUTING_ALGORITHM: &str = "Select the routing algorithm for your connections through the SPN. Configure your preferred balance between speed and privacy. Portmaster may automatically upgrade the routing algorithm if necessary to protect your privacy.";
+pub(crate) const DESC_USE_SPN: &str = "Route network traffic through the Xray VPN. If an established Xray connection is interrupted, traffic is blocked. If Xray cannot start at all, the VPN stays disabled and traffic is not routed.";
+pub(crate) const DESC_SPN_USAGE_POLICY: &str = r####"Global rules which connections should or should not be routed through the Xray VPN. Only active if "Use VPN (Xray)" is enabled and no custom Xray routing rules are configured. Per-app routing is controlled by the app VPN toggle."####;
+pub(crate) const DESC_TRANSIT_HUB_POLICY: &str = r####"Legacy SPN option: customize which countries should or should not be used as Transit Nodes. The current Xray integration does not use this value."####;
+pub(crate) const DESC_EXIT_HUB_POLICY: &str = r####"Legacy SPN option: customize preferred Exit Node countries. The current Xray integration selects nodes from your subscription and does not use this value."####;
+pub(crate) const DESC_ROUTING_ALGORITHM: &str = "Legacy SPN routing option. The current Xray integration does not use this value.";
 pub(crate) const DESC_SPLIT_TUN_USE: &str = r####"Route specific traffic through a different network interface, bypassing default system routing (useful for avoiding VPNs for certain apps).
 
 When you enable this and the Network Interface option is empty, Portmaster will try to route your traffic through the default physical network interface.
 
-Important: SPN takes precedence over Split Tunnel. To use Split Tunnel with SPN, configure SPN on a per-app basis or define exceptions that allow Split Tunnel to take effect."####;
+Important: VPN (Xray) takes precedence over Split Tunnel. To use Split Tunnel for an app, disable VPN routing for that app."####;
 pub(crate) const DESC_SPLIT_TUN_INTERFACE: &str = r####"Specify the network interface to route Split Tunnel traffic through. You can define it by:
 - Interface name: "Ethernet", "Wi-Fi", "wlan0", etc.
 - Interface IP address: "192.168.1.1", "10.0.0.1", etc.
@@ -53,14 +51,14 @@ Leave empty to let Portmaster detect the physical network interface and ignore v
 
 Important: The connection will be dropped if the network interface cannot be detected or becomes unavailable.
 
-Important: SPN takes precedence over Split Tunnel. To use Split Tunnel with SPN, configure SPN on a per-app basis or define exceptions that allow Split Tunnel to take effect."####;
+Important: VPN (Xray) takes precedence over Split Tunnel. To use Split Tunnel for an app, disable VPN routing for that app."####;
 pub(crate) const DESC_SPLIT_TUN_PROXY: &str = r####"Relay Split Tunnel traffic through a proxy server instead of connecting to the destination directly. Leave empty to not use a proxy.
 
 Supported formats:
-- "socks5://127.0.0.1:1080" - SOCKS5, the destination is sent to the proxy as an IP address.
-- "socks5h://127.0.0.1:1080" - SOCKS5, the destination domain is sent to the proxy when known, so the proxy resolves it.
-- "socks4://127.0.0.1:1080" - SOCKS4, IPv4 destinations only.
-- "socks4a://127.0.0.1:1080" - SOCKS4a, the destination domain is sent to the proxy when known.
+- "socks5://127.0.0.1:1081" - SOCKS5, the destination is sent to the proxy as an IP address.
+- "socks5h://127.0.0.1:1081" - SOCKS5, the destination domain is sent to the proxy when known, so the proxy resolves it.
+- "socks4://127.0.0.1:1081" - SOCKS4, IPv4 destinations only.
+- "socks4a://127.0.0.1:1081" - SOCKS4a, the destination domain is sent to the proxy when known.
 - "http://127.0.0.1:3128" - HTTP proxy (CONNECT method), the destination domain is sent to the proxy when known.
 
 Credentials can be added as "socks5://user:password@host:port" or "http://user:password@host:port". SOCKS4 only supports a user ID: "socks4://userid@host:port".
@@ -69,10 +67,10 @@ If the Network Interface option is empty, the proxy server is reached via the de
 
 Important: Only TCP connections can be relayed. UDP connections that would be routed through the Split Tunnel are blocked while a proxy is set.
 
-Important: SPN takes precedence over Split Tunnel. To use Split Tunnel with SPN, configure SPN on a per-app basis or define exceptions that allow Split Tunnel to take effect."####;
+Important: VPN (Xray) takes precedence over Split Tunnel. To use Split Tunnel for an app, disable VPN routing for that app."####;
 pub(crate) const DESC_SPLIT_TUN_USAGE_POLICY: &str = r####"Customize rules which connections should or should not be routed through the Split Tunnel. Only active if "Use Split Tunnel" is enabled.
 		
-Important: SPN takes precedence over Split Tunnel. To use Split Tunnel with SPN, configure SPN on a per-app basis or define exceptions that allow Split Tunnel to take effect."####;
+Important: VPN (Xray) takes precedence over Split Tunnel. To use Split Tunnel for an app, disable VPN routing for that app."####;
 pub(crate) const RULES_HELP_RAW: &str = r####"Rules are checked from top to bottom, stopping after the first match. They can match:
 
 - By address: "192.168.0.1"

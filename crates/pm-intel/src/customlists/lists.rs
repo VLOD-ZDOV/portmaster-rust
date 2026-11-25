@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Read};
 use std::net::IpAddr;
 use std::path::Path;
 use std::sync::RwLock;
@@ -177,12 +177,21 @@ fn parse_into(path: &Path, data: &mut ListsData) -> io::Result<ParseReport> {
 
     loop {
         line.clear();
-        let read = reader.read_until(b'\n', &mut line)?;
+        // Bound read_until itself: /dev/zero, FIFOs or a file without a
+        // newline must not grow the buffer until OOM.
+        let mut limited = (&mut reader).take((MAX_LINE_SIZE + 1) as u64);
+        let read = limited.read_until(b'\n', &mut line)?;
         if read == 0 {
             break;
         }
 
         if line.len() > MAX_LINE_SIZE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "bufio.Scanner: token too long",
+            ));
+        }
+        if read == MAX_LINE_SIZE + 1 && line.last() != Some(&b'\n') {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "bufio.Scanner: token too long",

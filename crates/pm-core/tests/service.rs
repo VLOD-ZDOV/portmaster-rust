@@ -392,7 +392,12 @@ async fn core_serves_api_and_database() {
         .get("runtime:spn/status")
         .expect("spn/status runtime provider must be registered");
     let spn_data: serde_json::Value = serde_json::from_slice(&spn_status.data).unwrap();
-    assert_eq!(spn_data["Status"], "connected");
+    let expected_status = if service.xray.is_connected() {
+        "connected"
+    } else {
+        "disabled"
+    };
+    assert_eq!(spn_data["Status"], expected_status);
 
     let user_record = service
         .databases
@@ -477,7 +482,15 @@ async fn core_serves_api_and_database() {
         .into_data();
     let frame = String::from_utf8_lossy(&message);
     assert!(frame.starts_with("2|ok|runtime:spn/status|J"), "{frame}");
-    assert!(frame.contains("\"Status\":\"connected\""), "{frame}");
+    let expected_status = if service.xray.is_connected() {
+        "connected"
+    } else {
+        "disabled"
+    };
+    assert!(
+        frame.contains(&format!("\"Status\":\"{expected_status}\"")),
+        "{frame}"
+    );
 
     socket.close(None).await.unwrap();
 

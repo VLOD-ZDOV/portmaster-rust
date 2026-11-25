@@ -118,7 +118,7 @@ impl Status {
             Ok(vec![status.system_status_record()])
         }));
         let push = registry.register(SYSTEM_STATUS_ID, provider)?;
-        *self.push_update.write().expect("lock poisoned") = Some(push);
+        *self.push_update.write().unwrap_or_else(|error| error.into_inner()) = Some(push);
         Ok(())
     }
 
@@ -136,7 +136,7 @@ impl Status {
     pub fn states(&self) -> Vec<StateUpdate> {
         self.states
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .values()
             .cloned()
             .collect()
@@ -149,7 +149,7 @@ impl Status {
     pub fn handle_module_status_update(&self, update: StateUpdate) {
         self.states
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .insert(update.module.clone(), update.clone());
         self.derive_notifications_from_state_update(&update);
         self.publish_system_status();
@@ -160,7 +160,7 @@ impl Status {
         let modules: Vec<StateUpdate> = self
             .states
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .values()
             .cloned()
             .collect();
@@ -203,7 +203,7 @@ impl Status {
     /// Pushes a new system status to the runtime database subscribers, like Go
     /// `publishSystemStatus`.
     pub fn publish_system_status(&self) {
-        let push = self.push_update.read().expect("lock poisoned").clone();
+        let push = self.push_update.read().unwrap_or_else(|error| error.into_inner()).clone();
         let Some(push) = push else {
             return;
         };
@@ -213,7 +213,7 @@ impl Status {
     /// Creates and deletes notifications for the states of an update, like Go
     /// `deriveNotificationsFromStateUpdate`.
     pub fn derive_notifications_from_state_update(&self, update: &StateUpdate) {
-        let mut module_notifications = self.module_notifications.lock().expect("lock poisoned");
+        let mut module_notifications = self.module_notifications.lock().unwrap_or_else(|error| error.into_inner());
         let notifications = module_notifications
             .entry(update.module.clone())
             .or_default();

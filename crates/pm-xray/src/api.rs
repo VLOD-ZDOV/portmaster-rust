@@ -26,6 +26,10 @@ fn redact_url(url: &str) -> String {
     let Some((scheme, rest)) = url.split_once("://") else {
         return url.split('?').next().unwrap_or(url).to_string();
     };
+    // These formats carry credentials inside a base64 payload, not in userinfo.
+    if matches!(scheme, "vmess" | "ss" | "ssr") {
+        return format!("{scheme}://<redacted>");
+    }
     let host = rest.rsplit('@').next().unwrap_or(rest);
     let host = host.split('?').next().unwrap_or(host);
     format!("{scheme}://{host}")
@@ -99,9 +103,7 @@ pub fn register_api(xray: &Arc<Xray>, api: &Api) -> pm_api::Result<()> {
                     if active_sub_id.as_deref() == Some(&id) || all_subs_count <= 1 {
                         let _ = subscriptions.manager.disconnect();
                         subscriptions.store.clear_active();
-                        let _ = subscriptions.config.set_config_option("spn/enable", serde_json::Value::Bool(false));
-                        let _ = subscriptions.config.set_config_option("splittun/enable", serde_json::Value::Bool(false));
-                        let _ = subscriptions.config.set_config_option("splittun/proxy", serde_json::Value::String(String::new()));
+                        subscriptions.reset_vpn_config();
                     }
                     subscriptions.store.remove(&id).map_err(crate::Error::api)?;
                     serde_json::to_value(json!({ "removed": id })).map_err(pm_api::ApiError::Json)
@@ -131,9 +133,7 @@ pub fn register_api(xray: &Arc<Xray>, api: &Api) -> pm_api::Result<()> {
             if active_sub_id.as_deref() == Some(id) || all_subs_count <= 1 {
                 let _ = remove_by_path.manager.disconnect();
                 remove_by_path.store.clear_active();
-                let _ = remove_by_path.config.set_config_option("spn/enable", serde_json::Value::Bool(false));
-                let _ = remove_by_path.config.set_config_option("splittun/enable", serde_json::Value::Bool(false));
-                let _ = remove_by_path.config.set_config_option("splittun/proxy", serde_json::Value::String(String::new()));
+                remove_by_path.reset_vpn_config();
             }
             remove_by_path
                 .store
@@ -241,39 +241,97 @@ pub fn register_api(xray: &Arc<Xray>, api: &Api) -> pm_api::Result<()> {
         )
         .with_write(PERMIT_ADMIN)
         .with_struct(move |request| {
-            if !connect.enabled {
+            if !connect.is_enabled() {
                 return Err(crate::Error::Disabled.api());
             }
             let payload: ConnectRequest = request.body_json()?;
+            if payload.node_id.trim().is_empty() {
+                let status = connect.connect_last().map_err(crate::Error::api)?;
+                return serde_json::to_value(status).map_err(pm_api::ApiError::Json);
+            }
             let node = connect.store.get_node(&payload.node_id).map_err(crate::Error::api)?;
             let rules = connect.routing_rules();
             let custom_rules = if rules.is_empty() { None } else { Some(rules.as_slice()) };
-            connect
+            let inbound_port = payload
+                .inbound_port
+                .unwrap_or_else(|| connect.configured_inbound_port());
+            if inbound_port == 0 {
+                return Err(pm_api::ApiError::WithStatus {
+                    status: 400,
+                    message: "inboundPort must be between 1 and 65535".to_string(),
+                });
+            }
+            if let Err(error) = connect
                 .manager
                 .connect_with_rules(
                     &node,
-                    payload.inbound_port.unwrap_or(connect.inbound_port),
-                    connect.inbound,
+                    inbound_port,
+                    connect.configured_inbound(),
                     custom_rules,
                 )
-                .map_err(crate::Error::api)?;
+            {
+                connect.store.clear_active();
+                connect.reset_vpn_config();
+                return Err(crate::Error::api(error));
+            }
             connect
                 .store
                 .set_active(&node.subscription_id, &node.id)
                 .map_err(crate::Error::api)?;
-            let inbound_port = payload.inbound_port.unwrap_or(connect.inbound_port);
-            let _ = connect.config.set_config_option("spn/enable", serde_json::Value::Bool(true));
-            let _ = connect.config.set_config_option("splittun/enable", serde_json::Value::Bool(true));
             let _ = connect.config.set_config_option(
-                "splittun/proxy",
-                serde_json::Value::String(format!("socks5://127.0.0.1:{inbound_port}")),
+                "xray/inboundPort",
+                serde_json::Value::Number(u64::from(inbound_port).into()),
             );
+            let _ = connect.config.set_config_option("spn/enable", serde_json::Value::Bool(true));
+            // Xray is VPN routing, not Split Tunnel. Do not enable Split Tunnel
+            // or set its upstream proxy to Xray here. Only clear a stale value
+            // written by older versions.
+            let scheme = if matches!(connect.configured_inbound(), crate::InboundProtocol::Http) {
+                "http"
+            } else {
+                "socks5"
+            };
+            let xray_proxy = format!("{scheme}://127.0.0.1:{inbound_port}");
+            if connect.config.get_as_string("splittun/proxy", "")() == xray_proxy {
+                let _ = connect.config.set_config_option(
+                    "splittun/proxy",
+                    serde_json::Value::String(String::new()),
+                );
+            }
             let probe_xray = Arc::clone(&connect);
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_millis(300));
                 probe_xray.manager.probe_exit_ip(Some(&probe_xray.geoip));
             });
             serde_json::to_value(connect.manager.status()).map_err(pm_api::ApiError::Json)
+        }),
+    )?;
+
+    let connect_last = Arc::clone(xray);
+    api.register_endpoint(
+        Endpoint::new(
+            "xray/connect-last",
+            "Connect Last Xray Node",
+            "Connects to the last used Xray node with stored settings.",
+        )
+        .with_write(PERMIT_ADMIN)
+        .with_struct(move |_| {
+            let status = connect_last.connect_last().map_err(crate::Error::api)?;
+            serde_json::to_value(status).map_err(pm_api::ApiError::Json)
+        }),
+    )?;
+
+    let toggle = Arc::clone(xray);
+    api.register_endpoint(
+        Endpoint::new(
+            "xray/toggle",
+            "Toggle Xray VPN",
+            "Connects to the last node if disconnected, or disconnects if active.",
+        )
+        .with_write(PERMIT_ADMIN)
+        .with_struct(move |_| {
+            let status = toggle.toggle().map_err(crate::Error::api)?;
+            serde_json::to_value(status).map_err(pm_api::ApiError::Json)
         }),
     )?;
 
@@ -286,12 +344,7 @@ pub fn register_api(xray: &Arc<Xray>, api: &Api) -> pm_api::Result<()> {
         )
         .with_write(PERMIT_ADMIN)
         .with_struct(move |_| {
-            let _ = disconnect.manager.disconnect();
-            disconnect.store.clear_active();
-            let _ = disconnect.config.set_config_option("spn/enable", serde_json::Value::Bool(false));
-            let _ = disconnect.config.set_config_option("splittun/enable", serde_json::Value::Bool(false));
-            let _ = disconnect.config.set_config_option("splittun/proxy", serde_json::Value::String(String::new()));
-            serde_json::to_value(disconnect.manager.status()).map_err(pm_api::ApiError::Json)
+            serde_json::to_value(disconnect.disconnect()).map_err(pm_api::ApiError::Json)
         }),
     )?;
 

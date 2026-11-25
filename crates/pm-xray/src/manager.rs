@@ -158,6 +158,9 @@ pub struct XrayManager {
     /// Port of the gRPC API inbound added to generated configs; 0 disables it.
     stats_port: u16,
     inner: Mutex<ManagerState>,
+    /// Serializes process replacement; connect fields and the child must not
+    /// be written by two callers at once.
+    connect_lock: Mutex<()>,
     adapter: Box<dyn ProcessAdapter>,
 }
 
@@ -189,6 +192,7 @@ impl XrayManager {
                 exit_latitude: None,
                 exit_longitude: None,
             }),
+            connect_lock: Mutex::new(()),
             adapter,
         }
     }
@@ -232,6 +236,7 @@ impl XrayManager {
         inbound: InboundProtocol,
         rules: Option<&[String]>,
     ) -> Result<()> {
+        let _connect_guard = self.connect_lock.lock().unwrap_or_else(|error| error.into_inner());
         let binary_path = self.binary();
         if binary_path.is_empty() {
             return Err(Error::Process(
@@ -248,7 +253,7 @@ impl XrayManager {
         )?;
 
         {
-            let mut state = self.inner.lock().expect("lock poisoned");
+            let mut state = self.inner.lock().unwrap_or_else(|error| error.into_inner());
             state.stop_child();
             state.state = ProcessState::Starting;
             state.node = Some(node.clone());
@@ -269,20 +274,20 @@ impl XrayManager {
                 if let Ok(Some(exit_status)) = child.try_wait() {
                     let err = format!("xray process exited immediately with status {exit_status}");
                     tracing::error!(%err, "xray: startup failed");
-                    let mut state = self.inner.lock().expect("lock poisoned");
+                    let mut state = self.inner.lock().unwrap_or_else(|error| error.into_inner());
                     state.state = ProcessState::Failed;
                     state.error = Some(err.clone());
                     return Err(Error::Process(err));
                 }
                 tracing::info!(pid = child.id(), config = %config.display(), "xray: process started");
-                let mut state = self.inner.lock().expect("lock poisoned");
+                let mut state = self.inner.lock().unwrap_or_else(|error| error.into_inner());
                 state.child = Some(ChildGuard { child: Some(child) });
                 state.state = ProcessState::Running;
                 state.inbound_address = Some(format!("127.0.0.1:{inbound_port}"));
                 Ok(())
             }
             Err(error) => {
-                let mut state = self.inner.lock().expect("lock poisoned");
+                let mut state = self.inner.lock().unwrap_or_else(|error| error.into_inner());
                 state.state = ProcessState::Failed;
                 state.error = Some(error.clone());
                 Err(Error::Process(error))
@@ -292,7 +297,8 @@ impl XrayManager {
 
     /// Stops the process and clears the selected node.
     pub fn disconnect(&self) -> Result<()> {
-        let mut state = self.inner.lock().expect("lock poisoned");
+        let _connect_guard = self.connect_lock.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.inner.lock().unwrap_or_else(|error| error.into_inner());
         state.stop_child();
         state.state = ProcessState::Stopped;
         state.node = None;
@@ -309,16 +315,26 @@ impl XrayManager {
     /// Restarts the current node with its previous inbound settings.
     pub fn restart(&self) -> Result<()> {
         let (node, port, inbound) = {
-            let state = self.inner.lock().expect("lock poisoned");
+            let state = self.inner.lock().unwrap_or_else(|error| error.into_inner());
             let node = state.node.clone().ok_or_else(|| Error::Process("no node selected".into()))?;
             (node, state.inbound_port, state.inbound)
         };
         self.connect(&node, port, inbound)
     }
 
+    /// Returns the inbound port/protocol of the running child, if any.
+    pub fn active_inbound(&self) -> Option<(u16, InboundProtocol)> {
+        let state = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        if state.state == ProcessState::Running && state.child.is_some() {
+            Some((state.inbound_port, state.inbound))
+        } else {
+            None
+        }
+    }
+
     /// Returns the current status, noticing when a child exited by itself.
     pub fn status(&self) -> XrayStatus {
-        let mut state = self.inner.lock().expect("lock poisoned");
+        let mut state = self.inner.lock().unwrap_or_else(|error| error.into_inner());
         if state.state == ProcessState::Running {
             let mut exited = None;
             if let Some(guard) = state.child.as_mut() {
@@ -373,7 +389,7 @@ impl XrayManager {
     /// Useful for cascading VPNs, Reality SNI masking, and CDN frontends where entry IP != exit IP.
     pub fn probe_exit_ip(&self, geoip: Option<&pm_geoip::GeoIp>) -> Option<String> {
         let (inbound_port, inbound_proto) = {
-            let state = self.inner.lock().expect("lock poisoned");
+            let state = self.inner.lock().unwrap_or_else(|error| error.into_inner());
             if state.state != ProcessState::Running {
                 return None;
             }
@@ -413,7 +429,7 @@ impl XrayManager {
             }
         }
 
-        let mut state = self.inner.lock().expect("lock poisoned");
+        let mut state = self.inner.lock().unwrap_or_else(|error| error.into_inner());
         state.exit_ip = Some(exit_ip.clone());
         state.exit_country = exit_country;
         state.exit_latitude = exit_latitude;

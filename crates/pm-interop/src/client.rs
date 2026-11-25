@@ -142,7 +142,7 @@ impl TcpIvpnClient {
         request.insert("Idx".to_string(), json!(idx));
         request.insert(
             "ProtocolSecret".to_string(),
-            json!(self.protocol_secret.lock().expect("lock poisoned").clone()),
+            json!(self.protocol_secret.lock().unwrap_or_else(|error| error.into_inner()).clone()),
         );
         for (key, value) in extra {
             request.insert(key, value);
@@ -154,7 +154,7 @@ impl TcpIvpnClient {
         let (sender, receiver) = oneshot::channel();
         self.waiters
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .insert(idx, sender);
 
         let write_result = {
@@ -168,7 +168,7 @@ impl TcpIvpnClient {
             }
         };
         if let Err(error) = write_result {
-            self.waiters.lock().expect("lock poisoned").remove(&idx);
+            self.waiters.lock().unwrap_or_else(|error| error.into_inner()).remove(&idx);
             return Err(format!("failed to send command: {error}"));
         }
 
@@ -176,7 +176,7 @@ impl TcpIvpnClient {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(_)) => Err("IVPN daemon closed before answering".to_string()),
             Err(_) => {
-                self.waiters.lock().expect("lock poisoned").remove(&idx);
+                self.waiters.lock().unwrap_or_else(|error| error.into_inner()).remove(&idx);
                 Err("timed out waiting for IVPN daemon response".to_string())
             }
         }
@@ -187,8 +187,8 @@ impl TcpIvpnClient {
 impl IvpnClient for TcpIvpnClient {
     async fn connect(&self) -> Result<(), String> {
         let (port, secret) = read_port_info(&self.port_file)?;
-        *self.secret.lock().expect("lock poisoned") = secret;
-        *self.protocol_secret.lock().expect("lock poisoned") =
+        *self.secret.lock().unwrap_or_else(|error| error.into_inner()) = secret;
+        *self.protocol_secret.lock().unwrap_or_else(|error| error.into_inner()) =
             read_paranoid_secret(&self.secret_file);
 
         let stream = TcpStream::connect(("127.0.0.1", port))
@@ -200,7 +200,7 @@ impl IvpnClient for TcpIvpnClient {
         *self.write_half.lock().await = Some(write_half);
 
         let cancel = CancellationToken::new();
-        *self.reader_cancel.lock().expect("lock poisoned") = Some(cancel.clone());
+        *self.reader_cancel.lock().unwrap_or_else(|error| error.into_inner()) = Some(cancel.clone());
         let events_tx = self.events_tx.clone();
         let waiters = Arc::clone(&self.waiters);
         tokio::spawn(async move {
@@ -221,7 +221,7 @@ impl IvpnClient for TcpIvpnClient {
         extra.insert("Version".to_string(), json!(version_string));
         extra.insert(
             "Secret".to_string(),
-            json!(*self.secret.lock().expect("lock poisoned")),
+            json!(*self.secret.lock().unwrap_or_else(|error| error.into_inner())),
         );
         extra.insert("GetStatus".to_string(), json!(true));
         extra.insert("GetServiceBinaryPath".to_string(), json!(true));
@@ -254,7 +254,7 @@ impl IvpnClient for TcpIvpnClient {
     }
 
     fn disconnect(&self) {
-        if let Some(cancel) = self.reader_cancel.lock().expect("lock poisoned").take() {
+        if let Some(cancel) = self.reader_cancel.lock().unwrap_or_else(|error| error.into_inner()).take() {
             cancel.cancel();
         }
         if let Ok(mut write_half) = self.write_half.try_lock() {
@@ -296,7 +296,7 @@ async fn read_loop(
                     .get("Idx")
                     .and_then(Value::as_u64)
                     .unwrap_or_default() as u32;
-                if let Some(sender) = waiters.lock().expect("lock poisoned").remove(&idx) {
+                if let Some(sender) = waiters.lock().unwrap_or_else(|error| error.into_inner()).remove(&idx) {
                     let _ = sender.send(value);
                 }
                 let _ = events_tx.send(ClientEvent::Message {

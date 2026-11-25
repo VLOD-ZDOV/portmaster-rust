@@ -420,7 +420,7 @@ impl Dns {
                                 Some(updated.clone());
                             if let Some(sink) = matcher_sink
                                 .read()
-                                .expect("matcher_sink lock poisoned")
+                                .unwrap_or_else(|error| error.into_inner())
                                 .as_ref()
                             {
                                 sink(updated);
@@ -532,7 +532,7 @@ impl Dns {
     /// Stops the workers, the listeners and the resolver.
     pub async fn shutdown(&self) {
         self.cancel.cancel();
-        let tasks = std::mem::take(&mut *self.tasks.lock().expect("lock poisoned"));
+        let tasks = std::mem::take(&mut *self.tasks.lock().unwrap_or_else(|error| error.into_inner()));
         for task in tasks {
             let _ = task.await;
         }

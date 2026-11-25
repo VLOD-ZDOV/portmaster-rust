@@ -569,29 +569,29 @@ impl OptionState {
     }
 
     pub fn is_set_by_user(&self) -> bool {
-        self.values.read().expect("lock poisoned").active.is_some()
+        self.values.read().unwrap_or_else(|error| error.into_inner()).active.is_some()
     }
 
     pub fn user_value(&self) -> Option<CachedValue> {
-        self.values.read().expect("lock poisoned").active.clone()
+        self.values.read().unwrap_or_else(|error| error.into_inner()).active.clone()
     }
 
     pub fn active_default_value(&self) -> Option<CachedValue> {
         self.values
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .active_default
             .clone()
     }
 
     pub fn fallback_value(&self) -> CachedValue {
-        self.values.read().expect("lock poisoned").fallback.clone()
+        self.values.read().unwrap_or_else(|error| error.into_inner()).fallback.clone()
     }
 
     pub fn annotation(&self, key: &str) -> Option<Value> {
         self.values
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .annotations
             .get(key)
             .cloned()
@@ -601,7 +601,7 @@ impl OptionState {
     pub fn add_annotation(&self, key: &str, value: Value) {
         self.values
             .write()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .annotations
             .entry(key.to_string())
             .or_insert(value);
@@ -611,14 +611,14 @@ impl OptionState {
     pub fn set_annotation(&self, key: &str, value: Value) {
         self.values
             .write()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .annotations
             .insert(key.to_string(), value);
     }
 
     /// Returns the current annotations.
     pub fn annotations(&self) -> Map<String, Value> {
-        let values = self.values.read().expect("lock poisoned");
+        let values = self.values.read().unwrap_or_else(|error| error.into_inner());
         values
             .annotations
             .iter()
@@ -628,7 +628,7 @@ impl OptionState {
 
     /// Serializes the option like Go `Option.Export`, including active values.
     pub fn export(&self) -> Value {
-        let values = self.values.read().expect("lock poisoned");
+        let values = self.values.read().unwrap_or_else(|error| error.into_inner());
         export_json(&self.option, &values)
     }
 }
@@ -697,7 +697,7 @@ impl OptionState {
             Some(value) => Some(self.validate(value)?),
         };
 
-        let mut values = self.values.write().expect("lock poisoned");
+        let mut values = self.values.write().unwrap_or_else(|error| error.into_inner());
         match layer {
             LayerTarget::User => values.active = cached,
             LayerTarget::Default => values.active_default = cached,
@@ -707,7 +707,7 @@ impl OptionState {
 
     /// Clears a value layer without validation.
     pub(crate) fn clear_layer(&self, layer: LayerTarget) {
-        let mut values = self.values.write().expect("lock poisoned");
+        let mut values = self.values.write().unwrap_or_else(|error| error.into_inner());
         match layer {
             LayerTarget::User => values.active = None,
             LayerTarget::Default => values.active_default = None,

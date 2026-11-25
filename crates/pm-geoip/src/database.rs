@@ -150,7 +150,7 @@ impl GeoIp {
     /// Replaces the database from an already opened reader.
     pub fn replace_reader(&self, reader: Arc<MmdbReader>, v6: bool) {
         let slot = if v6 { &self.v6 } else { &self.v4 };
-        *slot.write().expect("lock poisoned") = Some(reader);
+        *slot.write().unwrap_or_else(|error| error.into_inner()) = Some(reader);
     }
 
     /// Returns whether a database is available for the given IP version,
@@ -162,7 +162,7 @@ impl GeoIp {
     /// Returns the reader for the given IP version, if a database is loaded.
     pub fn reader(&self, v6: bool) -> Option<Arc<MmdbReader>> {
         let slot = if v6 { &self.v6 } else { &self.v4 };
-        slot.read().expect("lock poisoned").clone()
+        slot.read().unwrap_or_else(|error| error.into_inner()).clone()
     }
 
     /// Returns the location of an IP address, like Go `GetLocation`.

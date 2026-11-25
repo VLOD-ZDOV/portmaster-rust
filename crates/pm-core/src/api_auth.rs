@@ -1,8 +1,14 @@
 //! Authentication of local API clients by the requesting process.
 //!
-//! Port of Go `service/firewall/api.go`: the process that owns the client end
-//! of the TCP connection is looked up, and access is granted when the process
-//! (or one of its two parents) is a trusted binary.
+//! Port of Go `service/firewall/api.go`: normally the process that owns the
+//! client end of the TCP connection is looked up and access is granted when the
+//! process (or one of its two parents) is a trusted binary.
+//!
+//! Known local-UI exception: a loopback request with a trusted `Origin` is
+//! granted `PERMIT_SELF` without process lookup, and on Windows a loopback
+//! request without `Origin` is granted as well. This keeps the browser/Tauri UI
+//! working but means local processes can access the API. Do not treat this as
+//! process-based authentication on those paths.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Component, Path, PathBuf};
@@ -123,8 +129,9 @@ impl ApiAuthenticator {
         }
         let real_root = std::fs::canonicalize(&self.bin_dir)
             .map_err(|_| denied(DENIED_MSG_UNIDENTIFIED, false))?;
-        // Add the separator to confine to the directory.
-        let root = format!("{}/", real_root.to_string_lossy());
+        // Keep the directory as a Path: on Windows the separator is `\`,
+        // not `/`, and component-aware starts_with is the correct check.
+        let root = real_root.clone();
 
         // Get the process of the request.
         let pid = self.lookup.pid_of_connection(client, self.server_addr);
@@ -149,8 +156,11 @@ impl ApiAuthenticator {
                     }
 
                     if let Ok(real_path) = std::fs::canonicalize(&proc.path) {
-                        let allowed = self.allowed_clients.iter().any(|c| real_path.starts_with(c) || real_path == *c)
-                            || real_path.to_string_lossy().starts_with(&root);
+                        let allowed = self.allowed_clients.iter().any(|c| {
+                            std::fs::canonicalize(c)
+                                .map(|allowed| allowed == real_path)
+                                .unwrap_or(false)
+                        }) || real_path.starts_with(&root);
                         if allowed {
                             return Ok(AuthProcess {
                                 pid: original_pid,
@@ -188,12 +198,18 @@ impl ApiAuthenticator {
                 Err(denied(DENIED_MSG_SYSTEM, false))
             }
             _ => {
+                let root_display = root.to_string_lossy();
+                let root_label = if root_display.ends_with(std::path::MAIN_SEPARATOR) {
+                    root_display.into_owned()
+                } else {
+                    format!("{root_display}{}", std::path::MAIN_SEPARATOR)
+                };
                 tracing::warn!(
                     first = checked.first().map(String::as_str).unwrap_or(""),
                     "api auth: denying access"
                 );
                 Err(Denial {
-                    message: denied_unauthorized(&checked, &root),
+                    message: denied_unauthorized(&checked, &root_label),
                     retry: false,
                 })
             }
@@ -218,7 +234,7 @@ impl Authenticator for ApiAuthenticator {
         // Allow full access so the WebSocket API and dashboard load without authentication errors.
         if client.ip().is_loopback() {
             if let Some(origin) = request.header("origin") {
-                if origin == "null" || pm_api::origin_allowed(origin, &request.host, false) {
+                if pm_api::origin_allowed(origin, &request.host, false) {
                     return Ok(Some(AuthToken::new(PERMIT_SELF, PERMIT_SELF)));
                 }
                 return Err(AuthError::Denied("Cross-Origin Request Denied.".to_string()));

@@ -593,7 +593,7 @@ impl HandlerCore {
         if check_tunnel {
             self.env.check_tunneling(conn);
 
-            // The SPN takes precedence over split tunneling.
+            // The VPN (Xray) takes precedence over split tunneling.
             if conn.verdict != Verdict::RerouteToTunnel {
                 self.env.check_split_tunneling(conn);
             }

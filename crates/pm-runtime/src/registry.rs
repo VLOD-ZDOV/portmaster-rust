@@ -100,7 +100,7 @@ impl Registry {
         self.inner
             .database_name
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .clone()
     }
 
@@ -109,7 +109,7 @@ impl Registry {
         self.inner
             .controller
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .is_some()
     }
 
@@ -122,7 +122,7 @@ impl Registry {
             .inner
             .controller
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .is_some()
         {
             return Err(Error::Injected);
@@ -135,8 +135,8 @@ impl Registry {
             )
             .map_err(|error| Error::Database(error.to_string()))?;
 
-        *self.inner.database_name.write().expect("lock poisoned") = name.to_string();
-        *self.inner.controller.write().expect("lock poisoned") = Some(Arc::clone(&controller));
+        *self.inner.database_name.write().unwrap_or_else(|error| error.into_inner()) = name.to_string();
+        *self.inner.controller.write().unwrap_or_else(|error| error.into_inner()) = Some(Arc::clone(&controller));
         Ok(controller)
     }
 
@@ -149,7 +149,7 @@ impl Registry {
         key_or_prefix: &str,
         provider: Arc<dyn ValueProvider>,
     ) -> Result<PushFunc> {
-        let mut providers = self.inner.providers.write().expect("lock poisoned");
+        let mut providers = self.inner.providers.write().unwrap_or_else(|error| error.into_inner());
 
         // There must not be a provider for a prefix that matches or is equal to
         // the new key.
@@ -184,7 +184,7 @@ impl Registry {
 
         let inner = Arc::clone(&self.inner);
         Ok(Arc::new(move |records: &[Record]| {
-            let controller = inner.controller.read().expect("lock poisoned").clone();
+            let controller = inner.controller.read().unwrap_or_else(|error| error.into_inner()).clone();
             let Some(controller) = controller else {
                 return;
             };
@@ -268,7 +268,7 @@ impl Registry {
         self.inner
             .providers
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .keys()
             .cloned()
             .collect()
@@ -280,7 +280,7 @@ impl Registry {
         self.inner
             .providers
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .range(..=key.to_string())
             .rev()
             .find(|(provider_key, _)| {
@@ -307,7 +307,7 @@ impl Registry {
         self.inner
             .providers
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .range(prefix.to_string()..)
             .take_while(|(provider_key, _)| provider_key.starts_with(prefix))
             .map(|(provider_key, provider)| (provider_key.clone(), Arc::clone(provider)))

@@ -173,26 +173,22 @@ impl UdpProxy {
 
                             let target_addr = SocketAddr::new(decision.remote_ip, decision.remote_port);
 
-                            // UDP cannot be relayed through an upstream proxy;
-                            // instead of dropping and breaking online games / voice calls,
-                            // fall back to a direct connection to destination.
-                            let binding_direct = if decision
+                            // UDP cannot be relayed through an upstream proxy.
+                            // Dropping is the fail-closed behavior: a direct
+                            // fallback would bypass the proxy the user chose.
+                            if decision
                                 .binding
                                 .as_ref()
                                 .is_some_and(|binding| binding.upstream.is_some())
                             {
-                                debug!(
-                                    "udp_proxy: UDP cannot be relayed through upstream proxy, connecting directly to {}",
+                                warn!(
+                                    "udp_proxy: UDP cannot be relayed through upstream proxy, dropping datagram to {}",
                                     target_addr
                                 );
-                                decision.binding.as_ref().map(|b| {
-                                    let mut b = b.clone();
-                                    b.upstream = None;
-                                    b
-                                })
-                            } else {
-                                decision.binding.clone()
-                            };
+                                self.metrics.inc_errors();
+                                continue;
+                            }
+                            let binding_direct = decision.binding.clone();
 
                             let upstream = match connect_udp(target_addr, binding_direct.as_ref()).await {
                                 Ok(socket) => Arc::new(socket),

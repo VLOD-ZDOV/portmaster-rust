@@ -16,7 +16,7 @@ use crate::api_auth::{ApiAuthenticator, SystemLookup};
 use crate::cli::Options;
 
 /// Current Portmaster release version.
-pub const PORTMASTER_VERSION: &str = "2.2.17";
+pub const PORTMASTER_VERSION: &str = "2.2.31";
 /// GitHub repository for update checks.
 pub const CFG_GITHUB_RELEASE_REPO: &str = "core/updates/githubRepo";
 
@@ -499,14 +499,7 @@ impl Service {
 
         // Authenticate local clients by their process; the server address is
         // the bound one, so a port of 0 works.
-        let mut allowed_clients = options.allowed_clients.clone();
-        allowed_clients.push(options.data_dir.clone());
-        #[cfg(windows)]
-        {
-            if let Ok(program_data) = std::env::var("ProgramData") {
-                allowed_clients.push(PathBuf::from(program_data).join("Portmaster"));
-            }
-        }
+        let allowed_clients = options.allowed_clients.clone();
         api.set_authenticator(Arc::new(ApiAuthenticator::new(
             Arc::new(SystemLookup::new()),
             options.bin_dir.clone(),
@@ -740,7 +733,6 @@ impl Service {
         });
         crate::account_api::register_api(&api)
             .map_err(|error| anyhow::anyhow!("register account api: {error}"))?;
-        crate::account_api::register_spn_and_user_profile(&runtime, &databases);
 
         crate::core_api::register_api(
             Arc::clone(&api),
@@ -778,6 +770,155 @@ impl Service {
         xray.register_api(&api)
             .map_err(|error| anyhow::anyhow!("register xray api: {error}"))?;
         xray.start();
+        crate::account_api::register_spn_and_user_profile(&runtime, &databases, Arc::clone(&xray));
+
+        // Watch for external changes to `spn/enable` (e.g. from UI, CLI, or tray)
+        let xray_watcher = Arc::clone(&xray);
+        let config_watcher = Arc::clone(&config);
+        let control_watcher = Arc::clone(&control);
+        let mut rx = config.subscribe_changes();
+        let stop_watcher = service_stop_token.clone();
+        tokio::spawn(async move {
+            let mut last_state = xray_watcher.is_connected() && xray_watcher.is_enabled();
+            let mut recovery_failures = 0u32;
+            let mut stable_since: Option<std::time::Instant> = if xray_watcher.is_connected() {
+                Some(std::time::Instant::now())
+            } else {
+                None
+            };
+            let mut health = tokio::time::interval(Duration::from_secs(5));
+            while !stop_watcher.is_cancelled() {
+                tokio::select! {
+                    _ = stop_watcher.cancelled() => break,
+                    _ = health.tick() => {
+                        if stop_watcher.is_cancelled() { break; }
+                        if xray_watcher.is_connected() {
+                            if stable_since.is_none() {
+                                stable_since = Some(std::time::Instant::now());
+                            } else if stable_since
+                                .is_some_and(|since| since.elapsed() >= Duration::from_secs(30))
+                            {
+                                // A connection that stayed up is no longer part
+                                // of a crash/restart loop.
+                                recovery_failures = 0;
+                            }
+                        } else if config_watcher.get_as_bool("xray/enable", true)()
+                            && config_watcher.get_as_bool("spn/enable", false)()
+                        {
+                            stable_since = None;
+                            recovery_failures += 1;
+                            if recovery_failures > 3 {
+                                tracing::warn!("Xray keeps dying; disabling spn/enable");
+                                let _ = config_watcher.set_config_option(
+                                    "spn/enable",
+                                    serde_json::Value::Bool(false),
+                                );
+                                last_state = false;
+                                recovery_failures = 0;
+                            } else {
+                                tracing::warn!(recovery_failures, "xray process is not running while spn/enable is true; reconnecting");
+                                match xray_watcher.connect_last() {
+                                    Ok(status) if status.connected => {
+                                        stable_since = Some(std::time::Instant::now());
+                                        last_state = true;
+                                    }
+                                    Ok(status) => {
+                                        tracing::warn!(?status.state, "Xray recovery returned without a live process");
+                                        last_state = false;
+                                    }
+                                    Err(err) => {
+                                        tracing::warn!(%err, "failed to recover Xray");
+                                        last_state = false;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    event = rx.recv() => {
+                        if stop_watcher.is_cancelled() { break; }
+                        match event {
+                            Ok(()) => {}
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                                tracing::warn!(skipped, "xray watcher lagged behind config changes; re-reading state");
+                                // Fall through and apply the current config.
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        }
+
+                        let enabled = config_watcher.get_as_bool("xray/enable", true)();
+                        if !enabled {
+                            last_state = false;
+                            control_watcher.observe_spn_enabled(false);
+                            if xray_watcher.is_connected() {
+                                tracing::info!("xray/enable is false, disconnecting Xray");
+                                let _ = xray_watcher.disconnect();
+                            }
+                            // Keep the VPN switch consistent: a disabled module
+                            // must not leave spn/enable=true, or the firewall
+                            // would reroute traffic to a non-existent proxy.
+                            if config_watcher.get_as_bool("spn/enable", false)() {
+                                let _ = config_watcher.set_config_option(
+                                    "spn/enable",
+                                    serde_json::Value::Bool(false),
+                                );
+                            }
+                            continue;
+                        }
+
+                        let desired =
+                            config_watcher.get_as_bool("spn/enable", false)();
+                        control_watcher.observe_spn_enabled(desired);
+                        if desired != last_state {
+                            last_state = desired;
+                            if desired && !xray_watcher.is_connected() {
+                                tracing::info!("spn/enable is true, connecting Xray to last node");
+                                match xray_watcher.connect_last() {
+                                    Ok(status) if status.connected => recovery_failures = 0,
+                                    Ok(status) => {
+                                        tracing::warn!(?status.state, "Xray did not stay connected");
+                                        let _ = config_watcher.set_config_option(
+                                            "spn/enable",
+                                            serde_json::Value::Bool(false),
+                                        );
+                                    }
+                                    Err(err) => {
+                                        tracing::warn!(%err, "failed to connect Xray on spn/enable=true");
+                                        let _ = config_watcher.set_config_option("spn/enable", serde_json::Value::Bool(false));
+                                    }
+                                }
+                            } else if !desired && xray_watcher.is_connected() {
+                                tracing::info!("spn/enable is false, disconnecting Xray");
+                                let _ = xray_watcher.disconnect();
+                            }
+                        }
+
+                        // Reconnect if the live inbound settings changed while
+                        // Xray is already running; otherwise split-tunnel would
+                        // point at the old port/protocol.
+                        if desired && xray_watcher.is_connected() {
+                            let wanted = (
+                                xray_watcher.configured_inbound_port(),
+                                xray_watcher.configured_inbound(),
+                            );
+                            if xray_watcher.active_inbound() != Some(wanted) {
+                                tracing::info!(
+                                    port = wanted.0,
+                                    protocol = wanted.1.as_str(),
+                                    "xray inbound settings changed; reconnecting"
+                                );
+                                if let Err(err) = xray_watcher.connect_last() {
+                                    tracing::warn!(%err, "failed to reconnect Xray after inbound change");
+                                    let _ = config_watcher.set_config_option(
+                                        "spn/enable",
+                                        serde_json::Value::Bool(false),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
 
         // Readiness is published in `run()`, after interception startup has
         // been attempted, so `/api/v1/ready` is not true while part of the
@@ -857,7 +998,7 @@ impl Service {
         let listener = self
             .listener
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .take()
             .ok_or_else(|| anyhow::anyhow!("service is already running"))?;
 
@@ -880,7 +1021,7 @@ impl Service {
         let mut changes = self
             .profile_changes
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .take()
             .ok_or_else(|| anyhow::anyhow!("service is already running"))?;
         let refresher = tokio::spawn(async move {
@@ -1115,21 +1256,53 @@ impl Service {
                 let mut interval = tokio::time::interval_at(start, Duration::from_secs(60));
                 loop {
                     interval.tick().await;
-                    custom_lists.set_file_path(
-                        &config.get_as_string(
-                            pm_intel::customlists::CFG_OPTION_CUSTOM_LIST_FILE_KEY,
-                            "",
-                        )(),
-                    );
-                    match custom_lists.check_and_update_configured() {
-                        Ok(_) => {}
-                        Err(error) => {
-                            tracing::warn!(%error, "intel/customlists: reload failed");
+                    let lists = Arc::clone(&custom_lists);
+                    let config = Arc::clone(&config);
+                    let _ = tokio::task::spawn_blocking(move || {
+                        lists.set_file_path(
+                            &config.get_as_string(
+                                pm_intel::customlists::CFG_OPTION_CUSTOM_LIST_FILE_KEY,
+                                "",
+                            )(),
+                        );
+                        match lists.check_and_update_configured() {
+                            Ok(_) => {}
+                            Err(error) => {
+                                tracing::warn!(%error, "intel/customlists: reload failed");
+                            }
                         }
-                    }
+                    })
+                    .await;
                 }
             })
         };
+
+        // Expire notifications (including unanswered connection prompts) so
+        // the UI receives a `del` and does not keep a stale badge forever.
+        let notifications_cleaner = Arc::clone(&self.notifications);
+        let cleanup_stop = self.stop_token.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(10));
+            loop {
+                tokio::select! {
+                    _ = cleanup_stop.cancelled() => break,
+                    _ = interval.tick() => notifications_cleaner.clean_expired(),
+                }
+            }
+        });
+
+        // Expire API session cookies; otherwise the map grows until restart.
+        let sessions_cleaner = Arc::clone(&self.api);
+        let sessions_stop = self.stop_token.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+            loop {
+                tokio::select! {
+                    _ = sessions_stop.cancelled() => break,
+                    _ = interval.tick() => sessions_cleaner.sessions().clean(),
+                }
+            }
+        });
 
         // Broadcast notifications: check every 10 minutes, like Go
         // `module.mgr.Repeat("broadcast notifier", 10*time.Minute, ...)`.
@@ -1181,8 +1354,14 @@ impl Service {
                 tokio::select! {
                     _ = stop_token_dyn.cancelled() => break,
                     event = config_rx.recv() => {
-                        if event.is_err() {
-                            continue;
+                        if stop_token_dyn.is_cancelled() { break; }
+                        match event {
+                            Ok(()) => {}
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                                tracing::warn!(skipped, "splittun: config watcher lagged behind; re-reading state");
+                                // Fall through and apply the current config.
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                         }
                         let splittun_on = config_dyn.get_as_bool("splittun/enable", false)();
                         let spn_on = config_dyn.get_as_bool("spn/enable", false)();
@@ -1279,7 +1458,7 @@ impl Service {
         self.metrics.stop_and_join().await;
         self.os_integration
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .clean_up();
 
         // 5. Close databases: flush WAL journal, SQLite checkpoint, close DB descriptors
@@ -1317,7 +1496,7 @@ impl Service {
         self.metrics.stop_and_join().await;
         self.os_integration
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .clean_up();
         self.databases.shutdown()?;
         Ok(())
@@ -1337,7 +1516,7 @@ impl Service {
         self.metrics.stop();
         self.os_integration
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .clean_up();
         self.databases.shutdown()?;
         Ok(())

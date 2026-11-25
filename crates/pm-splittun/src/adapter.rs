@@ -93,20 +93,10 @@ impl SplitTunnelEnv for SplitTunnelEnvAdapter {
         let Some(process) = conn.process.as_ref() else {
             return false;
         };
-        if process.exec_name == "xray"
-            || process.exec_name == "xray-rust"
-            || process.name == "xray"
-            || process.name == "xray-rust"
-            || process.path.contains("xray")
-        {
-            return false;
-        }
-        if !self.profiles.use_split_tun(process) {
-            return false;
-        }
-        let proxy = self.profiles.split_tun_proxy(process);
-        let interface = self.profiles.split_tun_interface(process);
-        !proxy.trim().is_empty() || !interface.trim().is_empty()
+        // The core profile already excludes Xray; do not use substring matching.
+        // Empty interface/proxy are valid: RequestQueue auto-detects the best
+        // physical default interface when no explicit binding is configured.
+        self.profiles.use_split_tun(process)
     }
 
     fn split_tun_proxy(&self, conn: &Connection) -> String {

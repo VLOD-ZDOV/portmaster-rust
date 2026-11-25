@@ -411,7 +411,7 @@ pub fn get_table(ip_version: u8, protocol: u8) -> Result<TableData> {
         _ => return Err(TableError::InvalidProtocol),
     };
 
-    let provided = hint.lock().expect("lock poisoned").get();
+    let provided = hint.lock().unwrap_or_else(|error| error.into_inner()).get();
     let mut buf = vec![0u8; provided];
 
     for attempt in 1..=MAX_TRIES {
@@ -441,7 +441,7 @@ pub fn get_table(ip_version: u8, protocol: u8) -> Result<TableData> {
         match code {
             NO_ERROR => return parse_table(&buf, ip_version, protocol),
             WIN_ERR_INSUFFICIENT_BUFFER if attempt < MAX_TRIES => {
-                let new_size = hint.lock().expect("lock poisoned").increase(size as usize);
+                let new_size = hint.lock().unwrap_or_else(|error| error.into_inner()).increase(size as usize);
                 buf.resize(new_size.max(size as usize), 0);
             }
             WIN_ERR_INSUFFICIENT_BUFFER => {

@@ -331,7 +331,7 @@ impl Api {
     /// Registers an endpoint.
     pub fn register_endpoint(&self, endpoint: Endpoint) -> Result<()> {
         let endpoint = endpoint.check()?;
-        let mut endpoints = self.endpoints.write().expect("lock poisoned");
+        let mut endpoints = self.endpoints.write().unwrap_or_else(|error| error.into_inner());
         if endpoints.contains_key(&endpoint.path) {
             return Err(ApiError::AlreadyRegistered);
         }
@@ -343,7 +343,7 @@ impl Api {
     /// `api.RegisterHandler`. The handler is authorized with dynamic read
     /// permission and receives the resolved authentication token.
     pub fn register_handler(&self, path: &str, func: HandlerFunc) -> Result<()> {
-        let mut handlers = self.handlers.write().expect("lock poisoned");
+        let mut handlers = self.handlers.write().unwrap_or_else(|error| error.into_inner());
         if handlers.contains_key(path) {
             return Err(ApiError::AlreadyRegistered);
         }
@@ -355,7 +355,7 @@ impl Api {
     pub fn endpoint(&self, path: &str) -> Option<Arc<Endpoint>> {
         self.endpoints
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .get(path)
             .cloned()
     }
@@ -364,7 +364,7 @@ impl Api {
     pub fn export_endpoints(&self) -> Vec<Endpoint> {
         self.endpoints
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .values()
             .map(|endpoint| (**endpoint).clone())
             .collect()
@@ -372,7 +372,7 @@ impl Api {
 
     /// Sets the authenticator used for requests without API key.
     pub fn set_authenticator(&self, authenticator: Arc<dyn Authenticator>) {
-        *self.authenticator.write().expect("lock poisoned") = Some(authenticator);
+        *self.authenticator.write().unwrap_or_else(|error| error.into_inner()) = Some(authenticator);
     }
 
     /// Marks the core as ready (or not).
@@ -387,12 +387,12 @@ impl Api {
 
     /// Provides the UI archives served by the UI routes.
     pub fn set_ui_archives(&self, archives: Arc<ui::UiArchives>) {
-        *self.ui_archives.write().expect("lock poisoned") = Some(archives);
+        *self.ui_archives.write().unwrap_or_else(|error| error.into_inner()) = Some(archives);
     }
 
     /// Returns the UI archives, if one was set.
     pub fn ui_archives(&self) -> Option<Arc<ui::UiArchives>> {
-        self.ui_archives.read().expect("lock poisoned").clone()
+        self.ui_archives.read().unwrap_or_else(|error| error.into_inner()).clone()
     }
 
     /// Returns the session store.
@@ -402,17 +402,17 @@ impl Api {
 
     /// Provides the database system served by the WebSocket API.
     pub fn set_databases(&self, databases: Arc<pm_database::Databases>) {
-        *self.databases.write().expect("lock poisoned") = Some(databases);
+        *self.databases.write().unwrap_or_else(|error| error.into_inner()) = Some(databases);
     }
 
     /// Returns the database system, if one was set.
     pub fn databases(&self) -> Option<Arc<pm_database::Databases>> {
-        self.databases.read().expect("lock poisoned").clone()
+        self.databases.read().unwrap_or_else(|error| error.into_inner()).clone()
     }
 
     /// Replaces the API keys with the given configuration values.
     pub fn update_api_keys(&self, keys: &[String]) {
-        *self.api_keys.write().expect("lock poisoned") = parse_api_keys(keys);
+        *self.api_keys.write().unwrap_or_else(|error| error.into_inner()) = parse_api_keys(keys);
     }
 
     /// Handles a request and returns the response.
@@ -433,7 +433,7 @@ impl Api {
         let raw_handler = self
             .handlers
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .get(&request.path)
             .cloned();
         if let Some(handler) = raw_handler {
@@ -508,7 +508,7 @@ impl Api {
     fn match_endpoint(&self, path: &str) -> Option<(Arc<Endpoint>, BTreeMap<String, String>)> {
         let rest = path.strip_prefix(API_V1_PATH)?;
         let segments: Vec<&str> = rest.split('/').collect();
-        let endpoints = self.endpoints.read().expect("lock poisoned");
+        let endpoints = self.endpoints.read().unwrap_or_else(|error| error.into_inner());
         for endpoint in endpoints.values() {
             if let Some(params) = endpoint.matches(&segments) {
                 return Some((Arc::clone(endpoint), params.into_iter().collect()));
@@ -558,7 +558,7 @@ impl Api {
         };
 
         if token.is_none() {
-            let authenticator = self.authenticator.read().expect("lock poisoned").clone();
+            let authenticator = self.authenticator.read().unwrap_or_else(|error| error.into_inner()).clone();
             if let Some(authenticator) = authenticator {
                 match authenticator.authenticate(request) {
                     Ok(found) => {
@@ -654,7 +654,7 @@ impl Api {
 
     fn check_api_key(&self, request: &Request) -> Option<AuthToken> {
         let key = bearer_token(&request.header)?;
-        let guard = self.api_keys.read().expect("lock poisoned");
+        let guard = self.api_keys.read().unwrap_or_else(|error| error.into_inner());
         // Direct lookup like Go's `checkAPIKey`. Keys are high-entropy random
         // tokens; a hash lookup does not leak usable key material, while the
         // previous O(N) scan with a length gate leaked the key length and was
@@ -837,10 +837,14 @@ pub fn is_trusted_host(host: &str) -> bool {
 /// Checks whether a cross-origin request may access the API.
 ///
 /// Prevents DNS rebinding and cross-site attacks by validating that the origin
-/// and host are strictly trusted local/loopback interfaces or trusted extensions.
+/// and host are trusted local/loopback interfaces. Chrome extensions are
+/// accepted for Go compatibility without an ID check; Firefox extensions are
+/// rejected and Tauri must use the `localhost` origin.
 pub fn origin_allowed(origin: &str, host: &str, dev_mode: bool) -> bool {
+    // Opaque origins (`file://`, sandboxed frames) must not control the local
+    // API: they cannot prove which local application opened them.
     if origin == "null" {
-        return is_trusted_host(host);
+        return false;
     }
 
     let parsed = origin.split_once("://");
@@ -848,8 +852,17 @@ pub fn origin_allowed(origin: &str, host: &str, dev_mode: bool) -> bool {
         return false;
     };
 
-    if scheme == "chrome-extension" || scheme == "moz-extension" || scheme == "tauri" {
+    // Chrome extensions are part of the Go-compatible surface. Firefox
+    // extensions and arbitrary Tauri origins are not trusted; native Tauri
+    // requests must use the known local origin or process auth.
+    if scheme == "chrome-extension" {
         return true;
+    }
+    if scheme == "moz-extension" {
+        return false;
+    }
+    if scheme == "tauri" {
+        return rest.trim_end_matches('/') == "localhost";
     }
 
     let origin_host = rest.trim_end_matches('/');
@@ -872,9 +885,14 @@ pub fn origin_allowed(origin: &str, host: &str, dev_mode: bool) -> bool {
     let origin_trusted = is_trusted_host(origin_hostname);
     let host_trusted = is_trusted_host(host);
 
-    // Both Origin and Host must be trusted loopback/localhost domains or IPs
+    // Both Origin and Host must be trusted loopback/localhost domains or IPs.
+    // Outside dev mode require the exact same authority (host:port), so an
+    // unrelated local web server cannot act as the trusted UI origin.
     if origin_trusted && host_trusted {
-        return true;
+        if dev_mode {
+            return true;
+        }
+        return origin_host.eq_ignore_ascii_case(host.trim_end_matches('/'));
     }
 
     // In dev mode, allow if origin is trusted loopback even if Host is generic

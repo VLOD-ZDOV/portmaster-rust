@@ -435,9 +435,9 @@ impl Updater {
             let trust_store = match &config.verify {
                 Some(ts) => Some(ts.clone()),
                 None => {
-                    if config.name == "portmaster" {
+                    if config.name == crate::configure::DEFAULT_BINARY_INDEX_NAME {
                         Some(pm_jess::binary_trust_store())
-                    } else if config.name == "intel" {
+                    } else if config.name == crate::configure::DEFAULT_INTEL_INDEX_NAME {
                         Some(pm_jess::intel_trust_store())
                     } else {
                         None

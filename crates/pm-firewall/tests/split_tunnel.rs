@@ -191,7 +191,7 @@ fn matching_errors_fail_and_denials_keep_the_verdict() {
 }
 
 #[test]
-fn udp_with_proxy_bypasses_proxy_to_preserve_gaming_and_voice() {
+fn udp_with_proxy_is_blocked_instead_of_bypassing_it() {
     let mut conn = connection();
     conn.ip_protocol = protocol::UDP;
     let env = FakeEnv {
@@ -201,7 +201,26 @@ fn udp_with_proxy_bypasses_proxy_to_preserve_gaming_and_voice() {
 
     check_split_tunneling(&mut conn, &env);
 
-    assert_eq!(conn.verdict, Verdict::Accept);
+    assert_eq!(conn.verdict, Verdict::Block);
+    assert_eq!(
+        conn.reason.msg,
+        "UDP cannot be relayed through the Split Tunnel proxy"
+    );
+}
+
+#[test]
+fn empty_interface_and_proxy_auto_detect_the_physical_interface() {
+    let mut conn = connection();
+    let env = FakeEnv {
+        proxy: String::new(),
+        interface: String::new(),
+        ..FakeEnv::default()
+    };
+
+    check_split_tunneling(&mut conn, &env);
+
+    assert_eq!(conn.verdict, Verdict::RerouteToSplitTun);
+    assert!(conn.save_when_finished);
 }
 
 #[test]

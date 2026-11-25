@@ -105,24 +105,24 @@ impl Compat {
     pub fn self_check_is_failing(&self) -> bool {
         self.state
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .selfcheck_failing
     }
 
     /// Refreshes options read from the config at runtime.
     pub fn refresh_options(&self, dns_query_interception: bool, resolver_disabled: bool) {
-        let mut state = self.state.lock().expect("lock poisoned");
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         state.dns_query_interception = dns_query_interception;
         state.resolver_disabled = resolver_disabled;
     }
 
     /// Go `SetNameserverListenIP`, used in the manual-DNS notification.
     pub fn set_nameserver_listen_ip(&self, ip: String) {
-        self.state.lock().expect("lock poisoned").nameserver_listen_ip = ip;
+        self.state.lock().unwrap_or_else(|error| error.into_inner()).nameserver_listen_ip = ip;
     }
 
     fn config(&self) -> SelfcheckConfig {
-        let state = self.state.lock().expect("lock poisoned");
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         SelfcheckConfig {
             dns_query_interception: state.dns_query_interception,
             resolver_disabled: state.resolver_disabled,
@@ -167,7 +167,7 @@ impl Compat {
                         .issue
                         .expect("issue-kind self-check error always has an issue");
                     let fails = {
-                        let mut state = self.state.lock().expect("lock poisoned");
+                        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
                         state.selfcheck_failing = true;
                         state.selfcheck_fails += 1;
                         state.selfcheck_fails
@@ -192,7 +192,7 @@ impl Compat {
     fn reset_selfcheck_state(&self) {
         self.deps.net_changed.refresh();
         {
-            let mut state = self.state.lock().expect("lock poisoned");
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
             state.selfcheck_failing = false;
             state.selfcheck_fails = 0;
         }
@@ -203,7 +203,7 @@ impl Compat {
     /// Go `systemIssue.notify`: deduplicates by event ID and replaces an older
     /// system notification.
     fn notify_system_issue(&self, issue: SystemIssueKind) {
-        let mut state = self.state.lock().expect("lock poisoned");
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if let Some(active) = &state.system_notification_id {
             if active == issue.id() {
                 return;
@@ -217,7 +217,7 @@ impl Compat {
     }
 
     fn reset_system_issue(&self) {
-        let mut state = self.state.lock().expect("lock poisoned");
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if let Some(active) = state.system_notification_id.take() {
             self.deps.notifications.delete(&active);
         }
@@ -225,7 +225,7 @@ impl Compat {
 
     /// Go `cleanNotifyThreshold`.
     pub fn clean_notify_thresholds(&self) {
-        let mut state = self.state.lock().expect("lock poisoned");
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         clean_notify_thresholds(&mut state.notify_thresholds, Instant::now());
     }
 
@@ -253,7 +253,7 @@ impl Compat {
             return;
         }
         {
-            let mut state = self.state.lock().expect("lock poisoned");
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
             if !is_over_threshold(&mut state.notify_thresholds, &event_id, Instant::now()) {
                 return;
             }

@@ -334,11 +334,11 @@ impl RealProbe {
     /// Go `compat.SubmitDNSCheckDomain`; returns the configured answer.
     pub fn submit_dns_check_domain(&self, subdomain: &str) -> Option<[u8; 4]> {
         let _ = self.domain_tx.send(subdomain.to_string());
-        *self.dns_answer.lock().expect("lock poisoned")
+        *self.dns_answer.lock().unwrap_or_else(|error| error.into_inner())
     }
 
     fn drain<T>(rx: &Mutex<mpsc::Receiver<T>>) {
-        let rx = rx.lock().expect("lock poisoned");
+        let rx = rx.lock().unwrap_or_else(|error| error.into_inner());
         while rx.try_recv().is_ok() {}
     }
 }
@@ -384,7 +384,7 @@ impl Probe for RealProbe {
     fn wait_system_integration_packet(&self, timeout: Duration) -> bool {
         self.packet_rx
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .recv_timeout(timeout)
             .is_ok()
     }
@@ -402,7 +402,7 @@ impl Probe for RealProbe {
     }
 
     fn set_dns_answer(&self, ip: [u8; 4]) {
-        *self.dns_answer.lock().expect("lock poisoned") = Some(ip);
+        *self.dns_answer.lock().unwrap_or_else(|error| error.into_inner()) = Some(ip);
     }
 
     fn start_dns_lookup(&self, domain: String) {
@@ -425,7 +425,7 @@ impl Probe for RealProbe {
     fn wait_dns_query(&self, timeout: Duration) -> Option<String> {
         self.domain_rx
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .recv_timeout(timeout)
             .ok()
     }
@@ -433,7 +433,7 @@ impl Probe for RealProbe {
     fn wait_dns_result(&self, timeout: Duration) -> Option<DnsResult> {
         self.dns_result_rx
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .recv_timeout(timeout)
             .ok()
     }

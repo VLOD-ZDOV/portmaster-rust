@@ -73,15 +73,6 @@ pub struct AppStats {
     pub bytes_received: u64,
 }
 
-impl AppStats {
-    pub fn blocked_percent(&self) -> f64 {
-        if self.connections_count == 0 {
-            0.0
-        } else {
-            (self.blocked_count as f64 / self.connections_count as f64) * 100.0
-        }
-    }
-}
 
 /// An application profile defining network security & routing settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -157,90 +148,49 @@ impl AppProfile {
         }
     }
 
-    /// Returns true if this profile is configured to route via VPN/proxy.
-    pub fn route_via_vpn(&self) -> bool {
-        let Some(cfg) = &self.config else {
-            return false;
-        };
-
-        // 1. Check boolean flags "splittun/use" or "spn/use"
-        if let Some(val) = cfg.get("splittun/use").or_else(|| cfg.get("spn/use")) {
-            if let Some(b) = val.as_bool() {
-                return b;
+    /// Returns the per-profile VPN override, or `None` when the global
+    /// `spn/use` default applies.
+    pub fn vpn_route_override(&self) -> Option<bool> {
+        let cfg = self.config.as_ref()?;
+        if let Some(value) = cfg.get("spn/use") {
+            if let Some(enabled) = value.as_bool() {
+                return Some(enabled);
             }
         }
-
-        // 2. Check flat key "splittun/usagePolicy"
-        if let Some(val) = cfg.get("splittun/usagePolicy") {
-            if let Some(s) = val.as_str() {
-                if s == "vpn" || s == "proxy" || s == "force-vpn" {
-                    return true;
-                }
-                if s == "direct" {
-                    return false;
-                }
-            }
-        }
-
-        // 3. Check nested structure: splittun -> use or usagePolicy
-        if let Some(splittun) = cfg.get("splittun") {
-            if let Some(val) = splittun.get("use") {
-                if let Some(b) = val.as_bool() {
-                    return b;
-                }
-            }
-            if let Some(val) = splittun.get("usagePolicy") {
-                if let Some(s) = val.as_str() {
-                    if s == "vpn" || s == "proxy" || s == "force-vpn" {
-                        return true;
-                    }
-                    if s == "direct" {
-                        return false;
-                    }
-                }
-            }
-        }
-
-        // 4. Check nested structure: spn -> use
         if let Some(spn) = cfg.get("spn") {
-            if let Some(val) = spn.get("use") {
-                if let Some(b) = val.as_bool() {
-                    return b;
+            if let Some(value) = spn.get("use") {
+                if let Some(enabled) = value.as_bool() {
+                    return Some(enabled);
                 }
             }
         }
+        None
+    }
 
-        // 5. Check if proxy_url is configured
-        if let Some(proxy_url) = cfg.get("proxy_url").or_else(|| cfg.get("proxy/url")) {
-            if let Some(s) = proxy_url.as_str() {
-                if !s.trim().is_empty() {
-                    return true;
-                }
-            }
-        }
+    /// Returns true if this profile is configured to route via VPN (Xray),
+    /// ignoring the global default.
+    pub fn route_via_vpn(&self) -> bool {
+        self.vpn_route_override().unwrap_or(false)
+    }
 
-        false
+    /// Returns the effective VPN state with the global `spn/use` default.
+    pub fn route_via_vpn_with_default(&self, global_default: bool) -> bool {
+        self.vpn_route_override().unwrap_or(global_default)
     }
 
     /// Updates this profile's configuration to enable or disable VPN routing.
     pub fn set_route_via_vpn(&mut self, route_vpn: bool) {
-        let value_str = if route_vpn { "vpn" } else { "direct" };
         let mut map = match self.config.take() {
             Some(Value::Object(m)) => m,
             _ => Map::new(),
         };
 
-        map.insert(
-            "splittun/use".to_string(),
-            Value::Bool(route_vpn),
-        );
+        // VPN routing is controlled by `spn/use`. Split Tunnel
+        // (`splittun/use`, `splittun/usagePolicy`) is a separate feature and
+        // must be preserved when toggling VPN.
         map.insert(
             "spn/use".to_string(),
             Value::Bool(route_vpn),
-        );
-        map.insert(
-            "splittun/usagePolicy".to_string(),
-            Value::String(value_str.to_string()),
         );
         self.config = Some(Value::Object(map));
     }

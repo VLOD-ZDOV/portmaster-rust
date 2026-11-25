@@ -360,21 +360,37 @@ fn cors_and_preflight() {
     assert_eq!(response.status, 403);
     assert_eq!(response.body_string(), "Cross-Origin Request Denied.\n");
 
-    // Browser extensions are allowed.
+    // Browser extensions are allowed. Only the Go-compatible Chrome origin is
+    // trusted; Firefox extensions and foreign Tauri origins are not.
     let response = api.handle(
         Request::new("GET", "/api/v1/endpoints")
             .with_host("host")
             .with_header("origin", "chrome-extension://abcdef"),
     );
     assert_eq!(response.status, 200);
+    for origin in ["moz-extension://abcdef", "tauri://evil"] {
+        let response = api.handle(
+            Request::new("GET", "/api/v1/endpoints")
+                .with_host("host")
+                .with_header("origin", origin),
+        );
+        assert_eq!(response.status, 403, "origin {origin}");
+    }
+    let response = api.handle(
+        Request::new("GET", "/api/v1/endpoints")
+            .with_host("host")
+            .with_header("origin", "tauri://localhost"),
+    );
+    assert_eq!(response.status, 200);
 
-    // Null origin from local webviews/iframes with trusted loopback host is allowed.
+    // Opaque origins must not control the local API: file:// pages and
+    // sandboxed frames cannot prove which local application opened them.
     let response = api.handle(
         Request::new("GET", "/api/v1/endpoints")
             .with_host("127.0.0.1:817")
             .with_header("origin", "null"),
     );
-    assert_eq!(response.status, 200);
+    assert_eq!(response.status, 403);
 
     // Raw /ping handler responds with Pong.
     let response = api.handle(

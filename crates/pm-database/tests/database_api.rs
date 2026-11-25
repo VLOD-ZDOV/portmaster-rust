@@ -340,16 +340,16 @@ impl Recorder {
     fn record(&self, call: &str) {
         self.calls
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .push(call.to_string());
     }
 
     fn calls(&self) -> Vec<String> {
-        self.calls.lock().expect("lock poisoned").clone()
+        self.calls.lock().unwrap_or_else(|error| error.into_inner()).clone()
     }
 
     fn clear(&self) {
-        self.calls.lock().expect("lock poisoned").clear();
+        self.calls.lock().unwrap_or_else(|error| error.into_inner()).clear();
     }
 }
 

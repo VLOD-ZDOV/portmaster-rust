@@ -1,8 +1,8 @@
 //! Remaining core API endpoints from Go `service/core/api.go`.
 //!
-//! `app/profile` needs the process identity of the calling API client, which
-//! `pm-api` does not carry in its auth token yet; the endpoint is registered
-//! and reports that limitation instead of returning a wrong profile.
+//! `app/profile` uses the process identity carried by `AuthToken`; if the
+//! request was granted through the loopback-UI shortcut and has no process
+//! identity, the endpoint reports that limitation instead of a wrong profile.
 //!
 //! `app/auth` follows the Go flow: validate the requested permissions, show a
 //! prompt, generate a random API key on "Authorize" and append it to
@@ -421,8 +421,18 @@ pub fn register_profile_icon_api(api: &Api, data_dir: &std::path::Path) -> Resul
                     _ => "png",
                 };
                 let filename = format!("{hash}.{ext}");
-                let _ = std::fs::create_dir_all(&icons_dir_upload);
-                let _ = std::fs::write(icons_dir_upload.join(&filename), &request.body);
+                if let Err(error) = std::fs::create_dir_all(&icons_dir_upload) {
+                    return pm_api::Response::error(
+                        500,
+                        &format!("failed to create icon directory: {error}"),
+                    );
+                }
+                if let Err(error) = std::fs::write(icons_dir_upload.join(&filename), &request.body) {
+                    return pm_api::Response::error(
+                        500,
+                        &format!("failed to store icon: {error}"),
+                    );
+                }
                 pm_api::Response::body(
                     200,
                     serde_json::to_vec(&serde_json::json!({ "filename": filename })).unwrap(),

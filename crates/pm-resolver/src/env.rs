@@ -243,12 +243,12 @@ impl Default for StaticEnvironment {
 impl StaticEnvironment {
     /// Changes the state.
     pub fn update<R>(&self, change: impl FnOnce(&mut StaticEnvironmentState) -> R) -> R {
-        change(&mut self.state.lock().expect("lock poisoned"))
+        change(&mut self.state.lock().unwrap_or_else(|error| error.into_inner()))
     }
 
     /// Reads the state.
     pub fn read<R>(&self, read: impl FnOnce(&StaticEnvironmentState) -> R) -> R {
-        read(&self.state.lock().expect("lock poisoned"))
+        read(&self.state.lock().unwrap_or_else(|error| error.into_inner()))
     }
 }
 

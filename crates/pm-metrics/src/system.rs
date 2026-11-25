@@ -118,7 +118,7 @@ impl HostStats {
     }
 
     fn load(&self) -> LoadStats {
-        self.load.lock().expect("lock poisoned").get(|| {
+        self.load.lock().unwrap_or_else(|error| error.into_inner()).get(|| {
             let cpus = std::thread::available_parallelism().map_or(1, |n| n.get()) as f64;
             let Ok(contents) = std::fs::read_to_string("/proc/loadavg") else {
                 return LoadStats::default();
@@ -140,7 +140,7 @@ impl HostStats {
     }
 
     fn mem(&self) -> MemStats {
-        self.mem.lock().expect("lock poisoned").get(|| {
+        self.mem.lock().unwrap_or_else(|error| error.into_inner()).get(|| {
             let Ok(contents) = std::fs::read_to_string("/proc/meminfo") else {
                 return MemStats::default();
             };
@@ -174,7 +174,7 @@ impl HostStats {
     fn disk(&self) -> DiskStats {
         self.disk
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .get(|| disk_stats().unwrap_or_default())
     }
 }

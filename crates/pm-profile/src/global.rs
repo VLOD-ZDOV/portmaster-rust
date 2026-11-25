@@ -186,13 +186,13 @@ impl GlobalProfileConfig {
 
     /// Sets the filter list ID resolver; without one, IDs are used as is.
     pub fn set_list_resolver(&self, resolver: ListResolver) {
-        *self.resolver.write().expect("lock poisoned") = Some(resolver);
+        *self.resolver.write().unwrap_or_else(|error| error.into_inner()) = Some(resolver);
     }
 
     /// Resolves filter list IDs with the list resolver; without one, the IDs
     /// are returned as is.
     pub fn resolve_list_ids(&self, ids: &[String]) -> Result<Vec<String>, String> {
-        match self.resolver.read().expect("lock poisoned").as_ref() {
+        match self.resolver.read().unwrap_or_else(|error| error.into_inner()).as_ref() {
             Some(resolve) => resolve(ids),
             None => Ok(ids.to_vec()),
         }
@@ -248,12 +248,12 @@ impl GlobalProfileConfig {
         parsed.spn_exit_hub_policy = parse(&self.exit_hub_policy_list);
         parsed.filter_lists = resolved;
 
-        *self.parsed.write().expect("lock poisoned") = parsed;
+        *self.parsed.write().unwrap_or_else(|error| error.into_inner()) = parsed;
         last_err.map_or(Ok(()), Err)
     }
 
     fn read<T>(&self, f: impl FnOnce(&Parsed) -> T) -> T {
-        f(&self.parsed.read().expect("lock poisoned"))
+        f(&self.parsed.read().unwrap_or_else(|error| error.into_inner()))
     }
 
     /// Returns the default action (`DEFAULT_ACTION_*`).

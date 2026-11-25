@@ -101,14 +101,14 @@ impl InteropIvpn {
     pub fn status_snapshot(&self) -> ClientStatus {
         self.status
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .clone()
             .unwrap_or_default()
     }
 
     /// Overwrites the status, like Go `setStatus`.
     fn set_status(&self, status: ClientStatus) {
-        *self.status.write().expect("lock poisoned") = Some(status);
+        *self.status.write().unwrap_or_else(|error| error.into_inner()) = Some(status);
     }
 
     /// Starts the engine and waits for the first connection attempt, like Go
@@ -125,11 +125,11 @@ impl InteropIvpn {
     }
 
     fn spawn_worker(self: &Arc<Self>) {
-        if let Some(old) = self.active_worker.lock().expect("lock poisoned").take() {
+        if let Some(old) = self.active_worker.lock().unwrap_or_else(|error| error.into_inner()).take() {
             old.cancel();
         }
         let cancel = CancellationToken::new();
-        *self.active_worker.lock().expect("lock poisoned") = Some(cancel.clone());
+        *self.active_worker.lock().unwrap_or_else(|error| error.into_inner()) = Some(cancel.clone());
         let this = Arc::clone(self);
         tokio::spawn(async move {
             this.connect_worker(cancel).await;
@@ -138,7 +138,7 @@ impl InteropIvpn {
 
     /// Computes a firewall verdict, like Go `VerdictHandler`.
     pub fn verdict_handler(&self, conn: &Connection) -> VerdictDecision {
-        let status = self.status.read().expect("lock poisoned");
+        let status = self.status.read().unwrap_or_else(|error| error.into_inner());
         decide(status.as_ref(), &ConnView::from(conn))
     }
 
@@ -149,7 +149,7 @@ impl InteropIvpn {
         // status, reset DNS tracking, mark the first attempt done and reconcile
         // compatibility rules.
         self.env.set_network_derived_location_disabled(false);
-        *self.status.write().expect("lock poisoned") = None;
+        *self.status.write().unwrap_or_else(|error| error.into_inner()) = None;
         self.is_custom_dns_active.store(false, Ordering::SeqCst);
         self.first_try_done.notify_one();
         self.reconcile_compatibility_state();
@@ -162,7 +162,7 @@ impl InteropIvpn {
     async fn connect_inner(self: &Arc<Self>, cancel: &CancellationToken) -> Result<(), String> {
         // Delete a previously shown old-version warning at the start of every
         // attempt, like the Go code does with `notifWarnOldVersion`.
-        if let Some(old) = self.notif_warn_old_version.lock().expect("lock poisoned").take() {
+        if let Some(old) = self.notif_warn_old_version.lock().unwrap_or_else(|error| error.into_inner()).take() {
             self.env.notifications().delete_handle(&old, true);
         }
 
@@ -227,7 +227,7 @@ impl InteropIvpn {
                 .env
                 .notifications()
                 .notify(build_old_version_notification(now_unix() + OLD_VERSION_EXPIRY_SECS));
-            *self.notif_warn_old_version.lock().expect("lock poisoned") = notification;
+            *self.notif_warn_old_version.lock().unwrap_or_else(|error| error.into_inner()) = notification;
             return Ok(());
         }
 
@@ -378,7 +378,7 @@ impl InteropIvpn {
         let wireguard_local_ip = self
             .status
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .as_ref()
             .and_then(|status| status.connected_info.as_ref())
             .filter(|info| info.vpn_type == VPN_TYPE_WIREGUARD)
@@ -501,7 +501,7 @@ mod tests {
         }
 
         fn dns_calls(&self) -> Vec<RecordedDns> {
-            self.dns_calls.lock().expect("lock poisoned").clone()
+            self.dns_calls.lock().unwrap_or_else(|error| error.into_inner()).clone()
         }
     }
 
@@ -532,7 +532,7 @@ mod tests {
             dns: DnsSettings,
             description: &str,
         ) -> Result<(), String> {
-            self.dns_calls.lock().expect("lock poisoned").push(RecordedDns {
+            self.dns_calls.lock().unwrap_or_else(|error| error.into_inner()).push(RecordedDns {
                 description: description.to_string(),
                 settings: dns,
             });
@@ -706,7 +706,7 @@ mod tests {
         }
 
         fn run(&self, program: &str, args: &[&str]) -> Result<CommandOutput, String> {
-            self.commands.lock().expect("lock poisoned").push(
+            self.commands.lock().unwrap_or_else(|error| error.into_inner()).push(
                 std::iter::once(program.to_string())
                     .chain(args.iter().map(|argument| (*argument).to_string()))
                     .collect(),
@@ -747,7 +747,7 @@ mod tests {
         .await
         .expect("connected info updated");
 
-        let commands = runner.commands.lock().expect("lock poisoned").clone();
+        let commands = runner.commands.lock().unwrap_or_else(|error| error.into_inner()).clone();
         assert!(commands.iter().any(|command| {
             command.first().map(String::as_str) == Some("nft")
                 && command.iter().any(|part| part == "10.50.0.2")

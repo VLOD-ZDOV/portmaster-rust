@@ -288,7 +288,7 @@ impl NetEnv {
 
     /// Replaces the notification sink, e.g. once the core is initialized.
     pub fn set_notification_sink(&self, sink: Arc<dyn NotificationSink>) {
-        *self.notification_sink.write().expect("lock poisoned") = sink;
+        *self.notification_sink.write().unwrap_or_else(|error| error.into_inner()) = sink;
     }
 
     /// Returns the current online status.
@@ -313,7 +313,7 @@ impl NetEnv {
 
     /// Returns the current captive portal, if any.
     pub fn captive_portal(&self) -> Option<CaptivePortal> {
-        self.captive_portal.read().expect("lock poisoned").clone()
+        self.captive_portal.read().unwrap_or_else(|error| error.into_inner()).clone()
     }
 
     /// Returns the event manager for online status changes.
@@ -342,7 +342,7 @@ impl NetEnv {
             }
             (_, next) => next,
         };
-        *self.captive_portal.write().expect("lock poisoned") = portal.clone();
+        *self.captive_portal.write().unwrap_or_else(|error| error.into_inner()) = portal.clone();
 
         let previous = self.online_status.swap(status as u8, Ordering::SeqCst);
         let changed = previous != status as u8;
@@ -359,7 +359,7 @@ impl NetEnv {
             self.online_status_events.submit(status);
         }
 
-        let mut status_id = self.status_notification_id.write().expect("lock poisoned");
+        let mut status_id = self.status_notification_id.write().unwrap_or_else(|error| error.into_inner());
         let change = notification_change(status, portal.as_ref(), had_portal, status_id.as_deref());
         let new_id = change
             .notify
@@ -372,7 +372,7 @@ impl NetEnv {
         drop(status_id);
         self.notification_sink
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .handle(change);
         changed
     }

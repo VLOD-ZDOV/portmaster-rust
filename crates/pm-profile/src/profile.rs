@@ -50,6 +50,29 @@ impl Clone for OutdatedFlag {
     }
 }
 
+/// Removes legacy values that older builds wrote with the wrong type.
+///
+/// `splittun/usagePolicy` and `spn/usagePolicy` are string arrays; old builds
+/// wrote `"vpn"`/`"direct"` strings. `Perspective` rejects the whole profile on
+/// a type mismatch, so drop only these values during load/save.
+pub(crate) fn sanitize_legacy_config(mut config: Map<String, Value>) -> Map<String, Value> {
+    for (section, key) in [("splittun", "usagePolicy"), ("spn", "usagePolicy")] {
+        if let Some(section_object) = config.get_mut(section).and_then(Value::as_object_mut) {
+            if section_object
+                .get(key)
+                .is_some_and(|value| !value.is_array())
+            {
+                section_object.remove(key);
+            }
+        }
+        let flat = format!("{section}/{key}");
+        if config.get(&flat).is_some_and(|value| !value.is_array()) {
+            config.remove(&flat);
+        }
+    }
+    config
+}
+
 /// A profile that predefines the security settings for applications.
 ///
 /// Field names and order match the Go struct.

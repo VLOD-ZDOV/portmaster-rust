@@ -120,7 +120,7 @@ impl ProcessCache {
 
     /// Registers a tag handler.
     pub fn register_tag_handler(&self, handler: Arc<dyn TagHandler>) -> Result<()> {
-        let mut tags = self.tags.write().expect("lock poisoned");
+        let mut tags = self.tags.write().unwrap_or_else(|error| error.into_inner());
         if tags
             .iter()
             .any(|existing| existing.name() == handler.name())
@@ -135,7 +135,7 @@ impl ProcessCache {
     pub fn tag_descriptions(&self) -> Vec<TagDescription> {
         self.tags
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .iter()
             .flat_map(|handler| handler.tag_descriptions())
             .collect()
@@ -143,14 +143,14 @@ impl ProcessCache {
 
     /// Sets the database controller that receives process updates.
     pub fn set_db_controller(&self, controller: Arc<Controller>) {
-        *self.db.write().expect("lock poisoned") = Some(controller);
+        *self.db.write().unwrap_or_else(|error| error.into_inner()) = Some(controller);
     }
 
     /// Returns the process from the internal storage.
     pub fn get_from_storage(&self, key: &str) -> Option<Arc<Process>> {
         self.processes
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .get(key)
             .cloned()
     }
@@ -159,7 +159,7 @@ impl ProcessCache {
     pub fn all(&self) -> HashMap<i32, Arc<Process>> {
         self.processes
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .values()
             .map(|process| (process.pid, Arc::clone(process)))
             .collect()
@@ -181,7 +181,7 @@ impl ProcessCache {
         }
 
         // Loads are serialized, like Go's single-flight group per process key.
-        let _guard = self.load_lock.lock().expect("lock poisoned");
+        let _guard = self.load_lock.lock().unwrap_or_else(|error| error.into_inner());
         if let Some(process) = self.get_from_storage(&key) {
             return Ok(process);
         }
@@ -217,7 +217,7 @@ impl ProcessCache {
             return process;
         }
 
-        let _guard = self.load_lock.lock().expect("lock poisoned");
+        let _guard = self.load_lock.lock().unwrap_or_else(|error| error.into_inner());
         if let Some(process) = self.get_from_storage(&key) {
             return process;
         }
@@ -271,7 +271,7 @@ impl ProcessCache {
     }
 
     fn add_tags(&self, process: &mut Process) {
-        for handler in self.tags.read().expect("lock poisoned").iter() {
+        for handler in self.tags.read().unwrap_or_else(|error| error.into_inner()).iter() {
             handler.add_tags(process);
         }
     }
@@ -280,7 +280,7 @@ impl ProcessCache {
     pub fn save(&self, process: &Arc<Process>) {
         self.processes
             .write()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .insert(process.key().to_string(), Arc::clone(process));
         self.push_update(process, false);
     }
@@ -289,14 +289,14 @@ impl ProcessCache {
     pub fn delete(&self, process: &Arc<Process>) {
         self.processes
             .write()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .remove(process.key());
         self.push_update(process, true);
     }
 
     /// Updates the last seen timestamp of a process.
     pub fn set_last_seen(&self, key: &str, last_seen: i64) -> Option<Arc<Process>> {
-        let mut processes = self.processes.write().expect("lock poisoned");
+        let mut processes = self.processes.write().unwrap_or_else(|error| error.into_inner());
         let process = processes.get(key)?;
         let mut updated = (**process).clone();
         updated.last_seen = last_seen;
@@ -336,7 +336,7 @@ impl ProcessCache {
     pub fn set_primary_profile(&self, pid: i32, scoped_id: &str) -> usize {
         let mut updated_processes = Vec::new();
         {
-            let mut processes = self.processes.write().expect("lock poisoned");
+            let mut processes = self.processes.write().unwrap_or_else(|error| error.into_inner());
             for process in processes.values_mut() {
                 if process.pid != pid || process.primary_profile_id == scoped_id {
                     continue;
@@ -418,7 +418,7 @@ impl ProcessCache {
     }
 
     fn push_update(&self, process: &Arc<Process>, deleted: bool) {
-        let controller = self.db.read().expect("lock poisoned").clone();
+        let controller = self.db.read().unwrap_or_else(|error| error.into_inner()).clone();
         let Some(controller) = controller else {
             return;
         };

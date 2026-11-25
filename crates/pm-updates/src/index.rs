@@ -13,8 +13,8 @@ pub const MAX_UNPACK_SIZE: u64 = 1 << 30;
 
 /// Verification callback for index files.
 ///
-/// Go verifies signatures with `jess`; the caller supplies the verification
-/// until the signature layer is ported.
+/// Go verifies signatures with `jess`; the caller supplies the verification.
+/// Portmaster's updater always supplies a trust store in production.
 pub type IndexVerifier<'a> = &'a dyn Fn(&[u8]) -> std::result::Result<(), String>;
 
 /// Returns the platform string used by the Go updater (`GOOS_GOARCH`).

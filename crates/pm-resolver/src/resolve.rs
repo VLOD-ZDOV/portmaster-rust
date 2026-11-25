@@ -52,7 +52,7 @@ pub(crate) struct DedupeGuard {
 
 impl Drop for DedupeGuard {
     fn drop(&mut self) {
-        let mut map = self.service.inner.dedupe.lock().expect("lock poisoned");
+        let mut map = self.service.inner.dedupe.lock().unwrap_or_else(|error| error.into_inner());
         // Mark the request as done.
         self.status.completed.send_replace(true);
         // Delete it from the registry, if it is still ours.
@@ -243,7 +243,7 @@ impl ResolverService {
 
         loop {
             let mut receiver = {
-                let mut map = self.inner.dedupe.lock().expect("lock poisoned");
+                let mut map = self.inner.dedupe.lock().unwrap_or_else(|error| error.into_inner());
                 let mut wait = None;
                 if let Some(status) = map.get(&key) {
                     if Instant::now() < status.wait_until {
@@ -293,7 +293,7 @@ impl ResolverService {
     }
 
     fn should_reset_cache(&self, q: &Query) -> bool {
-        let mut reset = self.inner.cache_reset.lock().expect("lock poisoned");
+        let mut reset = self.inner.cache_reset.lock().unwrap_or_else(|error| error.into_inner());
 
         // Reset to a new domain.
         let id = query_id(q);

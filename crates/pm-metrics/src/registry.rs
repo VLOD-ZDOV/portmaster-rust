@@ -74,7 +74,7 @@ impl Registry {
         prometheus_id: &str,
         labels: &mut BTreeMap<String, String>,
     ) -> String {
-        let mut inner = self.inner.write().expect("lock poisoned");
+        let mut inner = self.inner.write().unwrap_or_else(|error| error.into_inner());
         inner.first_metric_registered = true;
 
         let mut metric_id = prometheus_id.trim().to_string();
@@ -99,12 +99,12 @@ impl Registry {
 
     /// Marks the registry as ready to accept metrics, like Go `start()`.
     pub fn mark_ready(&self) {
-        self.inner.write().expect("lock poisoned").ready_to_register = true;
+        self.inner.write().unwrap_or_else(|error| error.into_inner()).ready_to_register = true;
     }
 
     /// Sets the namespace prefix of all later metrics.
     pub fn set_namespace(&self, namespace: &str) -> Result<()> {
-        let mut inner = self.inner.write().expect("lock poisoned");
+        let mut inner = self.inner.write().unwrap_or_else(|error| error.into_inner());
         if inner.first_metric_registered {
             return Err(Error::AlreadyStarted);
         }
@@ -117,7 +117,7 @@ impl Registry {
 
     /// Adds a global label to all later metrics.
     pub fn add_global_label(&self, name: &str, value: &str) -> Result<()> {
-        let mut inner = self.inner.write().expect("lock poisoned");
+        let mut inner = self.inner.write().unwrap_or_else(|error| error.into_inner());
         if inner.first_metric_registered {
             return Err(Error::AlreadyStarted);
         }
@@ -131,7 +131,7 @@ impl Registry {
     }
 
     fn register(&self, metric: Arc<dyn Metric>) -> Result<()> {
-        let mut inner = self.inner.write().expect("lock poisoned");
+        let mut inner = self.inner.write().unwrap_or_else(|error| error.into_inner());
         for registered in inner.metrics.values() {
             if registered.labeled_id() == metric.labeled_id() {
                 return Err(Error::AlreadyRegistered);
@@ -220,7 +220,7 @@ impl Registry {
     }
 
     fn apply_loaded_state(&self, counter: &Counter) {
-        let inner = self.inner.read().expect("lock poisoned");
+        let inner = self.inner.read().unwrap_or_else(|error| error.into_inner());
         let Some(storage) = &inner.storage else {
             return;
         };
@@ -236,7 +236,7 @@ impl Registry {
         permission: Permission,
         expertise_level: ExpertiseLevel,
     ) {
-        let inner = self.inner.read().expect("lock poisoned");
+        let inner = self.inner.read().unwrap_or_else(|error| error.into_inner());
         for metric in inner.metrics.values() {
             if permission >= metric.options().permission
                 && expertise_level >= metric.options().expertise_level
@@ -248,7 +248,7 @@ impl Registry {
 
     /// Exports all metrics visible to the given permission with their values.
     pub fn export_metrics(&self, permission: Permission) -> Value {
-        let inner = self.inner.read().expect("lock poisoned");
+        let inner = self.inner.read().unwrap_or_else(|error| error.into_inner());
         let metrics: Vec<Arc<dyn Metric>> = inner
             .metrics
             .values()
@@ -272,7 +272,7 @@ impl Registry {
 
     /// Exports the values of all supported, visible metrics by ID.
     pub fn export_values(&self, permission: Permission, internal_only: bool) -> Value {
-        let inner = self.inner.read().expect("lock poisoned");
+        let inner = self.inner.read().unwrap_or_else(|error| error.into_inner());
         let metrics: Vec<Arc<dyn Metric>> = inner
             .metrics
             .values()
@@ -299,7 +299,7 @@ impl Registry {
     /// Enables persistence and loads previously stored counter values.
     pub fn enable_persistence(&self, interface: Interface, key: &str) -> Result<()> {
         {
-            let inner = self.inner.read().expect("lock poisoned");
+            let inner = self.inner.read().unwrap_or_else(|error| error.into_inner());
             if inner.storage.is_some() {
                 return Err(Error::AlreadyInitialized);
             }
@@ -324,7 +324,7 @@ impl Registry {
             Vec::new()
         };
 
-        let mut inner = self.inner.write().expect("lock poisoned");
+        let mut inner = self.inner.write().unwrap_or_else(|error| error.into_inner());
         if inner.storage.is_some() {
             return Err(Error::AlreadyInitialized);
         }
@@ -339,7 +339,7 @@ impl Registry {
 
         if found {
             let restore: BTreeMap<String, u64> = counters_to_restore.into_iter().collect();
-            let inner = self.inner.read().expect("lock poisoned");
+            let inner = self.inner.read().unwrap_or_else(|error| error.into_inner());
             for metric in inner.metrics.values() {
                 if let Some(counter) = metric.as_any().downcast_ref::<Counter>() {
                     if metric.options().persist {
@@ -354,7 +354,7 @@ impl Registry {
     /// Saves all persistent counters to the database.
     pub fn store_persistent_metrics(&self) {
         let (interface, key, start, counters) = {
-            let inner = self.inner.read().expect("lock poisoned");
+            let inner = self.inner.read().unwrap_or_else(|error| error.into_inner());
             let Some(storage) = &inner.storage else {
                 return;
             };
@@ -399,7 +399,7 @@ impl Registry {
 
     /// Returns the number of registered metrics, for diagnostics and tests.
     pub fn len(&self) -> usize {
-        self.inner.read().expect("lock poisoned").metrics.len()
+        self.inner.read().unwrap_or_else(|error| error.into_inner()).metrics.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -410,7 +410,7 @@ impl Registry {
     pub fn has_persistence(&self) -> bool {
         self.inner
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .storage
             .is_some()
     }

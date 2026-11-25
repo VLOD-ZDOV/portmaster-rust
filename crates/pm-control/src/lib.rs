@@ -97,6 +97,9 @@ pub trait ControlEnv: Send + Sync + 'static {
     async fn stop_interception(&self) -> Result<()>;
     /// Starts packet interception.
     async fn start_interception(&self) -> Result<()>;
+    /// Called after a successful resume, so the environment can flush stale
+    /// conntrack entries once all routing switches are active.
+    fn on_resume(&self) {}
 }
 
 /// Notification sink implemented by the core over `pm_notifications`.
@@ -235,6 +238,7 @@ impl<E: ControlEnv> Control<E> {
     }
 
     async fn resume_locked(&self, state: &mut State) -> Result<()> {
+        let was_paused = state.info.interception || state.info.spn;
         if state.info.interception {
             self.env.start_interception().await?;
             state.info.interception = false;
@@ -245,6 +249,9 @@ impl<E: ControlEnv> Control<E> {
                 self.observe_spn_enabled(true);
             }
             state.info.spn = false;
+        }
+        if was_paused {
+            self.env.on_resume();
         }
         Ok(())
     }

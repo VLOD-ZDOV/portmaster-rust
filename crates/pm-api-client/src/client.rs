@@ -51,7 +51,7 @@ impl State {
     fn dispatch(&self, data: &[u8]) {
         match Message::parse(data) {
             Ok(message) => {
-                let operations = self.operations.lock().expect("lock poisoned");
+                let operations = self.operations.lock().unwrap_or_else(|error| error.into_inner());
                 match operations.get(&message.op_id) {
                     Some(operation) => {
                         debug!(
@@ -73,7 +73,7 @@ impl State {
     }
 
     fn resuscitate(&self) {
-        let operations = self.operations.lock().expect("lock poisoned");
+        let operations = self.operations.lock().unwrap_or_else(|error| error.into_inner());
         for operation in operations.values() {
             if operation.resuscitate {
                 if let Some(request) = &operation.request {
@@ -88,7 +88,7 @@ impl State {
     }
 
     fn notify_offline(&self) {
-        let operations = self.operations.lock().expect("lock poisoned");
+        let operations = self.operations.lock().unwrap_or_else(|error| error.into_inner());
         for (id, operation) in operations.iter() {
             let _ = operation.sender.send(Message::offline(id.clone()));
         }
@@ -96,7 +96,7 @@ impl State {
 
     fn log_error(&self, err: &Error) {
         let message = err.to_string();
-        let mut last = self.last_error.lock().expect("lock poisoned");
+        let mut last = self.last_error.lock().unwrap_or_else(|error| error.into_inner());
         if *last != message {
             warn!("client: error connecting to Portmaster: {message}");
             *last = message;
@@ -177,7 +177,7 @@ impl Client {
             .state
             .outgoing_rx
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .take()
             .ok_or(Error::AlreadyConnected)?;
 
@@ -214,7 +214,7 @@ impl Client {
                 }
             }
             // Hand the request queue to the next connection.
-            *writer_state.outgoing_rx.lock().expect("lock poisoned") = Some(receiver);
+            *writer_state.outgoing_rx.lock().unwrap_or_else(|error| error.into_inner()) = Some(receiver);
         });
 
         loop {
@@ -311,7 +311,7 @@ impl Client {
     fn new_operation(&self) -> Operation {
         let id = format!("#{}", self.state.next_op_id.fetch_add(1, Ordering::Relaxed) + 1);
         let (sender, receiver) = mpsc::unbounded_channel();
-        self.state.operations.lock().expect("lock poisoned").insert(
+        self.state.operations.lock().unwrap_or_else(|error| error.into_inner()).insert(
             id.clone(),
             OperationState {
                 sender,
@@ -407,7 +407,7 @@ impl Operation {
             .state
             .operations
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .get_mut(&self.id)
         {
             operation.request = Some(request.clone());
@@ -422,7 +422,7 @@ impl Operation {
             .state
             .operations
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .get_mut(&self.id)
         {
             operation.resuscitate = true;
@@ -440,7 +440,7 @@ impl Operation {
             .state
             .operations
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .remove(&self.id);
     }
 }
@@ -451,7 +451,7 @@ impl Drop for Operation {
             .state
             .operations
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .remove(&self.id);
     }
 }

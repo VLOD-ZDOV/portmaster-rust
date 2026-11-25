@@ -1,10 +1,8 @@
 //! Wiring for the Go `service/control` pause/resume module.
 //!
-//! The Rust core has no SPN service, so `spn/enable` is tracked locally and
-//! reported to the control module; pause/resume of packet interception goes
-//! through the firewall.
+//! The Rust core has no SPN service; `spn/enable` is read from the live config
+//! and updated by the control module, so Xray/API/tray changes stay visible.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,7 +19,6 @@ pub struct CoreControlEnv {
     config: Arc<Config>,
     firewall: Arc<crate::firewall::Firewall>,
     shutting_down: CancellationToken,
-    spn_enabled: AtomicBool,
 }
 
 impl CoreControlEnv {
@@ -30,12 +27,10 @@ impl CoreControlEnv {
         firewall: Arc<crate::firewall::Firewall>,
         shutting_down: CancellationToken,
     ) -> CoreControlEnv {
-        let spn_enabled = config.get_as_bool("spn/enable", false)();
         CoreControlEnv {
             config,
             firewall,
             shutting_down,
-            spn_enabled: AtomicBool::new(spn_enabled),
         }
     }
 }
@@ -47,12 +42,14 @@ impl ControlEnv for CoreControlEnv {
     }
 
     fn spn_enabled(&self) -> bool {
-        self.spn_enabled.load(Ordering::SeqCst)
+        // Always read the live option: Xray start/API/tray changes it
+        // asynchronously, and a cached AtomicBool would make "Pause VPN"
+        // fail or resume the wrong module.
+        self.config.get_as_bool("spn/enable", false)()
     }
 
     fn set_spn_enabled(&self, enabled: bool) {
-        // Go writes the `spn/enable` option here. The Rust core does not
-        // register it, but keep the option in sync when it exists.
+        // The Xray module registers `spn/enable`; keep it in sync when present.
         if self.config.option("spn/enable").is_ok() {
             if let Err(error) = self
                 .config
@@ -61,7 +58,6 @@ impl ControlEnv for CoreControlEnv {
                 tracing::warn!(%error, "control: failed to persist spn/enable");
             }
         }
-        self.spn_enabled.store(enabled, Ordering::SeqCst);
     }
 
     fn spn_is_stopped(&self) -> bool {
@@ -79,6 +75,17 @@ impl ControlEnv for CoreControlEnv {
         self.firewall.start().map_err(|error| {
             pm_control::Error::Message(format!("failed to start interception: {error}"))
         })
+    }
+
+    fn on_resume(&self) {
+        // The resume path starts interception before enabling Xray, so the
+        // firewall saw spn/enable=false. Flush stale flows now that both
+        // switches are active.
+        if self.spn_enabled() {
+            if let Err(error) = self.firewall.delete_unmarked() {
+                tracing::warn!(%error, "control: failed to flush unmarked conntrack on resume");
+            }
+        }
     }
 }
 

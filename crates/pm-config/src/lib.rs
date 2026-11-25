@@ -200,7 +200,7 @@ impl Config {
             )));
         }
 
-        self.options.write().expect("lock poisoned").insert(
+        self.options.write().unwrap_or_else(|error| error.into_inner()).insert(
             option.key.clone(),
             Arc::new(OptionState::new(option, regex)),
         );
@@ -212,7 +212,7 @@ impl Config {
     pub fn option(&self, key: &str) -> Result<Arc<OptionState>> {
         self.options
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .get(key)
             .cloned()
             .ok_or_else(|| Error::UnknownOption(key.to_string()))
@@ -221,14 +221,14 @@ impl Config {
     pub fn is_registered(&self, key: &str) -> bool {
         self.options
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .contains_key(key)
     }
 
     /// Returns all registered option definitions, sorted by key, with their
     /// current annotations.
     pub fn export_options(&self) -> Vec<ConfigOption> {
-        let options = self.options.read().expect("lock poisoned");
+        let options = self.options.read().unwrap_or_else(|error| error.into_inner());
         options
             .values()
             .map(|state| {
@@ -265,7 +265,7 @@ impl Config {
 
     fn refresh_levels(&self) {
         let (expertise, release) = {
-            let options = self.options.read().expect("lock poisoned");
+            let options = self.options.read().unwrap_or_else(|error| error.into_inner());
             (
                 options
                     .get(EXPERTISE_LEVEL_KEY)
@@ -517,7 +517,7 @@ impl Config {
         // Keep keys of unregistered options so that saving does not drop them.
         {
             let registered: Vec<&str> = options.iter().map(|option| option.key()).collect();
-            let mut unknown = self.unknown.write().expect("lock poisoned");
+            let mut unknown = self.unknown.write().unwrap_or_else(|error| error.into_inner());
             unknown.clear();
             for (key, value) in values {
                 if !registered.contains(&key.as_str()) {
@@ -525,7 +525,7 @@ impl Config {
                 }
             }
         }
-        outcome.contains_unknown = !self.unknown.read().expect("lock poisoned").is_empty();
+        outcome.contains_unknown = !self.unknown.read().unwrap_or_else(|error| error.into_inner()).is_empty();
 
         self.refresh_levels();
         self.signal_changes();
@@ -534,7 +534,7 @@ impl Config {
 
     /// Returns the active user values, like Go `GetActiveConfigValues`.
     pub fn active_config_values(&self) -> Map<String, Value> {
-        let options = self.options.read().expect("lock poisoned");
+        let options = self.options.read().unwrap_or_else(|error| error.into_inner());
         let release_level = self.release_level();
         let mut values = Map::new();
         for option in options.values() {
@@ -550,7 +550,7 @@ impl Config {
 
     /// Returns the currently known unknown keys of the config file.
     pub fn unknown_values(&self) -> BTreeMap<String, Value> {
-        self.unknown.read().expect("lock poisoned").clone()
+        self.unknown.read().unwrap_or_else(|error| error.into_inner()).clone()
     }
 
     // --- persistence ---
@@ -558,13 +558,13 @@ impl Config {
     /// Loads and applies a configuration file.
     pub fn load_config(&self, path: impl AsRef<Path>) -> Result<LoadOutcome> {
         let path = path.as_ref().to_path_buf();
-        *self.config_file.write().expect("lock poisoned") = Some(path.clone());
+        *self.config_file.write().unwrap_or_else(|error| error.into_inner()) = Some(path.clone());
 
         let data = std::fs::read(&path)?;
         let values = persistence::json_to_map(&data)?;
         let outcome = self.replace_config(&values);
 
-        let mut loaded_errors = self.loaded_errors.lock().expect("lock poisoned");
+        let mut loaded_errors = self.loaded_errors.lock().unwrap_or_else(|error| error.into_inner());
         *loaded_errors = outcome.validation_errors.clone();
 
         Ok(LoadOutcome {
@@ -582,16 +582,16 @@ impl Config {
 
     /// Sets the config file path without loading it.
     pub fn set_config_file(&self, path: impl AsRef<Path>) {
-        *self.config_file.write().expect("lock poisoned") = Some(path.as_ref().to_path_buf());
+        *self.config_file.write().unwrap_or_else(|error| error.into_inner()) = Some(path.as_ref().to_path_buf());
     }
 
     pub fn config_file(&self) -> Option<PathBuf> {
-        self.config_file.read().expect("lock poisoned").clone()
+        self.config_file.read().unwrap_or_else(|error| error.into_inner()).clone()
     }
 
     /// Returns the validation errors of the last load.
     pub fn loaded_validation_errors(&self) -> Vec<ValidationError> {
-        self.loaded_errors.lock().expect("lock poisoned").clone()
+        self.loaded_errors.lock().unwrap_or_else(|error| error.into_inner()).clone()
     }
 
     /// Saves the user values to the config file.
@@ -602,8 +602,8 @@ impl Config {
 
         let mut flattened = self.active_config_values();
         {
-            let options = self.options.read().expect("lock poisoned");
-            for (key, value) in self.unknown.read().expect("lock poisoned").iter() {
+            let options = self.options.read().unwrap_or_else(|error| error.into_inner());
+            for (key, value) in self.unknown.read().unwrap_or_else(|error| error.into_inner()).iter() {
                 if !options.contains_key(key) {
                     flattened.insert(key.clone(), value.clone());
                 }
@@ -647,7 +647,7 @@ impl Config {
         let controller = self
             .db_controller
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .as_ref()
             .and_then(Weak::upgrade);
         let Some(controller) = controller else {
@@ -661,7 +661,7 @@ impl Config {
     pub(crate) fn options_snapshot(&self) -> Vec<Arc<OptionState>> {
         self.options
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .values()
             .cloned()
             .collect()
@@ -673,7 +673,7 @@ impl Config {
     pub fn register_database(self: &Arc<Self>, dbs: &Arc<Databases>) -> Result<Arc<Controller>> {
         dbs.register_injected("config", "Configuration Manager")?;
         let controller = dbs.inject("config", Box::new(ConfigStorage::new(Arc::clone(self))))?;
-        *self.db_controller.write().expect("lock poisoned") = Some(Arc::downgrade(&controller));
+        *self.db_controller.write().unwrap_or_else(|error| error.into_inner()) = Some(Arc::downgrade(&controller));
         Ok(controller)
     }
 }

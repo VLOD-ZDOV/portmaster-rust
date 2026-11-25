@@ -144,8 +144,8 @@ pub struct UpdateSubscriptionRequest {
 /// Payload of `POST xray/connect`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ConnectRequest {
-    /// The UI sends `nodeId` (and also an unused `id` for compatibility).
-    #[serde(alias = "nodeId")]
+    /// The UI sends `nodeId`; an absent value means "connect last".
+    #[serde(alias = "nodeId", default)]
     pub node_id: String,
     /// Local SOCKS/HTTP port; falls back to the configured port when absent.
     #[serde(default)]

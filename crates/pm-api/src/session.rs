@@ -51,7 +51,7 @@ impl Sessions {
             return None;
         }
         let value = hex::encode(key);
-        self.sessions.lock().expect("lock poisoned").insert(
+        self.sessions.lock().unwrap_or_else(|error| error.into_inner()).insert(
             value.clone(),
             Session {
                 token,
@@ -63,7 +63,7 @@ impl Sessions {
 
     /// Returns the token of a valid session and refreshes it.
     pub fn check(&self, value: &str) -> Option<AuthToken> {
-        let mut sessions = self.sessions.lock().expect("lock poisoned");
+        let mut sessions = self.sessions.lock().unwrap_or_else(|error| error.into_inner());
         let session = sessions.get_mut(value)?;
         if Instant::now() > session.valid_until {
             sessions.remove(value);
@@ -75,7 +75,7 @@ impl Sessions {
 
     /// Deletes a session.
     pub fn delete(&self, value: &str) {
-        self.sessions.lock().expect("lock poisoned").remove(value);
+        self.sessions.lock().unwrap_or_else(|error| error.into_inner()).remove(value);
     }
 
     /// Removes expired sessions.
@@ -83,13 +83,13 @@ impl Sessions {
         let now = Instant::now();
         self.sessions
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .retain(|_, session| now <= session.valid_until);
     }
 
     /// Returns the number of active sessions.
     pub fn len(&self) -> usize {
-        self.sessions.lock().expect("lock poisoned").len()
+        self.sessions.lock().unwrap_or_else(|error| error.into_inner()).len()
     }
 
     pub fn is_empty(&self) -> bool {

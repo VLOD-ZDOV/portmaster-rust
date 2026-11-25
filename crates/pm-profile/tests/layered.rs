@@ -92,6 +92,23 @@ fn domain_entity(env: &Env, domain: &str) -> Entity {
 }
 
 #[test]
+fn legacy_string_usage_policy_does_not_drop_the_whole_profile() {
+    let env = env();
+    let lp = layered(
+        &env,
+        json!({
+            "splittun/usagePolicy": "vpn",
+            "spn/use": true,
+            "filter/endpoints": ["+ example.com"]
+        }),
+    );
+    assert_eq!(lp.config_error(), None);
+    assert!(lp.use_spn());
+    let mut entity = domain_entity(&env, "example.com.");
+    assert_eq!(lp.match_endpoint(&mut entity).0, EpResult::Permitted);
+}
+
+#[test]
 fn local_bool_option_wins_over_global() {
     let env = env();
     // Registered global default of blockP2P is false.

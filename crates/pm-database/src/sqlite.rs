@@ -79,7 +79,7 @@ impl SqliteStorage {
     }
 
     fn with_conn<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
-        let conn = self.conn.lock().expect("lock poisoned");
+        let conn = self.conn.lock().unwrap_or_else(|error| error.into_inner());
         f(&conn)
     }
 }

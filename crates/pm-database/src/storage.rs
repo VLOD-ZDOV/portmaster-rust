@@ -113,7 +113,7 @@ impl MemoryStorage {
 
     /// Returns the number of stored records.
     pub fn len(&self) -> usize {
-        self.records.read().expect("lock poisoned").len()
+        self.records.read().unwrap_or_else(|error| error.into_inner()).len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -125,7 +125,7 @@ impl Storage for MemoryStorage {
     fn get(&self, key: &str) -> Result<Record> {
         self.records
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .get(key)
             .cloned()
             .ok_or(Error::StorageNotFound)
@@ -134,19 +134,19 @@ impl Storage for MemoryStorage {
     fn put(&self, record: Record) -> Result<Record> {
         self.records
             .write()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .insert(record.key.key.clone(), record.clone());
         Ok(record)
     }
 
     fn delete(&self, key: &str) -> Result<()> {
-        self.records.write().expect("lock poisoned").remove(key);
+        self.records.write().unwrap_or_else(|error| error.into_inner()).remove(key);
         Ok(())
     }
 
     fn query(&self, query: &Query, local: bool, internal: bool) -> Result<Vec<Record>> {
         let now = now();
-        let records = self.records.read().expect("lock poisoned");
+        let records = self.records.read().unwrap_or_else(|error| error.into_inner());
         Ok(records
             .values()
             .filter(|record| record_matches(record, query, local, internal, now))

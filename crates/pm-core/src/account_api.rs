@@ -245,19 +245,15 @@ pub fn register_api(api: &Api) -> Result<()> {
     Ok(())
 }
 
-/// Registers the mock user profile in `core:spn/account/user` and a stub
-/// `runtime:spn/status` record so UI/tray subscriptions receive a valid
-/// "disabled" status instead of failing.
-pub fn register_spn_and_user_profile(
-    runtime: &pm_runtime::Runtime,
-    databases: &std::sync::Arc<pm_database::Databases>,
-) {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_secs() as i64)
-        .unwrap_or(0);
-
-    let spn_status_record = pm_record::Record {
+/// Builds the current `runtime:spn/status` record.
+fn spn_status_record(xray: &pm_xray::Xray) -> pm_record::Record {
+    let now = pm_database::now();
+    let status_str = if xray.is_connected() {
+        "connected"
+    } else {
+        "disabled"
+    };
+    pm_record::Record {
         key: pm_record::Key::new("runtime", "spn/status"),
         meta: pm_record::Meta {
             created: now,
@@ -266,15 +262,44 @@ pub fn register_spn_and_user_profile(
         },
         format: pm_dsd::format::JSON,
         data: serde_json::to_vec(&serde_json::json!({
-            "Status": "connected",
+            "Status": status_str,
         }))
-        .unwrap(),
-    };
+        .unwrap_or_default(),
+    }
+}
 
+/// Registers the mock user profile in `core:spn/account/user` and a dynamic
+/// `runtime:spn/status` record reflecting live Xray VPN process status.
+pub fn register_spn_and_user_profile(
+    runtime: &pm_runtime::Runtime,
+    databases: &std::sync::Arc<pm_database::Databases>,
+    xray: std::sync::Arc<pm_xray::Xray>,
+) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .unwrap_or(0);
+
+    let xray_status = std::sync::Arc::clone(&xray);
     let spn_status_provider = std::sync::Arc::new(pm_runtime::SimpleValueGetter::new(move |_key| {
-        Ok(vec![spn_status_record.clone()])
+        Ok(vec![spn_status_record(&xray_status)])
     }));
-    let _ = runtime.registry().register("spn/status", spn_status_provider);
+    if let Ok(push) = runtime.registry().register("spn/status", spn_status_provider) {
+        // ValueProvider has no change notifications; poll the live status and
+        // push only when it changes so tray/UI subscribers get updates.
+        tokio::spawn(async move {
+            let mut last: Option<Vec<u8>> = None;
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                let record = spn_status_record(&xray);
+                if last.as_deref() == Some(record.data.as_slice()) {
+                    continue;
+                }
+                last = Some(record.data.clone());
+                push(&[record]);
+            }
+        });
+    }
 
     let user_profile_val = local_user_profile();
     let user_record = pm_record::Record {

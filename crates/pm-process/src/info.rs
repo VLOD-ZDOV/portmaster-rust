@@ -139,7 +139,7 @@ impl ProcReader {
 
     /// Returns the boot time of the system in seconds.
     fn boot_time(&self) -> i64 {
-        let mut cached = self.boot_time.lock().expect("lock poisoned");
+        let mut cached = self.boot_time.lock().unwrap_or_else(|error| error.into_inner());
         if let Some(boot_time) = *cached {
             return boot_time;
         }

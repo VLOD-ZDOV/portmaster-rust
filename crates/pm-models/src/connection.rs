@@ -175,6 +175,8 @@ pub struct ConnectionRecord {
     pub bytes_received: u64,
     #[serde(alias = "TimeAgo", default)]
     pub time_ago: String,
+    #[serde(alias = "Started", default)]
+    pub started: Option<String>,
     #[serde(alias = "Active", default, deserialize_with = "deserialize_bool_flexible")]
     pub active: bool,
 }

@@ -289,7 +289,7 @@ impl ProcFs {
         let pids = match self
             .pids_by_user
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .get(&uid)
             .cloned()
         {
@@ -300,7 +300,7 @@ impl ProcFs {
         if let Some(pid) = self
             .owners
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .get(uid, inode, &pids)
         {
             return pid;
@@ -311,7 +311,7 @@ impl ProcFs {
         // the rest wait for its result (Go single-flight style). The owner cache
         // above still serves all later lookups.
         let (flight, leader) = {
-            let mut flights = self.flights.lock().expect("lock poisoned");
+            let mut flights = self.flights.lock().unwrap_or_else(|error| error.into_inner());
             match flights.entry(inode) {
                 Entry::Occupied(entry) => (Arc::clone(entry.get()), false),
                 Entry::Vacant(entry) => {
@@ -339,7 +339,7 @@ impl ProcFs {
             if self.pid_has_socket(*pid, inode) {
                 self.owners
                     .lock()
-                    .expect("lock poisoned")
+                    .unwrap_or_else(|error| error.into_inner())
                     .insert(uid, inode, *pid);
                 result = *pid;
                 break;
@@ -354,7 +354,7 @@ impl ProcFs {
     /// Refreshes the PID table at most every 10ms, like `proc.updatePids`.
     fn update_pids(&self) {
         {
-            let mut updated_at = self.pids_updated_at.lock().expect("lock poisoned");
+            let mut updated_at = self.pids_updated_at.lock().unwrap_or_else(|error| error.into_inner());
             if updated_at.is_some_and(|at| at.elapsed() < MIN_DURATION_BETWEEN_PID_UPDATES) {
                 return;
             }
@@ -381,7 +381,7 @@ impl ProcFs {
                 .push(pid);
         }
 
-        *self.pids_by_user.write().expect("lock poisoned") = pids_by_user;
+        *self.pids_by_user.write().unwrap_or_else(|error| error.into_inner()) = pids_by_user;
     }
 
     fn pid_has_socket(&self, pid: i32, inode: i64) -> bool {

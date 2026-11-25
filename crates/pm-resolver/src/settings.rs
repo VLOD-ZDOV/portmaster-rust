@@ -400,11 +400,11 @@ impl StaticSettings {
 
     /// Changes the values.
     pub fn update(&self, change: impl FnOnce(&mut SettingValues)) {
-        change(&mut self.values.lock().expect("lock poisoned"));
+        change(&mut self.values.lock().unwrap_or_else(|error| error.into_inner()));
     }
 
     fn get<T>(&self, read: impl FnOnce(&SettingValues) -> T) -> T {
-        read(&self.values.lock().expect("lock poisoned"))
+        read(&self.values.lock().unwrap_or_else(|error| error.into_inner()))
     }
 }
 

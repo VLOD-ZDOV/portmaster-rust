@@ -6,9 +6,9 @@
 //!
 //! # Compatibility notes
 //!
-//! * Signature verification uses `jess` in Go. Until it is ported, callers pass
-//!   an [`IndexVerifier`] callback to [`Index::parse`]; without one the index is
-//!   accepted unsigned, like Go with a nil trust store.
+//! * Signature verification uses the ported `pm-jess` via an [`IndexVerifier`]
+//!   callback; the core always configures a trust store. A caller that passes
+//!   `None` deliberately accepts an unsigned index, like Go with a nil store.
 //! * The downloader, index scan, upgrade application and the updater flow
 //!   (update check, notifications, auto-download/auto-apply, restart) are
 //!   ported. The module manager wiring stays with the core; [`Updater`] exposes

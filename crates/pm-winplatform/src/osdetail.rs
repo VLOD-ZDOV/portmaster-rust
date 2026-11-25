@@ -566,7 +566,7 @@ pub fn get_all_service_names() -> Result<HashMap<i32, Vec<String>>> {
     use std::sync::Mutex;
 
     static SERVICE_NAMES: Mutex<Option<HashMap<i32, Vec<String>>>> = Mutex::new(None);
-    let mut cache = SERVICE_NAMES.lock().expect("lock poisoned");
+    let mut cache = SERVICE_NAMES.lock().unwrap_or_else(|error| error.into_inner());
     if let Some(names) = cache.as_ref() {
         return Ok(names.clone());
     }

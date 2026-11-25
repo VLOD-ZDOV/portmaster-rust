@@ -87,6 +87,13 @@ fn test_app_profile_vpn_toggle() {
 
     profile.set_route_via_vpn(false);
     assert!(!profile.route_via_vpn());
+
+    // Split Tunnel is a separate feature and must not be reported as VPN.
+    profile.config = Some(json!({"splittun/use": true}));
+    assert!(!profile.route_via_vpn());
+    profile.set_route_via_vpn(true);
+    assert!(profile.route_via_vpn());
+    assert_eq!(profile.config.as_ref().unwrap()["splittun/use"], json!(true));
 }
 
 #[test]

@@ -212,7 +212,7 @@ impl DatabaseApi {
         let op_string = scheme(op);
         self.subscriptions
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .insert(op_string.clone(), token.clone());
 
         let api = Arc::clone(self);
@@ -236,7 +236,7 @@ impl DatabaseApi {
             }
             api.subscriptions
                 .lock()
-                .expect("lock poisoned")
+                .unwrap_or_else(|error| error.into_inner())
                 .remove(&op_string);
         });
     }
@@ -264,7 +264,7 @@ impl DatabaseApi {
         let token = self
             .subscriptions
             .lock()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .remove(&scheme(op));
         match token {
             Some(token) => token.cancel(),
@@ -410,6 +410,7 @@ fn handshake_request(parts: &http::request::Parts) -> crate::Request {
 }
 
 /// Upgrades a request to the database WebSocket API.
+#[allow(clippy::result_large_err)]
 pub async fn database_ws_upgrade(
     State(api): State<Arc<Api>>,
     request: axum::extract::Request,
@@ -441,6 +442,15 @@ pub async fn database_ws_upgrade(
     let authorized = tokio::task::spawn_blocking(move || {
         let result = auth_api
             .authorize_required(&mut api_request, PERMIT_ADMIN)
+            .and_then(|token| {
+                // The DB WebSocket supports writes; require the write
+                // permission explicitly, not just admin read.
+                if token.write >= PERMIT_ADMIN {
+                    Ok(token)
+                } else {
+                    Err(Response::error(403, "Insufficient permissions."))
+                }
+            })
             .map(|_| ())
             .map_err(Box::new);
         (result, api_request)

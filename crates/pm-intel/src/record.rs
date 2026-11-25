@@ -170,7 +170,7 @@ impl FilterLists {
 
     /// Returns the capacity report of the bloom filters.
     pub fn capacity_report(&self) -> String {
-        self.filter.read().expect("lock poisoned").capacity_report()
+        self.filter.read().unwrap_or_else(|error| error.into_inner()).capacity_report()
     }
 
     /// Normalizes and stores a filter list entry, like Go `processEntry`.
@@ -184,7 +184,7 @@ impl FilterLists {
         if !entry.resources.is_empty() {
             self.filter
                 .write()
-                .expect("lock poisoned")
+                .unwrap_or_else(|error| error.into_inner())
                 .add(&entry.type_, &entry.entity);
         }
 
@@ -199,7 +199,7 @@ impl FilterLists {
     pub fn bloom_test(&self, entity_type: &str, value: &str) -> bool {
         self.filter
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .test(entity_type, value)
     }
 
@@ -254,7 +254,7 @@ impl FilterLists {
                         None => self
                             .filter
                             .write()
-                            .expect("lock poisoned")
+                            .unwrap_or_else(|error| error.into_inner())
                             .add(&entry.type_, &entry.entity),
                     }
                 }
@@ -267,7 +267,7 @@ impl FilterLists {
         if let Some(filter) = new_filter {
             self.filter
                 .write()
-                .expect("lock poisoned")
+                .unwrap_or_else(|error| error.into_inner())
                 .replace_with(filter);
             tracing::info!(
                 "intel/filterlists: rebuilt bloom filters (added/capacity): {}",
@@ -331,7 +331,7 @@ impl FilterLists {
         if !self
             .filter
             .read()
-            .expect("lock poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .test(entity_type, value)
         {
             return Ok(Vec::new());
@@ -390,7 +390,7 @@ impl FilterLists {
 
     /// Saves the bloom filters to the cache database, like Go `saveToCache`.
     pub fn save_bloom_cache(&self) -> Result<()> {
-        let filter = self.filter.read().expect("lock poisoned");
+        let filter = self.filter.read().unwrap_or_else(|error| error.into_inner());
         for (scope, ring) in filter.rings() {
             let record = BloomFilterRecord {
                 filter: hex::encode(ring.marshal_binary()),
@@ -418,7 +418,7 @@ impl FilterLists {
             loaded.push((*scope, crate::Ring::unmarshal_binary(&blob)?));
         }
 
-        let mut filter = self.filter.write().expect("lock poisoned");
+        let mut filter = self.filter.write().unwrap_or_else(|error| error.into_inner());
         for (scope, ring) in loaded {
             filter.set_ring(scope, ring);
         }

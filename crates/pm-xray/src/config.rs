@@ -541,10 +541,22 @@ pub fn write_config_full(
 ) -> Result<PathBuf> {
     let directory = data_dir.join(CONFIG_DIR);
     std::fs::create_dir_all(&directory).map_err(|error| Error::Config(error.to_string()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+            .map_err(|error| Error::Config(error.to_string()))?;
+    }
     let path = directory.join(format!("xray-{}.json", node.id));
     let config = generate_config_full(node, inbound_port, inbound, stats_port, rules)?;
     let text = serde_json::to_string_pretty(&config).map_err(|error| Error::Config(error.to_string()))?;
     std::fs::write(&path, text).map_err(|error| Error::Config(error.to_string()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|error| Error::Config(error.to_string()))?;
+    }
     Ok(path)
 }
 
