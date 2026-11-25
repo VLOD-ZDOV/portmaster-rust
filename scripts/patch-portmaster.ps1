@@ -193,6 +193,7 @@ function Invoke-PortmasterPatch {
     $binName = "portmaster-core-$Core.exe"
     $binUrl = "$BaseUrl/$binName"
     $uiUrl = "$BaseUrl/portmaster.zip"
+    $pilotUrl = "$BaseUrl/pilot-web.zip"
 
     $tempDir = Join-Path $env:TEMP ("pm-patch-" + [System.Guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
@@ -212,6 +213,17 @@ function Invoke-PortmasterPatch {
             $hasUi = $true
         } catch {
             Write-Host "[*] UI bundle not found or download failed, continuing without UI update." -ForegroundColor Yellow
+        }
+
+        # Download Rust pilot UI bundle (served under /pilot by the Rust core).
+        $tempPilotZip = Join-Path $tempDir "pilot-web.zip"
+        $hasPilot = $false
+        try {
+            Write-Host "[*] Downloading Rust Pilot UI bundle (pilot-web.zip)..." -ForegroundColor Gray
+            Invoke-WebRequest -Uri $pilotUrl -OutFile $tempPilotZip -UseBasicParsing -Headers @{ "User-Agent" = "PortmasterPatcher" }
+            $hasPilot = $true
+        } catch {
+            Write-Host "[*] Pilot UI bundle not found or download failed, continuing." -ForegroundColor Yellow
         }
 
         # Stop Portmaster Service & cleanup driver
@@ -263,10 +275,14 @@ function Invoke-PortmasterPatch {
             Copy-Item -Path $tempZip -Destination (Join-Path $DataDir "portmaster.zip") -Force
 
             # 1. Pilot UI directory for Rust core: <DataDir>\pilot-web
-            $pilotWebDest = Join-Path $DataDir "pilot-web"
-            New-Item -ItemType Directory -Path $pilotWebDest -Force | Out-Null
-            Expand-Archive -Path $tempZip -DestinationPath $pilotWebDest -Force
-            Write-Host "[*] Extracted UI bundle to: $pilotWebDest" -ForegroundColor Gray
+            if ($hasPilot -and (Test-Path $tempPilotZip)) {
+                $pilotWebDest = Join-Path $DataDir "pilot-web"
+                New-Item -ItemType Directory -Path $pilotWebDest -Force | Out-Null
+                Expand-Archive -Path $tempPilotZip -DestinationPath $pilotWebDest -Force
+                Write-Host "[*] Extracted pilot UI bundle to: $pilotWebDest" -ForegroundColor Gray
+            } else {
+                Write-Host "[*] Pilot UI bundle not available; /pilot will serve the existing files or 404." -ForegroundColor Yellow
+            }
 
             # 2. Traditional module directory: <DataDir>\ui\modules\portmaster
             $uiDest = Join-Path $DataDir "ui\modules\portmaster"

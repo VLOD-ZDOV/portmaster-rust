@@ -169,6 +169,7 @@ jobs:
           chmod +x dist/portmaster-core-go
           cp release-artifacts/portmaster-core-go-windows-amd64.exe dist/portmaster-core-go.exe
           cp release-artifacts/portmaster.zip dist/portmaster.zip
+          (cd pilot/leptos/web && zip -r ../../../dist/pilot-web.zip .)
           cp scripts/patch-portmaster.sh dist/patch-portmaster.sh
           cp scripts/patch-portmaster.ps1 dist/patch-portmaster.ps1
           cd dist

@@ -6,7 +6,7 @@ UI (Angular/Tauri), данные на диске и поведение файр�
 
 ## Рамки
 - Платформа: сначала Linux. Windows — позже (драйвер `windows_kext` уже на Rust).
-- Портированы: обновления Safing (`pm-updates`/`pm-updatemgr`, включая jess-подпись), broadcasts, sync, compat (Linux). SPN уже удалён.
+- Портированы: обновления Safing (`pm-updates`/`pm-updatemgr`, включая jess-подпись), broadcasts, sync, compat (Linux). SPN-сервис удалён; `spn/use`/`spn/enable`/`spn/usagePolicy` используются для Xray VPN, а `spn/transitHubPolicy`, `spn/exitHubPolicy`, `spn/routingAlgorithm` сохранены как legacy-ключи без потребителя.
 - Не переносим (честный остаток по ревью): eBPF/aya и eBPF C-программы, Windows kernel-драйвер (C + подпись), bbolt и другие альтернативные бэкенды БД (только sqlite), `base/template`, `base/info`, `base/container`, `base/database/{iterator,dbmodule}`, CLI-утилиты `cmds/cmdbase|integrationtest|testsuite|trafficgen`, агрегатор `service/detection`.
 - Вместо SPN — интеграция с Xray. Рекомендуемый путь: внешний Rust-бинарник `xray-rs` (отдельный workspace,
   `forbid(unsafe_code)`, MPL-2.0, MSRV 1.96) запускается как дочерний процесс, конфиг генерируется из подписок,

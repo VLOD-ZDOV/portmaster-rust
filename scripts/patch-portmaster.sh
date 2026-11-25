@@ -124,6 +124,7 @@ fi
 BIN_NAME="portmaster-core-${TARGET_CORE}"
 DOWNLOAD_BIN_URL="${BASE_URL}/${BIN_NAME}"
 DOWNLOAD_UI_URL="${BASE_URL}/portmaster.zip"
+DOWNLOAD_PILOT_URL="${BASE_URL}/pilot-web.zip"
 
 TMP_DIR=$(mktemp -d /tmp/pm-patch.XXXXXX)
 trap 'rm -rf "${TMP_DIR}"' EXIT
@@ -138,6 +139,11 @@ chmod +x "${TMP_DIR}/${BIN_NAME}"
 echo "[*] Downloading modern UI bundle (portmaster.zip)..."
 download_file "${DOWNLOAD_UI_URL}" "${TMP_DIR}/portmaster.zip" || {
   echo "[*] Notice: portmaster.zip download failed or not found, continuing without UI patch."
+}
+
+echo "[*] Downloading Rust Pilot UI bundle (pilot-web.zip)..."
+download_file "${DOWNLOAD_PILOT_URL}" "${TMP_DIR}/pilot-web.zip" || {
+  echo "[*] Notice: pilot-web.zip download failed or not found, continuing."
 }
 
 # Stop Portmaster service
@@ -206,15 +212,33 @@ if [[ -f "${TMP_DIR}/portmaster.zip" ]] && command -v unzip >/dev/null 2>&1; the
   # Also update updates path if present
   UPDATES_UI="${INSTALL_DIR}/updates/linux_amd64/ui/modules/portmaster"
   if [[ -d "${UPDATES_UI}" ]]; then
-    unzip -q -o "${TMP_DIR}/portmaster.zip" -d "${UPDATES_UI}" 2>/dev/null || true
+    if ! unzip -q -o "${TMP_DIR}/portmaster.zip" -d "${UPDATES_UI}"; then
+      echo "[!] Warning: failed to unpack portmaster.zip to ${UPDATES_UI}" >&2
+    fi
   fi
 fi
 
-# Sanitize configuration: ensure API listens on default 127.0.0.1:817 and internet is not blocked
+# Unpack Rust Pilot UI bundle if present
+if [[ -f "${TMP_DIR}/pilot-web.zip" ]] && command -v unzip >/dev/null 2>&1; then
+  echo "[*] Updating Rust Pilot UI..."
+  PILOT_DEST="${DATA_DIR}/pilot-web"
+  mkdir -p "${PILOT_DEST}"
+  if ! unzip -q -o "${TMP_DIR}/pilot-web.zip" -d "${PILOT_DEST}"; then
+    echo "[!] Warning: failed to unpack pilot-web.zip to ${PILOT_DEST}" >&2
+  fi
+fi
+
+# Sanitize configuration only for the known old default. Do not silently
+# rewrite a custom listen address or turn off the user's internet blocking.
 if [[ -f "${DATA_DIR}/config.json" ]]; then
-  echo "[*] Checking and sanitizing ${DATA_DIR}/config.json..."
-  sed -i 's/"listenAddress": "127.0.0.1:8171"/"listenAddress": "127.0.0.1:817"/g' "${DATA_DIR}/config.json"
-  sed -i 's/"blockInternet": true/"blockInternet": false/g' "${DATA_DIR}/config.json"
+  if grep -q '"listenAddress": "127.0.0.1:8171"' "${DATA_DIR}/config.json"; then
+    echo "[*] Replacing obsolete default listen address 127.0.0.1:8171 with 127.0.0.1:817..."
+    cp -a "${DATA_DIR}/config.json" "${DATA_DIR}/config.json.bak"
+    sed -i 's/"listenAddress": "127.0.0.1:8171"/"listenAddress": "127.0.0.1:817"/g' "${DATA_DIR}/config.json"
+  fi
+  if grep -q '"blockInternet": true' "${DATA_DIR}/config.json"; then
+    echo "[!] Notice: keeping your existing \"blockInternet\": true setting." >&2
+  fi
 fi
 
 # Restart Portmaster

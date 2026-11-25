@@ -19,7 +19,7 @@ This fork modernizes Portmaster by introducing a high-performance **Rust Core** 
 - **100% Unlocked & Local**:
   No Safing account, sign-in, or subscription required. Network history recording, per-app bandwidth accounting, and advanced filter rules operate completely offline.
 - **Cross-Platform Interception**:
-  - **Linux**: Intercepts packets via `NFQUEUE` / `iptables` / `nftables` with kernel process resolution via `/proc`.
+  - **Linux**: Intercepts packets via `NFQUEUE` with `iptables` rules and kernel process resolution via `/proc`.
   - **Windows**: Deep packet inspection and connection verdict handling via the Windows Filtering Platform (WFP) kernel driver (`PortmasterKext.sys`) and IP Helper API.
 - **Encrypted DNS**:
   Built-in DNS proxy supporting DNS-over-TLS (DoT) and DNS-over-HTTPS (DoH) with split-horizon routing and blocklist enforcement.

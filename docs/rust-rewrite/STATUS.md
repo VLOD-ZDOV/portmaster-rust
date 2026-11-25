@@ -148,8 +148,7 @@ Ledger исполнения (git-ignored): `.superpowers/sdd/M0-foundation/progr
 - Относительный TTL, как в Go, хранится в `deleted` (отрицательным) и раскрывается в `expires` при следующем обновлении меты.
 - `pm-config`: неизвестные ключи config.json сохраняются (в Go теряются) — осознанное отклонение; функции валидации есть (`ValidationFunc`, A4b), миграции значений не реализованы.
 - `pm-config` не регистрирует `core/devMode` и `core/log/level` — их регистрирует ядро при старте.
-- `pm-profile`: нет активного кэша профилей, событий/хуков БД, полного `LayeredProfile` (слияние слоёв конфига)
-  и разбора правил endpoints; `Profile.New` повторяет го-квирк с нулевым отпечатком в конце после компакции.
+- `pm-profile`: `LayeredProfile` и кэш layered-профилей реализованы (`layered.rs`, `CoreProfiles.layered`), meta-кэш `ProfileStore` есть; нет событий/хуков БД. `Profile.New` повторяет го-квирк с нулевым отпечатком в конце после компакции.
 - `pm-process`: `GetProcessesWithProfile` и HTTP-эндпоинты процесса не портированы (поиск профиля через
   `Process::find_profile` есть);
   загрузки сериализованы одним мьютексом вместо singleflight; `leader` ищется через кэш, а не ссылкой в процессе.
@@ -178,7 +177,7 @@ Ledger исполнения (git-ignored): `.superpowers/sdd/M0-foundation/progr
 - `pm-status`: нет `mgr.Manager`-обвязки (начальные состояния и колбэки добавляет ядро); модули обходятся в
   сортированном порядке, поэтому при равной severity worst state достаётся первому по алфавиту (в Go — случайный).
 - `pm-core`: рестарт по callback апдейтера и `core/restart`/`core/shutdown` через `CancellationToken` (graceful stop для супервайзора), UI upgrade lock (`423` при блокировке) и `ui/reload`, метрики вердиктов пакетов по `--write-packet-metrics` (record в `NfqPacket::set_verdict`, запись раз в 5 c в формате Go), эндпоинты `core/paths`, `updates/get/{artifact_path}/{artifact_name}`.
-- `pm-core` A7b-3: файрвол собран и запускается в ядре — `CoreProfiles` (ProfileLookup/LayeredProfileLookup/SplitTunnelProfiles), `CoreFirewallEnv` (FirewallEnv/PacketEnv поверх netenv, customlists, резолвера, профилей и splittun), `Firewall` (Network + PacketHandler + netquery Database/Manager + лента соединений + iptables/nfqueue). Запуск перехвата требует `filter/enable` и root; без root ядро работает и тесты проходят. Зарегистрирован netquery API, retention из layered profiles, старт/стоп splittun-прокси по `splittun/enable`, мост уведомлений netenv → pm-notifications. Живой запуск под root не проверялся (нужен пользователь с привилегиями).
+- `pm-core` A7b-3: файрвол собран и запускается в ядре — `CoreProfiles` (ProfileLookup/LayeredProfileLookup/SplitTunnelProfiles), `CoreFirewallEnv` (FirewallEnv/PacketEnv поверх netenv, customlists, резолвера, профилей и splittun), `Firewall` (Network + PacketHandler + netquery Database/Manager + лента соединений + iptables/nfqueue). Запуск перехвата требует `filter/enable` и root; без root ядро работает и тесты проходят. Зарегистрирован netquery API, retention из layered profiles, старт/стоп splittun-прокси по `splittun/enable || spn/enable`, мост уведомлений netenv → pm-notifications. Живой запуск под root не проверялся (нужен пользователь с привилегиями).
 - `pm-geoip` (субагент, ветка agent/geoip-location, слит): `location.go` из geoip уже был портирован; недостающая модель `service/netenv/location.go` — `IpVersion`, `DeviceLocation(Source)`, `DeviceLocations` (Best/BestV4/BestV6, сортировка, Go-порядок JSON), timezone-derived location, `DeviceLocationService` с инжектируемым `LocationEnvironment`, pure continent helpers. ICMP traceroute/OS/TZ инжектируются; в ядро пока не подключено.
 - Linux live-проверка (пользователь, 2026-11-16): в изолированном netns ядро поднялось, `filter: nfqueue interception started queues=[17040,17140,17060,17160]`, счётчики NFQUEUE ненулевые (6 пакетов/384 байта на очередь), `--write-packet-metrics` содержит строки `...;PermanentAccept;...`; после SIGINT цепочек `PORTMASTER-*` нет. Процедура зафиксирована в `TESTING.md`.
 - `pm-core`:board: History — дефолт `history/enable=true` (fork-отклонение от upstream false), портированы аккаунт-эндпоинты `spn/account/user/profile`, `account/features`, иконки; app/profile теперь возвращает реальный профиль вызывающего процесса (AuthToken несёт pid/path). Apprise подключён опционально (`core/appriseURL`), события online-status уходят при наличии URL.
@@ -250,10 +249,10 @@ Ledger исполнения (git-ignored): `.superpowers/sdd/M0-foundation/progr
 - Волна закрытия находок полного ревью (2026-11-17, без Windows/пользовательских тестов, коммиты
   `b6554c2f`..`80be3137`): conntrack cleanup (`delete_all_marked` на старте/стопе) и
   `reinsert_displaced` по расписанию 5/10/30 c подключены в `Firewall::start/stop`; rollback флага
-  `started` при ошибке iptables. `delete_unmarked` **намеренно НЕ вызывается** (коммит `227973d6`):
-  в Go это под TODO и нужно только при DNAT-фичах (SPN/split-tunneling), а без них оно рвёт все
-  существующие не-loopback-соединения при каждом старте — именно это отключило интернет у
-  пользователя при первом switch на Rust. Self-check #3 (коммит `f5b4c60d`): шаг 3 пропускается
+  `started` при ошибке iptables. `delete_unmarked` вызывается только когда активны DNAT-фичи
+  (`spn/enable || splittun/enable`), чтобы не рвать живые соединения при обычном старте, но
+  не оставлять обход VPN/split tunnel для уже установленных потоков.
+  Self-check #3 (коммит `f5b4c60d`): шаг 3 пропускается
   (`dns_response_check=false`), пока в nameserver не подключена подстановка случайного ответа —
   раньше он всегда падал с `failed to receive test response: no such host`, создавая ложное
   уведомление о несовместимости и уводя онлайн-статус в Offline (что блокирует DNS для всех
