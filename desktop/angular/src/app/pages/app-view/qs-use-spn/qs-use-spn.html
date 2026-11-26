@@ -24,10 +24,10 @@
     </button>
   </div>
 
-  <span class="text-xs text-tertiary" *ngIf="spnDisabled"
-    [sfng-tooltip]="'app.enableSPNUse' | t: undefined : ('' | i18nVersion)">
+  <a routerLink="/xray" class="text-xs text-tertiary hover:underline cursor-pointer" *ngIf="spnDisabled"
+    [sfng-tooltip]="'app.xrayOffHint' | t: undefined : ('' | i18nVersion)">
     ({{ 'common.offline' | t: undefined : ('' | i18nVersion) }})
-  </span>
+  </a>
 
   <span class="absolute right-0 block w-2 h-2 bg-yellow-300 border border-gray-100 rounded opacity-75"
     style="top: 2px; transform: translateX(-2px)" *ngIf="interferingSettings.length > 0"></span>

@@ -1,7 +1,7 @@
 import { HttpClient } from '@angular/common/http';
 import { Inject, Injectable } from '@angular/core';
-import { PORTMASTER_HTTP_API_ENDPOINT } from '@safing/portmaster-api';
-import { BehaviorSubject, Observable, shareReplay, switchMap, tap } from 'rxjs';
+import { BoolSetting, ConfigService, PORTMASTER_HTTP_API_ENDPOINT, PortapiService } from '@safing/portmaster-api';
+import { BehaviorSubject, EMPTY, Observable, catchError, debounceTime, merge, shareReplay, skip, switchMap, tap, timer } from 'rxjs';
 import { XrayNode, XrayStatus, XraySubscription } from './xray.types';
 
 /**
@@ -29,15 +29,31 @@ export class XrayService {
     switchMap(() => this.http.get<XrayNode[]>(`${this.basePath}/nodes`)),
   );
 
-  readonly status$: Observable<XrayStatus> = this.reload$.pipe(
-    switchMap(() => this.http.get<XrayStatus>(`${this.basePath}/status`)),
-    // The page subscribes to status$ in both the template and ngOnInit;
-    // share the HTTP result instead of issuing two requests per refresh.
+  readonly status$: Observable<XrayStatus> = merge(
+    this.reload$.pipe(skip(1)),
+    timer(0, 5000),
+    this.configService.watch<BoolSetting>('spn/enable').pipe(
+      skip(1),
+      debounceTime(150),
+      catchError(() => EMPTY),
+    ),
+    this.portapi.watch('runtime:spn/status', { ignoreDelete: true }).pipe(
+      skip(1),
+      catchError(() => EMPTY),
+    ),
+  ).pipe(
+    switchMap(() => this.http.get<XrayStatus>(`${this.basePath}/status`).pipe(
+      catchError(() => EMPTY),
+    )),
+    // Share live Xray state across header, dashboard, and map page, and stay
+    // in sync when tray or other tabs toggle spn/enable.
     shareReplay({ bufferSize: 1, refCount: true }),
   );
 
   constructor(
     private readonly http: HttpClient,
+    private readonly configService: ConfigService,
+    private readonly portapi: PortapiService,
     @Inject(PORTMASTER_HTTP_API_ENDPOINT) httpAPI: string,
   ) {
     this.apiBase = `${httpAPI}/v1`;
@@ -59,6 +75,12 @@ export class XrayService {
   /** Connect to a single node from any subscription. */
   connect(nodeId: string): Observable<unknown> {
     return this.http.post(`${this.basePath}/connect`, { id: nodeId, nodeId })
+      .pipe(tap(() => this.refresh()));
+  }
+
+  /** Reconnect to the last selected Xray node. */
+  connectLast(): Observable<unknown> {
+    return this.http.post(`${this.basePath}/connect-last`, {})
       .pipe(tap(() => this.refresh()));
   }
 

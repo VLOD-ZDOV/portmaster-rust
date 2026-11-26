@@ -111,10 +111,11 @@ export class AppProfileService {
   }
 
   /**
-   * Loads the global-configuration profile.
+   * Watches the global-configuration profile so per-app inherited defaults
+   * update immediately when global settings change.
    */
   globalConfig(): Observable<FlatConfigObject> {
-    return this.getAppProfile('special', 'global-config').pipe(
+    return this.watchAppProfile('special', 'global-config').pipe(
       map((profile) => flattenProfileConfig(profile.Config))
     );
   }

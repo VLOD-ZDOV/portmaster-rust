@@ -60,7 +60,7 @@ export class QuickSettingUseSplitTunButtonComponent implements OnInit, OnChanges
 
       const useSetting = this.settings.find(s => s.Key === configKeys.splitTunUse) as BoolSetting | undefined;
       if (useSetting) {
-        this.defaultValue = !!useSetting.DefaultValue;
+        this.defaultValue = !!(useSetting.GlobalDefault ?? useSetting.DefaultValue);
         this.currentValue = getActualValue(useSetting);
         if (useSetting.Value !== undefined && useSetting.Value !== null) {
           this.mode = useSetting.Value ? 'on' : 'off';

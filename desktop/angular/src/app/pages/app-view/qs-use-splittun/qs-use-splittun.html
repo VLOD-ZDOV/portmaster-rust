@@ -1,12 +1,12 @@
-<div
+<div *ngIf="splitTunModuleEnabled !== false || mode !== 'default'; else splitTunMuted"
   class="relative flex flex-wrap items-center justify-center w-full h-full gap-2 px-3 py-2 bg-gray-300 border border-gray-300 rounded shadow"
   snfgTooltipPosition="right"
-  [sfng-tooltip]="(interferingSettings.length > 0 || spnEnabled) ? tooltipTemplate : null">
+  [sfng-tooltip]="(interferingSettings.length > 0 || spnEnabled) ? tooltipTemplate : ('app.enableSplitTun' | t: undefined : ('' | i18nVersion))">
   <span class="text-primary" [class.cursor-pointer]="interferingSettings.length > 0 || spnEnabled">
     {{ 'app.splitTunnel' | t: undefined : ('' | i18nVersion) }}
   </span>
 
-  <div *ngIf="splitTunModuleEnabled === true"
+  <div *ngIf="splitTunModuleEnabled === true || mode !== 'default'"
     class="inline-flex overflow-hidden border border-gray-500 rounded bg-gray-200 text-xxs">
     <button type="button" (click)="setMode('default')"
       class="px-2 py-0.5 transition-colors cursor-pointer"
@@ -25,20 +25,29 @@
     </button>
   </div>
 
-  <span *ngIf="splitTunModuleEnabled === false"
+  <span *ngIf="splitTunModuleEnabled === false && mode !== 'default'"
     routerLink="/settings" [queryParams]="{setting: 'splittun/enable'}" class="cursor-pointer text-tertiary hover:underline"
     [sfng-tooltip]="'app.enableSplitTun' | t: undefined : ('' | i18nVersion)">
-      {{ 'common.disabled' | t: undefined : ('' | i18nVersion) }}
+      ({{ 'common.disabled' | t: undefined : ('' | i18nVersion) }})
   </span>
 
-  <ng-template *ngIf="splitTunModuleEnabled === null">
+  <span *ngIf="splitTunModuleEnabled === null">
     <fa-icon icon="spinner" [spin]="true"></fa-icon>
-  </ng-template>
+  </span>
 
   <span class="absolute right-0 block w-2 h-2 bg-yellow-300 border border-gray-100 rounded opacity-75"
     [style.background-color]="spnFullOverride ? '#ef4444' : null"
     style="top: 2px; transform: translateX(-2px)" *ngIf="interferingSettings.length > 0 || spnEnabled"></span>
 </div>
+
+<ng-template #splitTunMuted>
+  <a routerLink="/settings" [queryParams]="{setting: 'splittun/enable'}"
+    class="flex items-center justify-center w-full h-full gap-1.5 px-2.5 py-2 border border-gray-400 border-dashed rounded text-tertiary hover:text-secondary hover:border-gray-300 cursor-pointer"
+    snfgTooltipPosition="right"
+    [sfng-tooltip]="'app.enableSplitTun' | t: undefined : ('' | i18nVersion)">
+    <span>{{ 'app.splitTunInactive' | t: undefined : ('' | i18nVersion) }}</span>
+  </a>
+</ng-template>
 
 <ng-template #tooltipTemplate>
   {{ 'app.splitInterfering' | t: undefined : ('' | i18nVersion) }}

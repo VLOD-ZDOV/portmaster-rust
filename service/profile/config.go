@@ -697,7 +697,7 @@ Please note that DNS bypass attempts might be additionally blocked in the System
 		Key:          CfgOptionUseSPNKey,
 		Description:  "Protect network traffic with the Safing Privacy Network. If the SPN is not available or the connection is interrupted, network traffic will be blocked.",
 		OptType:      config.OptTypeBool,
-		DefaultValue: true,
+		DefaultValue: false,
 		Annotations: config.Annotations{
 			config.SettablePerAppAnnotation: true,
 			config.DisplayOrderAnnotation:   cfgOptionUseSPNOrder,
@@ -707,7 +707,7 @@ Please note that DNS bypass attempts might be additionally blocked in the System
 	if err != nil {
 		return err
 	}
-	cfgOptionUseSPN = config.Concurrent.GetAsBool(CfgOptionUseSPNKey, true)
+	cfgOptionUseSPN = config.Concurrent.GetAsBool(CfgOptionUseSPNKey, false)
 	cfgBoolOptions[CfgOptionUseSPNKey] = cfgOptionUseSPN
 
 	// SPN Rules

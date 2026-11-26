@@ -202,7 +202,12 @@ fn build_tray_menu(
     };
 
     // Xray VPN connection + global routing mode
-    let (spn_enabled, spn_button_text, spn_status_display) = match spn_status_text {
+    let spn_flag = SPN_STATE.load(Ordering::Acquire);
+    let effective_spn_status = match (spn_status_text, spn_flag) {
+        ("disabled" | "" | "unknown", true) => "connecting",
+        (other, _) => other,
+    };
+    let (spn_enabled, spn_button_text, spn_status_display) = match effective_spn_status {
         "connected" => (true, "Disconnect Xray VPN", "Connected"),
         "connecting" => (true, "Cancel Xray VPN", "Connecting..."),
         "failed" => (false, "Connect Xray VPN", "Failed"),
@@ -217,7 +222,7 @@ fn build_tray_menu(
     let spn_button = MenuItemBuilder::with_id(SPN_BUTTON_KEY, spn_button_text)
         .build(app)
         .unwrap();
-    let spn_use_item = CheckMenuItemBuilder::with_id(SPN_USE_KEY, "Route All Apps via VPN")
+    let spn_use_item = CheckMenuItemBuilder::with_id(SPN_USE_KEY, "Route All Apps via Xray VPN")
         .checked(SPN_USE_STATE.load(Ordering::Acquire))
         .build(app)?;
 
@@ -644,6 +649,7 @@ pub async fn tray_handler(cli: PortAPI, app: tauri::AppHandle) {
                 let Some(msg) = msg else { break };
                 if let Some(enabled) = parse_bool_config_response(msg) {
                     SPN_STATE.store(enabled, Ordering::Release);
+                    update_icon(icon.clone(), system_status.clone(), spn_status.clone());
                 }
             },
             msg = spn_use_subscription.recv() => {

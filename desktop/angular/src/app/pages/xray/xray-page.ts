@@ -30,6 +30,7 @@ export class XrayPageComponent implements OnInit, OnDestroy {
   selectedPinId: string | null = null;
   showRealExitIp = false;
   downloadingBinary = false;
+  spnEnabled = false;
   routeByDefault = false;
   autoConnect = false;
   resettingApps = false;
@@ -80,6 +81,13 @@ export class XrayPageComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     this.destroyRef.onDestroy(() => this.subscription.unsubscribe());
+
+    this.configService.watch<BoolSetting>('spn/enable')
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe(v => {
+        this.spnEnabled = !!v;
+        this.cdr.markForCheck();
+      });
 
     this.configService.watch<BoolSetting>('spn/use')
       .pipe(takeUntilDestroyed(this.destroyRef))
@@ -258,6 +266,18 @@ export class XrayPageComponent implements OnInit, OnDestroy {
   connect(pin: MapPin): void {
     this.xray.connect(pin.pin.ID).subscribe({
       next: () => this.actionIndicator.success(this.i18n.t('common.connect'), pin.pin.Name),
+      error: err => this.actionIndicator.error(this.i18n.t('common.error'), err),
+    });
+  }
+
+  connectDefault(): void {
+    const target = this.selectedPin || this.filteredPins[0] || this.pins[0];
+    if (target) {
+      this.connect(target);
+      return;
+    }
+    this.xray.connectLast().subscribe({
+      next: () => this.actionIndicator.success(this.i18n.t('common.connect'), ''),
       error: err => this.actionIndicator.error(this.i18n.t('common.error'), err),
     });
   }

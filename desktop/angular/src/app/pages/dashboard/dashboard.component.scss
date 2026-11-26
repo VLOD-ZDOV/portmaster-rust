@@ -87,7 +87,8 @@
 }
 
 app-dashboard-widget {
-  label {
+  label,
+  .mini-stat-label {
     @apply text-xs uppercase text-secondary font-light flex flex-row items-center gap-2 pb-2;
   }
 
@@ -156,7 +157,8 @@ app-dashboard-widget {
 .mini-stat {
   @apply flex flex-col items-center justify-center py-3 px-2 bg-gray-300 rounded shadow;
 
-  label {
+  label,
+  .mini-stat-label {
     @apply font-light uppercase text-xxs text-secondary -mb-2;
   }
 

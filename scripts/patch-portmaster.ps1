@@ -157,6 +157,10 @@ function Invoke-PortmasterPatch {
         if (Test-Path (Join-Path $latestBackup "portmaster-core.exe")) {
             Copy-Item -Path (Join-Path $latestBackup "portmaster-core.exe") -Destination (Join-Path $InstallDir "portmaster-core.exe") -Force
         }
+        if (Test-Path (Join-Path $latestBackup "portmaster.exe")) {
+            Get-Process -Name "portmaster" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Copy-Item -Path (Join-Path $latestBackup "portmaster.exe") -Destination (Join-Path $InstallDir "portmaster.exe") -Force
+        }
         if (Test-Path (Join-Path $latestBackup "config.json")) {
             Copy-Item -Path (Join-Path $latestBackup "config.json") -Destination (Join-Path $DataDir "config.json") -Force
         }
@@ -194,6 +198,7 @@ function Invoke-PortmasterPatch {
     $binUrl = "$BaseUrl/$binName"
     $uiUrl = "$BaseUrl/portmaster.zip"
     $pilotUrl = "$BaseUrl/pilot-web.zip"
+    $appUrl = "$BaseUrl/portmaster-app-windows-amd64.exe"
 
     $tempDir = Join-Path $env:TEMP ("pm-patch-" + [System.Guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
@@ -203,6 +208,17 @@ function Invoke-PortmasterPatch {
         $tempBin = Join-Path $tempDir $binName
         Write-Host "[*] Downloading $binName from $binUrl..." -ForegroundColor Gray
         Invoke-WebRequest -Uri $binUrl -OutFile $tempBin -UseBasicParsing -Headers @{ "User-Agent" = "PortmasterPatcher" }
+
+        # Download Tauri tray UI executable
+        $tempApp = Join-Path $tempDir "portmaster.exe"
+        $hasApp = $false
+        try {
+            Write-Host "[*] Downloading tray UI binary (portmaster-app-windows-amd64.exe)..." -ForegroundColor Gray
+            Invoke-WebRequest -Uri $appUrl -OutFile $tempApp -UseBasicParsing -Headers @{ "User-Agent" = "PortmasterPatcher" }
+            $hasApp = $true
+        } catch {
+            Write-Host "[*] Tray UI binary not found or download failed, continuing without tray binary update." -ForegroundColor Yellow
+        }
 
         # Download UI bundle
         $tempZip = Join-Path $tempDir "portmaster.zip"
@@ -226,7 +242,13 @@ function Invoke-PortmasterPatch {
             Write-Host "[*] Pilot UI bundle not found or download failed, continuing." -ForegroundColor Yellow
         }
 
-        # Stop Portmaster Service & cleanup driver
+        # Stop Portmaster Service, tray UI & cleanup driver
+        $appWasRunning = [bool](Get-Process -Name "portmaster" -ErrorAction SilentlyContinue)
+        if ($hasApp -and $appWasRunning) {
+            Write-Host "[*] Stopping Portmaster tray UI process..." -ForegroundColor Gray
+            Get-Process -Name "portmaster" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Milliseconds 500
+        }
         $serviceRunning = $false
         $pmService = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
         if ($pmService -and $pmService.Status -eq "Running") {
@@ -240,7 +262,7 @@ function Invoke-PortmasterPatch {
         & sc.exe delete PortmasterKext 2>$null | Out-Null
         Get-Process -Name "portmaster-core-rs", "portmaster-core" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
-        # Backup existing binary
+        # Backup existing binaries
         $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
         $currentBackup = Join-Path $BackupDir $stamp
         New-Item -ItemType Directory -Path $currentBackup -Force | Out-Null
@@ -250,15 +272,23 @@ function Invoke-PortmasterPatch {
             Copy-Item -Path $existingBin -Destination (Join-Path $currentBackup "portmaster-core.exe") -Force
             Write-Host "[*] Backed up original binary to: $currentBackup" -ForegroundColor Gray
         }
+        $existingApp = Join-Path $InstallDir "portmaster.exe"
+        if ($hasApp -and (Test-Path $existingApp)) {
+            Copy-Item -Path $existingApp -Destination (Join-Path $currentBackup "portmaster.exe") -Force
+        }
         $existingConfig = Join-Path $DataDir "config.json"
         if (Test-Path $existingConfig) {
             Copy-Item -Path $existingConfig -Destination (Join-Path $currentBackup "config.json") -Force
             Write-Host "[*] Backed up config.json to: $currentBackup" -ForegroundColor Gray
         }
 
-        # Install new binary
+        # Install new binaries
         Copy-Item -Path $tempBin -Destination (Join-Path $InstallDir $binName) -Force
         Copy-Item -Path $tempBin -Destination (Join-Path $InstallDir "portmaster-core.exe") -Force
+        if ($hasApp -and (Test-Path $tempApp)) {
+            Copy-Item -Path $tempApp -Destination (Join-Path $InstallDir "portmaster.exe") -Force
+            Write-Host "[*] Updated tray UI binary: $InstallDir\portmaster.exe" -ForegroundColor Gray
+        }
 
         # Also update in updates dir if present
         $updatesBin = Join-Path $DataDir "updates\windows_amd64\core\portmaster-core_windows_amd64.exe"
@@ -365,6 +395,11 @@ function Invoke-PortmasterPatch {
             Write-Host "[+] API is responsive and ready on http://127.0.0.1:817" -ForegroundColor Green
         } else {
             Write-Host "[!] API is still initializing; background workers are running." -ForegroundColor Yellow
+        }
+
+        if ($hasApp -and $appWasRunning -and (Test-Path (Join-Path $InstallDir "portmaster.exe"))) {
+            Write-Host "[*] Relaunching Portmaster tray UI..." -ForegroundColor Gray
+            Start-Process -FilePath (Join-Path $InstallDir "portmaster.exe") -ArgumentList "--background", "--with-prompts", "--with-notifications"
         }
 
         Write-Host ""

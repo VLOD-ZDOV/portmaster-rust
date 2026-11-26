@@ -2,7 +2,7 @@ import { KeyValue } from "@angular/common";
 import { AfterContentInit, AfterViewInit, ChangeDetectionStrategy, ChangeDetectorRef, Component, DestroyRef, ElementRef, OnInit, QueryList, TrackByFunction, ViewChild, ViewChildren, forwardRef, inject } from "@angular/core";
 import { takeUntilDestroyed } from "@angular/core/rxjs-interop";
 import { Router } from "@angular/router";
-import { AppProfileService, BandwidthChartResult, ChartResult, Database, FeatureID, Netquery, PortapiService, SPNService, UserProfile, Verdict } from "@safing/portmaster-api";
+import { AppProfileService, BandwidthChartResult, BoolSetting, ChartResult, ConfigService, Database, FeatureID, Netquery, PortapiService, SPNService, UserProfile, Verdict } from "@safing/portmaster-api";
 import { SfngDialogService, SfngTabGroupComponent } from "@safing/ui";
 import { Observable, catchError, filter, interval, map, repeat, retry, startWith, throwError } from "rxjs";
 import { ActionIndicatorService } from 'src/app/shared/action-indicator';
@@ -70,9 +70,12 @@ export class DashboardPageComponent implements OnInit, AfterViewInit {
   private readonly dialog = inject(SfngDialogService);
   private readonly portapi = inject(PortapiService)
   private readonly router = inject(Router);
+  private readonly configService = inject(ConfigService);
   private readonly xrayService = inject(XrayService);
 
   readonly xrayStatus$ = this.xrayService.status$;
+  spnEnabled = false;
+  routeByDefault = false;
 
   private readonly i18n = inject(I18nService);
 
@@ -162,9 +165,9 @@ export class DashboardPageComponent implements OnInit, AfterViewInit {
 
   bwChartConfig = createLocalizedBandwidthChartConfig(this.i18n);
 
-  activeConnections: number = 0;
-  blockedConnections: number = 0;
-  activeProfiles: number = 0;
+  activeConnections = 0;
+  blockedConnections = 0;
+  activeProfiles = 0;
   activeIdentities = 0;
   dataIncoming = 0;
   dataOutgoing = 0;
@@ -284,6 +287,20 @@ export class DashboardPageComponent implements OnInit, AfterViewInit {
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe(() => {
         this.bwChartConfig = createLocalizedBandwidthChartConfig(this.i18n);
+        this.cdr.markForCheck();
+      });
+
+    this.configService.watch<BoolSetting>('spn/enable')
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe(val => {
+        this.spnEnabled = !!val;
+        this.cdr.markForCheck();
+      });
+
+    this.configService.watch<BoolSetting>('spn/use')
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe(val => {
+        this.routeByDefault = !!val;
         this.cdr.markForCheck();
       });
 
@@ -427,7 +444,7 @@ export class DashboardPageComponent implements OnInit, AfterViewInit {
         this.updateMapCountries()
 
         // perCountryConns
-        let profiles = new Set<string>();
+        const profiles = new Set<string>();
 
         this.activeConnections = 0;
         this.countriesPerProfile = {};
@@ -519,6 +536,33 @@ export class DashboardPageComponent implements OnInit, AfterViewInit {
         this.i18n.t('dash.logout'),
         this.i18n.t('dash.logoutDone')
       ))
+  }
+
+  connectLastXray(): void {
+    this.xrayService.connectLast().subscribe({
+      next: () => {
+        this.actionIndicator.success(this.i18n.t('common.connect'), '');
+      },
+      error: (err) => {
+        this.actionIndicator.error(this.i18n.t('common.error'), err);
+      }
+    });
+  }
+
+  setRouteByDefault(value: boolean): void {
+    this.configService.save('spn/use', value).subscribe({
+      next: () => {
+        this.routeByDefault = value;
+        this.actionIndicator.success(
+          this.i18n.t('xray.routingSettingSaved'),
+          value ? this.i18n.t('xray.routeByDefaultOn') : this.i18n.t('xray.routeByDefaultOff')
+        );
+        this.cdr.markForCheck();
+      },
+      error: (err) => {
+        this.actionIndicator.error(this.i18n.t('common.error'), err);
+      }
+    });
   }
 
   disconnectXray(): void {

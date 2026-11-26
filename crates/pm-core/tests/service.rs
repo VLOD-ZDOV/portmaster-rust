@@ -914,3 +914,50 @@ async fn xray_routing_isolation_udp_policy_and_reset_endpoint() {
     service.tunnel_proxies.stop();
     let _ = std::fs::remove_dir_all(&data_dir);
 }
+
+#[tokio::test]
+async fn legacy_splittun_xray_coupling_cleaned_on_startup() {
+    // 1) Legacy v2.2.30 loopback proxy + splittun/enable=true with no policy or app overrides -> cleared on startup.
+    let data_dir = temp_dir("legacy-splittun-cleanup");
+    std::fs::write(
+        data_dir.join("config.json"),
+        serde_json::to_string_pretty(&json!({
+            "splittun": {
+                "enable": true,
+                "proxy": "socks5://127.0.0.1:1080"
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let options = test_options(&data_dir);
+    let service = Service::start(&options).await.unwrap();
+    assert_eq!(service.config.get_as_string("splittun/proxy", "x")(), "");
+    assert!(!service.config.get_as_bool("splittun/enable", true)());
+    assert!(!service.split_proxies.is_ready());
+    let _ = std::fs::remove_dir_all(&data_dir);
+
+    // 2) Legitimate external Split Tunnel proxy must NOT be touched on startup.
+    let data_dir_ext = temp_dir("external-splittun-preserved");
+    std::fs::write(
+        data_dir_ext.join("config.json"),
+        serde_json::to_string_pretty(&json!({
+            "splittun": {
+                "enable": true,
+                "proxy": "socks5://127.0.0.1:1081"
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let options_ext = test_options(&data_dir_ext);
+    let service_ext = Service::start(&options_ext).await.unwrap();
+    assert_eq!(
+        service_ext.config.get_as_string("splittun/proxy", "")(),
+        "socks5://127.0.0.1:1081"
+    );
+    assert!(service_ext.config.get_as_bool("splittun/enable", false)());
+    let _ = std::fs::remove_dir_all(&data_dir_ext);
+}

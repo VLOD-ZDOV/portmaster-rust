@@ -16,7 +16,7 @@ use crate::api_auth::{ApiAuthenticator, SystemLookup};
 use crate::cli::Options;
 
 /// Current Portmaster release version.
-pub const PORTMASTER_VERSION: &str = "2.2.32";
+pub const PORTMASTER_VERSION: &str = "2.2.33";
 /// GitHub repository for update checks.
 pub const CFG_GITHUB_RELEASE_REPO: &str = "core/updates/githubRepo";
 
@@ -543,6 +543,8 @@ impl Service {
             profile_store,
         )
         .map_err(|error| anyhow::anyhow!("load local profiles: {error}"))?);
+
+        cleanup_legacy_splittun_xray_coupling(&config, &profiles);
 
         // Save initial global configuration profile (profiles/special/global-config)
         // so UI and clients have a reference copy of all global settings.
@@ -1618,6 +1620,59 @@ impl Service {
             .clean_up();
         self.databases.shutdown()?;
         Ok(())
+    }
+}
+
+/// Removes stale `v2.2.30` coupling where Xray hijacked `splittun/proxy` and
+/// left `splittun/enable = true` on upgrade.
+fn cleanup_legacy_splittun_xray_coupling(
+    config: &Arc<Config>,
+    profiles: &crate::firewall::CoreProfiles,
+) {
+    let proxy = config.get_as_string("splittun/proxy", "")();
+    let iface = config.get_as_string("splittun/networkInterface", "")();
+    let xray_port = config
+        .get_as_int("xray/inboundPort", 1080)()
+        .clamp(1, i64::from(u16::MAX));
+    let is_xray_loopback = [1080, xray_port].into_iter().any(|port| {
+        proxy == format!("socks5://127.0.0.1:{port}")
+            || proxy == format!("http://127.0.0.1:{port}")
+    });
+
+    if !is_xray_loopback || !iface.is_empty() {
+        return;
+    }
+
+    tracing::info!(proxy = %proxy, "splittun: clearing stale legacy Xray proxy setting");
+    let _ = config.set_config_option("splittun/proxy", Value::String(String::new()));
+
+    let splittun_enabled = config.get_as_bool("splittun/enable", false)();
+    let splittun_use = config.get_as_bool("splittun/use", false)();
+    let splittun_policy = config.get_as_string_array("splittun/usagePolicy", &[])();
+    if splittun_enabled && !splittun_use && splittun_policy.is_empty() {
+        let any_app_uses_split = profiles
+            .store()
+            .all(pm_profile::SOURCE_LOCAL)
+            .map(|list| {
+                list.into_iter().any(|p| {
+                    p.config
+                        .get("splittun/use")
+                        .and_then(Value::as_bool)
+                        .or_else(|| {
+                            p.config
+                                .get("splittun")
+                                .and_then(Value::as_object)
+                                .and_then(|s| s.get("use"))
+                                .and_then(Value::as_bool)
+                        })
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(true);
+        if !any_app_uses_split {
+            tracing::info!("splittun: disabling stale legacy splittun/enable left by older Xray integration");
+            let _ = config.set_config_option("splittun/enable", Value::Bool(false));
+        }
     }
 }
 

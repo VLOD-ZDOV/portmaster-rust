@@ -144,10 +144,104 @@ jobs:
           name: portmaster-ui
           path: portmaster.zip
 
+      - name: Build Tauri builtin UI
+        run: npx ng build --configuration production --base-href / tauri-builtin
+
+      - name: Upload Tauri builtin UI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-builtin-dist
+          path: desktop/angular/dist/tauri-builtin
+
+  tauri-ui-linux:
+    name: Tauri Tray App (Linux)
+    needs: [angular-ui]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install GTK / WebKitGTK dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libgtk-3-dev \
+            libjavascriptcoregtk-4.1-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/tauri/src-tauri
+
+      - name: Download Tauri builtin UI
+        uses: actions/download-artifact@v4
+        with:
+          name: tauri-builtin-dist
+          path: desktop/angular/dist/tauri-builtin
+
+      - name: Build Tauri tray app
+        run: cargo build --release --manifest-path desktop/tauri/src-tauri/Cargo.toml --features custom-protocol
+
+      - name: Package Linux tray binary
+        run: |
+          mkdir -p dist
+          cp desktop/tauri/src-tauri/target/release/portmaster dist/portmaster-app-linux-amd64
+          chmod +x dist/portmaster-app-linux-amd64
+
+      - name: Upload Linux tray artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: portmaster-app-linux-amd64
+          path: dist/portmaster-app-linux-amd64
+
+  tauri-ui-windows:
+    name: Tauri Tray App (Windows)
+    needs: [angular-ui]
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/tauri/src-tauri
+
+      - name: Download Tauri builtin UI
+        uses: actions/download-artifact@v4
+        with:
+          name: tauri-builtin-dist
+          path: desktop/angular/dist/tauri-builtin
+
+      - name: Build Tauri tray app
+        run: cargo build --release --manifest-path desktop/tauri/src-tauri/Cargo.toml --features custom-protocol
+
+      - name: Package Windows tray binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp desktop/tauri/src-tauri/target/release/portmaster.exe dist/portmaster-app-windows-amd64.exe
+
+      - name: Upload Windows tray artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: portmaster-app-windows-amd64
+          path: dist/portmaster-app-windows-amd64.exe
+
   release:
     name: Publish Release Assets
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
-    needs: [rust-core-linux, rust-core-windows, go-core, angular-ui]
+    needs: [rust-core-linux, rust-core-windows, go-core, angular-ui, tauri-ui-linux, tauri-ui-windows]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -168,6 +262,9 @@ jobs:
           cp release-artifacts/portmaster-core-go-linux-amd64 dist/portmaster-core-go
           chmod +x dist/portmaster-core-go
           cp release-artifacts/portmaster-core-go-windows-amd64.exe dist/portmaster-core-go.exe
+          cp release-artifacts/portmaster-app-linux-amd64 dist/portmaster-app-linux-amd64
+          chmod +x dist/portmaster-app-linux-amd64
+          cp release-artifacts/portmaster-app-windows-amd64.exe dist/portmaster-app-windows-amd64.exe
           cp release-artifacts/portmaster.zip dist/portmaster.zip
           (cd pilot/leptos/web && zip -r ../../../dist/pilot-web.zip .)
           cp scripts/patch-portmaster.sh dist/patch-portmaster.sh

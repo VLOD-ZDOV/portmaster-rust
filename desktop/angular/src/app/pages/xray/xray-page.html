@@ -35,7 +35,7 @@
     </div>
 
     <div class="flex flex-row items-center gap-2">
-      <button *ngIf="(status$ | async)?.connected || (status$ | async)?.nodeId" type="button" (click)="disconnect()"
+      <button *ngIf="spnEnabled || (status$ | async)?.connected || (status$ | async)?.nodeId" type="button" (click)="disconnect()"
         class="px-3 py-1.5 text-xs font-medium rounded bg-red-400 text-white hover:bg-red-300 whitespace-nowrap cursor-pointer">
         {{ 'xray.disconnect' | t: undefined : ('' | i18nVersion) }}
       </button>
@@ -46,11 +46,10 @@
     </div>
   </div>
 
-  <!-- Default routing toggle, auto-connect, and quick settings -->
+  <!-- Default routing mode, auto-connect, and quick settings -->
   <div class="flex flex-row flex-wrap items-center justify-between gap-4 p-2.5 rounded bg-gray-300 bg-opacity-30 border border-gray-400 text-xs">
     <div class="flex flex-row flex-wrap items-center gap-6">
-      <div class="flex flex-row items-center gap-3">
-        <sfng-toggle [ngModel]="routeByDefault" (ngModelChange)="toggleRouteByDefault($event)"></sfng-toggle>
+      <div class="flex flex-row flex-wrap items-center gap-3">
         <div>
           <div class="font-medium text-primary">
             {{ 'xray.routeByDefault' | t: undefined : ('' | i18nVersion) }}
@@ -58,6 +57,18 @@
           <div class="text-xxs text-secondary">
             {{ (routeByDefault ? 'xray.routeByDefaultDescOn' : 'xray.routeByDefaultDescOff') | t: undefined : ('' | i18nVersion) }}
           </div>
+        </div>
+        <div class="inline-flex overflow-hidden border border-gray-500 rounded bg-gray-200 text-xxs">
+          <button type="button" (click)="toggleRouteByDefault(false)"
+            class="px-2.5 py-1 transition-colors cursor-pointer"
+            [ngClass]="!routeByDefault ? 'bg-blue text-white font-medium' : 'text-secondary hover:text-primary'">
+            {{ 'xray.modeSelective' | t: undefined : ('' | i18nVersion) }}
+          </button>
+          <button type="button" (click)="toggleRouteByDefault(true)"
+            class="px-2.5 py-1 transition-colors cursor-pointer border-l border-gray-500"
+            [ngClass]="routeByDefault ? 'bg-yellow-500 text-gray-900 font-medium' : 'text-secondary hover:text-primary'">
+            {{ 'xray.modeAllVpn' | t: undefined : ('' | i18nVersion) }}
+          </button>
         </div>
       </div>
 
@@ -75,6 +86,10 @@
     </div>
 
     <div class="flex flex-row flex-wrap items-center gap-3">
+      <button type="button" routerLink="/app/overview"
+        class="px-2.5 py-1 text-xxs rounded border border-blue bg-blue bg-opacity-20 hover:bg-opacity-30 text-blue cursor-pointer font-medium">
+        {{ 'xray.openAppsRouting' | t: undefined : ('' | i18nVersion) }} →
+      </button>
       <button type="button" (click)="resetAllAppOverrides()" [disabled]="resettingApps"
         class="px-2.5 py-1 text-xxs rounded border border-gray-500 bg-gray-200 hover:bg-gray-300 text-primary cursor-pointer">
         {{ 'xray.resetAllApps' | t: undefined : ('' | i18nVersion) }}
@@ -91,9 +106,38 @@
   </div>
 
   <div class="flex flex-row flex-1 min-h-0 gap-4">
-    <!-- The existing SPN map renderer, now also showing subscription nodes. -->
+    <!-- The existing SPN map renderer, with floating live Xray status & Disconnect button directly on the map. -->
     <div class="relative flex-1 min-h-0 overflow-hidden rounded bg-background">
       <spn-map-renderer class="block w-full h-full" mapId="spn-map"></spn-map-renderer>
+
+      <div *ngIf="status$ | async as st"
+        class="absolute top-3 left-3 z-10 flex flex-row flex-wrap items-center gap-3 px-3 py-2 rounded bg-gray-200 bg-opacity-90 border border-gray-400 shadow text-xs">
+        <span class="inline-block w-2.5 h-2.5 rounded-full"
+          [ngClass]="st.connected ? 'bg-green-400' : (spnEnabled ? 'bg-yellow-400' : 'bg-gray-500')"></span>
+        <div class="flex flex-col leading-tight">
+          <span class="font-medium text-primary">
+            <ng-container *ngIf="st.connected; else disconnectedMapLabel">
+              {{ st.node_name || ('xray.statusConnected' | t: undefined : ('' | i18nVersion)) }}
+            </ng-container>
+            <ng-template #disconnectedMapLabel>
+              {{ 'xray.statusDisconnected' | t: undefined : ('' | i18nVersion) }}
+            </ng-template>
+          </span>
+          <span class="text-xxs text-secondary">
+            <ng-container *ngIf="st.connected && st.exitIp">{{ st.exitIp }}<span *ngIf="st.exitCountry"> ({{ st.exitCountry }})</span> · </ng-container>
+            {{ (routeByDefault ? 'xray.modeAllVpn' : 'xray.modeSelective') | t: undefined : ('' | i18nVersion) }}
+          </span>
+        </div>
+
+        <button *ngIf="st.connected || st.nodeId || spnEnabled" type="button" (click)="disconnect()"
+          class="px-3 py-1 text-xs font-medium text-white rounded bg-red-500 hover:bg-red-400 cursor-pointer whitespace-nowrap">
+          {{ 'xray.disconnect' | t: undefined : ('' | i18nVersion) }}
+        </button>
+        <button *ngIf="!st.connected && !spnEnabled && pins.length > 0" type="button" (click)="connectDefault()"
+          class="px-3 py-1 text-xs font-medium text-white rounded bg-blue hover:bg-opacity-90 cursor-pointer whitespace-nowrap">
+          {{ 'common.connect' | t: undefined : ('' | i18nVersion) }}
+        </button>
+      </div>
 
       <spn-map-country-overlay *ngIf="hoveredCountry as ctry"
         class="absolute right-4 bottom-4"

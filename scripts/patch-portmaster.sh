@@ -79,6 +79,10 @@ if [[ "${ACTION}" == "restore" ]]; then
   if [[ -f "${LATEST_BACKUP}/portmaster-core" ]]; then
     cp -af "${LATEST_BACKUP}/portmaster-core" "${INSTALL_DIR}/portmaster-core"
   fi
+  if [[ -f "${LATEST_BACKUP}/portmaster" ]]; then
+    cp -af "${LATEST_BACKUP}/portmaster" "${INSTALL_DIR}/portmaster"
+    chmod 755 "${INSTALL_DIR}/portmaster"
+  fi
   if [[ -f "${LATEST_BACKUP}/config.json" ]]; then
     cp -af "${LATEST_BACKUP}/config.json" "${DATA_DIR}/config.json"
   fi
@@ -122,7 +126,9 @@ else
 fi
 
 BIN_NAME="portmaster-core-${TARGET_CORE}"
+APP_NAME="portmaster-app-linux-amd64"
 DOWNLOAD_BIN_URL="${BASE_URL}/${BIN_NAME}"
+DOWNLOAD_APP_URL="${BASE_URL}/${APP_NAME}"
 DOWNLOAD_UI_URL="${BASE_URL}/portmaster.zip"
 DOWNLOAD_PILOT_URL="${BASE_URL}/pilot-web.zip"
 
@@ -135,6 +141,15 @@ if ! download_file "${DOWNLOAD_BIN_URL}" "${TMP_DIR}/${BIN_NAME}"; then
   exit 1
 fi
 chmod +x "${TMP_DIR}/${BIN_NAME}"
+
+HAS_APP=0
+echo "[*] Downloading tray UI binary (${APP_NAME})..."
+if download_file "${DOWNLOAD_APP_URL}" "${TMP_DIR}/${APP_NAME}"; then
+  chmod +x "${TMP_DIR}/${APP_NAME}"
+  HAS_APP=1
+else
+  echo "[*] Notice: ${APP_NAME} download failed or not found, continuing without tray binary patch."
+fi
 
 echo "[*] Downloading modern UI bundle (portmaster.zip)..."
 download_file "${DOWNLOAD_UI_URL}" "${TMP_DIR}/portmaster.zip" || {
@@ -159,7 +174,7 @@ STAMP=$(date +%Y%m%d-%H%M%S)
 CURRENT_BACKUP="${BACKUP_DIR}/${STAMP}"
 mkdir -p "${CURRENT_BACKUP}"
 
-for target_file in portmaster-core portmaster-core-rs portmaster-core-go; do
+for target_file in portmaster-core portmaster-core-rs portmaster-core-go portmaster; do
   if [[ -f "${INSTALL_DIR}/${target_file}" ]]; then
     cp -af "${INSTALL_DIR}/${target_file}" "${CURRENT_BACKUP}/"
   fi
@@ -198,6 +213,17 @@ else
   cp -af "${TMP_DIR}/${BIN_NAME}" "${INSTALL_DIR}/portmaster-core"
   rm -f /etc/systemd/system/portmaster.service.d/50-rust-core.conf || true
   systemctl daemon-reload || true
+fi
+
+if [[ ${HAS_APP} -eq 1 ]]; then
+  echo "[*] Updating tray UI binary..."
+  cp -af "${TMP_DIR}/${APP_NAME}" "${INSTALL_DIR}/portmaster"
+  chmod 755 "${INSTALL_DIR}/portmaster"
+  if [[ -f "/usr/bin/portmaster" && ! -L "/usr/bin/portmaster" ]]; then
+    mv -f "/usr/bin/portmaster" "${CURRENT_BACKUP}/usr-bin-portmaster" || true
+  fi
+  ln -sf "${INSTALL_DIR}/portmaster" "/usr/bin/portmaster" || true
+  echo "[*] Notice: restart the Portmaster tray UI if it is currently running."
 fi
 
 # Unpack UI bundle if present

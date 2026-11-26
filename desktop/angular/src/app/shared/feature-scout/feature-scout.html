@@ -28,7 +28,7 @@
   </div>
 
   <div *ngIf="spnEnabled" class="flex flex-row justify-center w-full gap-2 pt-2">
-    <div class="status-info" [routerLink]="['/spn']">
+    <div class="status-info" [routerLink]="['/xray']">
 
       <span [ngSwitch]="spnStatus?.Status" [sfng-tooltip]="spnStatus?.Status === 'connected' ? spnTooltipTemplate : null">
         <ng-template ngSwitchCase="disabled">

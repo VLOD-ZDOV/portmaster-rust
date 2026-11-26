@@ -25,7 +25,8 @@
     <div class="flex flex-row items-center gap-4" *ngIf="xrayStatus$ | async as xs">
       <div class="flex flex-col text-xs leading-4 text-right">
         <span class="font-medium flex flex-row items-center gap-1.5 justify-end">
-          <span class="inline-block w-2 h-2 rounded-full" [class.bg-green-400]="xs.connected" [class.bg-gray-400]="!xs.connected"></span>
+          <span class="inline-block w-2 h-2 rounded-full"
+            [ngClass]="xs.connected ? 'bg-green-400' : (spnEnabled ? 'bg-yellow-400' : 'bg-gray-400')"></span>
           <span [class.text-green-300]="xs.connected" [class.text-secondary]="!xs.connected">
             {{ (xs.connected ? 'dash.xrayConnected' : 'dash.xrayDisconnected') | t: undefined : ('' | i18nVersion) }}
           </span>
@@ -36,8 +37,11 @@
         <span *ngIf="xs.connected && xs.exitIp" class="text-secondary text-xxs">
           IP: {{ xs.exitIp }} <span *ngIf="xs.exitCountry">({{ xs.exitCountry }})</span>
         </span>
+        <span class="text-xxs text-tertiary">
+          {{ (routeByDefault ? 'xray.modeAllVpn' : 'xray.modeSelective') | t: undefined : ('' | i18nVersion) }}
+        </span>
       </div>
-      <button *ngIf="xs.connected || xs.nodeId" type="button" (click)="disconnectXray()"
+      <button *ngIf="xs.connected || xs.nodeId || spnEnabled" type="button" (click)="disconnectXray()"
         class="text-xs font-normal text-white cursor-pointer btn bg-red-400 hover:bg-red-300 py-1.5 px-3 whitespace-nowrap">
         {{ 'xray.disconnect' | t: undefined : ('' | i18nVersion) }}
       </button>
@@ -61,22 +65,22 @@
     <!-- Mini Stats -->
     <div class="mini-stats-list">
       <div class="mini-stat" routerLink="/monitor" [queryParams]="{q: 'verdict:3 verdict:4'}">
-        <label routerLink="/monitor" [queryParams]="{q: 'verdict:3 verdict:4'}">{{ 'dash.connectionsBlocked' | t: undefined : ('' | i18nVersion) }}</label>
+        <div class="mini-stat-label" routerLink="/monitor" [queryParams]="{q: 'verdict:3 verdict:4'}">{{ 'dash.connectionsBlocked' | t: undefined : ('' | i18nVersion) }}</div>
         <span>{{ blockedConnections }}</span>
       </div>
 
       <div class="mini-stat" routerLink="/monitor" [queryParams]="{q: 'active:true'}">
-        <label routerLink="/monitor" [queryParams]="{q: 'active:true'}">{{ 'dash.activeConnections' | t: undefined : ('' | i18nVersion) }}</label>
+        <div class="mini-stat-label" routerLink="/monitor" [queryParams]="{q: 'active:true'}">{{ 'dash.activeConnections' | t: undefined : ('' | i18nVersion) }}</div>
         <span>{{ activeConnections }}</span>
       </div>
 
       <div class="mini-stat" routerLink="/monitor" [queryParams]="{q: 'active:true groupby:profile'}">
-        <label routerLink="/monitor" [queryParams]="{q: 'active:true groupby:profile'}">{{ 'dash.activeApps' | t: undefined : ('' | i18nVersion) }}</label>
+        <div class="mini-stat-label" routerLink="/monitor" [queryParams]="{q: 'active:true groupby:profile'}">{{ 'dash.activeApps' | t: undefined : ('' | i18nVersion) }}</div>
         <span>{{ activeProfiles }}</span>
       </div>
 
       <div class="mini-stat">
-        <label>{{ 'dash.dataReceived' | t: undefined : ('' | i18nVersion) }}</label>
+        <div class="mini-stat-label">{{ 'dash.dataReceived' | t: undefined : ('' | i18nVersion) }}</div>
         <span *ngIf="featureBw">
           {{ dataIncoming | bytes }}
         </span>
@@ -87,7 +91,7 @@
       </div>
 
       <div class="mini-stat">
-        <label>{{ 'dash.dataSent' | t: undefined : ('' | i18nVersion) }}</label>
+        <div class="mini-stat-label">{{ 'dash.dataSent' | t: undefined : ('' | i18nVersion) }}</div>
         <span *ngIf="featureBw">
           {{ dataOutgoing | bytes }}
         </span>
@@ -98,7 +102,7 @@
       </div>
 
       <div class="mini-stat" routerLink="/monitor" [queryParams]="{q: 'tunneled:true groupby:exit_node'}">
-        <label routerLink="/monitor" [queryParams]="{q: 'tunneled:true groupby:exit_node'}">{{ 'dash.spnIdentities' | t: undefined : ('' | i18nVersion) }}</label>
+        <div class="mini-stat-label" routerLink="/monitor" [queryParams]="{q: 'tunneled:true groupby:exit_node'}">{{ 'dash.spnIdentities' | t: undefined : ('' | i18nVersion) }}</div>
         <span *ngIf="featureSPN">{{ activeIdentities }}</span>
         <span *ngIf="!featureSPN"
           class="!text-xxs !font-light !text-tertiary !text-opacity-50 w-full text-center !leading-3">
@@ -111,16 +115,16 @@
   <app-dashboard-widget id="charts">
     <div class="mini-stats-list">
       <div class="mini-stat">
-        <label routerLink="/monitor">
+        <div class="mini-stat-label" routerLink="/monitor">
           {{ 'dash.activeBlocked' | t: undefined : ('' | i18nVersion) }}
-        </label>
+        </div>
         <sfng-netquery-line-chart activeConnectionColor="text-green-300 text-opacity-70" class="w-full !h-36"
           [data]="connectionChart"></sfng-netquery-line-chart>
       </div>
       <div class="mini-stat" *ngIf="featureSPN">
-        <label routerLink="/monitor" [queryParams]="{q: 'tunneled:true'}">
+        <div class="mini-stat-label" routerLink="/monitor" [queryParams]="{q: 'tunneled:true'}">
           {{ 'dash.tunneled' | t: undefined : ('' | i18nVersion) }}
-        </label>
+        </div>
         <sfng-netquery-line-chart
           [config]="{
             series: {
@@ -187,7 +191,36 @@
   </app-dashboard-widget>
 
   <app-dashboard-widget class="flex-grow" id="connmap" style="min-height: 400px" [label]="'dash.connCountries' | t: undefined : ('' | i18nVersion)" beta="true">
-    <spn-map-renderer class="w-full h-full" mapId="dashboard-map"></spn-map-renderer>
+    <div class="relative w-full h-full">
+      <spn-map-renderer class="w-full h-full" mapId="dashboard-map"></spn-map-renderer>
+      <div *ngIf="xrayStatus$ | async as xs"
+        class="absolute top-2 left-2 z-10 flex flex-row flex-wrap items-center gap-2 px-3 py-1.5 rounded bg-gray-200 bg-opacity-90 border border-gray-400 shadow text-xs">
+        <span class="inline-block w-2 h-2 rounded-full"
+          [ngClass]="xs.connected ? 'bg-green-400' : (spnEnabled ? 'bg-yellow-400' : 'bg-gray-400')"></span>
+        <span class="font-medium text-primary">
+          <ng-container *ngIf="xs.connected; else dashMapDisconnected">
+            {{ xs.node_name || ('dash.xrayConnected' | t: undefined : ('' | i18nVersion)) }}
+          </ng-container>
+          <ng-template #dashMapDisconnected>
+            {{ 'dash.xrayDisconnected' | t: undefined : ('' | i18nVersion) }}
+          </ng-template>
+        </span>
+        <span *ngIf="xs.connected && xs.exitIp" class="text-xxs text-secondary">
+          {{ xs.exitIp }}<span *ngIf="xs.exitCountry"> ({{ xs.exitCountry }})</span>
+        </span>
+        <button *ngIf="xs.connected || xs.nodeId || spnEnabled" type="button" (click)="disconnectXray()"
+          class="px-2.5 py-0.5 text-xxs font-medium text-white rounded bg-red-500 hover:bg-red-400 cursor-pointer whitespace-nowrap">
+          {{ 'xray.disconnect' | t: undefined : ('' | i18nVersion) }}
+        </button>
+        <button *ngIf="!xs.connected && !spnEnabled" type="button" (click)="connectLastXray()"
+          class="px-2.5 py-0.5 text-xxs font-medium text-white rounded bg-green-500 hover:bg-green-400 cursor-pointer whitespace-nowrap">
+          {{ 'common.connect' | t: undefined : ('' | i18nVersion) }}
+        </button>
+        <a routerLink="/xray" class="text-xxs text-blue hover:underline cursor-pointer whitespace-nowrap">
+          {{ 'dash.manageXray' | t: undefined : ('' | i18nVersion) }} →
+        </a>
+      </div>
+    </div>
   </app-dashboard-widget>
 
   <app-dashboard-widget class="flex-grow" id="bwvis-bar" [ngStyle]="{minHeight: featureBw ? '400px' : 'unset'}" [label]="'dash.topConsumers' | t: undefined : ('' | i18nVersion)" beta="true">

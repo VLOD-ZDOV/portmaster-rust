@@ -86,7 +86,7 @@
           </span>
           <span
             class="p-2 bg-gray-300 bg-opacity-50 rounded-br outline-none cursor-pointer text-primary text-xxs hover:bg-gray-400"
-            [routerLink]="['/spn']" [queryParams]="{app: profile.ID, pin: identity.ID}">
+            [routerLink]="['/xray']" [queryParams]="{app: profile.ID, pin: identity.ID}">
             <span class="font-light text-secondary">{{ 'ns.hops' | t: undefined : ('' | i18nVersion) }}</span>
             {{ identity.HopDistance }}
           </span>
@@ -123,7 +123,7 @@
 
     <span class="flex self-stretch -top-2 -bottom-2 text-tertiary">
       <div class="flex items-center justify-center w-6 h-full outline-none cursor-pointer hover:text-primary"
-        [routerLink]="['/spn']" *ngIf="data.identities.length > 0" [queryParams]="{app: data.ID}"
+        [routerLink]="['/xray']" *ngIf="data.identities.length > 0" [queryParams]="{app: data.ID}"
         (click)="$event.stopPropagation()">
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="w-3.5 h-3.5" stroke="currentColor">
           <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">

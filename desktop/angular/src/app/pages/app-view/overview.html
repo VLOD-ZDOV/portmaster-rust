@@ -85,6 +85,57 @@
   </div>
 </div>
 
+<div class="flex flex-row flex-wrap items-center justify-between gap-2 px-3 py-2 mb-3 rounded bg-gray-200 border border-gray-400 text-xs">
+  <div class="flex flex-row flex-wrap items-center gap-2">
+    <span class="text-secondary font-medium">{{ 'app.globalRoutingLabel' | t: undefined : ('' | i18nVersion) }}</span>
+    <div class="inline-flex overflow-hidden border border-gray-500 rounded bg-gray-300 text-xxs">
+      <button type="button" (click)="setGlobalRouteByDefault(false)"
+        class="px-2.5 py-1 transition-colors cursor-pointer"
+        [ngClass]="!globalRouteByDefault ? 'bg-blue text-white font-medium' : 'text-secondary hover:text-primary'">
+        {{ 'xray.modeSelective' | t: undefined : ('' | i18nVersion) }}
+      </button>
+      <button type="button" (click)="setGlobalRouteByDefault(true)"
+        class="px-2.5 py-1 transition-colors cursor-pointer border-l border-gray-500"
+        [ngClass]="globalRouteByDefault ? 'bg-blue text-white font-medium' : 'text-secondary hover:text-primary'">
+        {{ 'xray.modeAllVpn' | t: undefined : ('' | i18nVersion) }}
+      </button>
+    </div>
+
+    <button type="button" (click)="resetAllToDirect()" [disabled]="resettingRouting"
+      class="px-2.5 py-1 text-xxs rounded border border-gray-500 bg-gray-300 hover:bg-gray-400 text-primary cursor-pointer">
+      {{ 'app.resetAllDirect' | t: undefined : ('' | i18nVersion) }}
+    </button>
+  </div>
+
+  <div class="flex flex-row flex-wrap items-center gap-1.5 text-xxs">
+    <button type="button" (click)="setRoutingFilter('all')"
+      class="px-2 py-1 rounded border cursor-pointer transition-colors"
+      [ngClass]="routingFilter === 'all' ? 'border-blue bg-blue text-white font-medium' : 'border-gray-500 bg-gray-300 text-secondary hover:text-primary'">
+      {{ 'app.routeFilterAll' | t: undefined : ('' | i18nVersion) }} ({{ routeCounts.all }})
+    </button>
+    <button type="button" (click)="setRoutingFilter('vpn')"
+      class="px-2 py-1 rounded border cursor-pointer transition-colors"
+      [ngClass]="routingFilter === 'vpn' ? 'border-blue bg-blue text-white font-medium' : 'border-gray-500 bg-gray-300 text-secondary hover:text-primary'">
+      {{ 'app.routeFilterVpn' | t: undefined : ('' | i18nVersion) }} ({{ routeCounts.vpn }})
+    </button>
+    <button type="button" (click)="setRoutingFilter('direct')"
+      class="px-2 py-1 rounded border cursor-pointer transition-colors"
+      [ngClass]="routingFilter === 'direct' ? 'border-blue bg-blue text-white font-medium' : 'border-gray-500 bg-gray-300 text-secondary hover:text-primary'">
+      {{ 'app.routeFilterDirect' | t: undefined : ('' | i18nVersion) }} ({{ routeCounts.direct }})
+    </button>
+    <button type="button" (click)="setRoutingFilter('custom')"
+      class="px-2 py-1 rounded border cursor-pointer transition-colors"
+      [ngClass]="routingFilter === 'custom' ? 'border-blue bg-blue text-white font-medium' : 'border-gray-500 bg-gray-300 text-secondary hover:text-primary'">
+      {{ 'app.routeFilterCustom' | t: undefined : ('' | i18nVersion) }} ({{ routeCounts.custom }})
+    </button>
+    <button *ngIf="splitTunEnabled || routeCounts.splittun > 0" type="button" (click)="setRoutingFilter('splittun')"
+      class="px-2 py-1 rounded border cursor-pointer transition-colors"
+      [ngClass]="routingFilter === 'splittun' ? 'border-yellow-400 bg-yellow-500 bg-opacity-30 text-primary font-medium' : 'border-gray-500 bg-gray-300 text-secondary hover:text-primary'">
+      {{ 'app.routeFilterSplitTun' | t: undefined : ('' | i18nVersion) }} ({{ routeCounts.splittun }})
+    </button>
+  </div>
+</div>
+
 <div class="scrollable" [@fadeInList]="total">
   <ng-container *ngIf="runningProfiles.length > 0">
     <div class="scrollable-header">
@@ -133,6 +184,33 @@
             [innerHTML]="profile?.PresentationPath | safe:'html'"
           ></span>
         </span>
+
+        <div *ngIf="!selectMode" class="flex flex-row items-center gap-1 shrink-0 ml-2"
+          (click)="$event.stopPropagation(); $event.preventDefault()">
+          <span *ngIf="profile.effectiveSplitTun"
+            class="px-1.5 py-0.5 text-xxs rounded bg-yellow-500 bg-opacity-25 text-yellow-200 border border-yellow-400"
+            [sfng-tooltip]="'app.splitTunnel' | t: undefined : ('' | i18nVersion)">
+            ST
+          </span>
+          <div class="inline-flex overflow-hidden border border-gray-500 rounded bg-gray-200 text-xxs">
+            <button type="button" (click)="setAppVpnMode(profile, 'default', $event)"
+              [sfng-tooltip]="'app.routingDefault' | t: undefined : ('' | i18nVersion)"
+              class="px-1.5 py-0.5 transition-colors cursor-pointer"
+              [ngClass]="profile.spnOverride === 'default' ? (profile.effectiveVpn ? 'bg-blue text-white font-medium' : 'bg-gray-500 text-primary font-medium') : 'text-secondary hover:text-primary'">
+              {{ globalRouteByDefault ? 'Auto (Xray)' : 'Auto' }}
+            </button>
+            <button type="button" (click)="setAppVpnMode(profile, 'vpn', $event)"
+              class="px-1.5 py-0.5 transition-colors cursor-pointer border-l border-gray-500"
+              [ngClass]="profile.spnOverride === 'vpn' ? 'bg-blue text-white font-medium' : 'text-secondary hover:text-primary'">
+              Xray
+            </button>
+            <button type="button" (click)="setAppVpnMode(profile, 'direct', $event)"
+              class="px-1.5 py-0.5 transition-colors cursor-pointer border-l border-gray-500"
+              [ngClass]="profile.spnOverride === 'direct' ? 'bg-green-500 bg-opacity-40 text-white font-medium' : 'text-secondary hover:text-primary'">
+              {{ 'app.routingDirect' | t: undefined : ('' | i18nVersion) }}
+            </button>
+          </div>
+        </div>
 
         <input
           type="checkbox"

@@ -26,7 +26,7 @@ export class SPNStatusComponent implements OnInit {
   spnConnChart: ChartResult[] = [];
 
   /** The current amount of SPN identities used */
-  identities: number = 0;
+  identities = 0;
 
   /** The current SPN user profile */
   profile: UserProfile | null = null;
@@ -109,7 +109,7 @@ export class SPNStatusComponent implements OnInit {
   }
 
   openOrLogin() {
-    if (this.activeRoute.snapshot.firstChild?.url[0]?.path === "spn") {
+    if (this.activeRoute.snapshot.firstChild?.url[0]?.path === "xray" || this.activeRoute.snapshot.firstChild?.url[0]?.path === "spn") {
       this.dialog.create(SPNAccountDetailsComponent, {
         autoclose: true,
         backdrop: 'light'
@@ -118,7 +118,7 @@ export class SPNStatusComponent implements OnInit {
       return
     }
 
-    this.router.navigate(['/spn'])
+    this.router.navigate(['/xray'])
   }
 
   setSPNEnabled(v: boolean) {

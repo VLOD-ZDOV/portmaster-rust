@@ -46,7 +46,7 @@ export class QuickSettingUseSPNButtonComponent implements OnInit, OnChanges {
 
       const useSpnSetting = this.settings.find(s => s.Key === 'spn/use') as (BoolSetting | undefined);
       if (useSpnSetting) {
-        this.defaultValue = !!useSpnSetting.DefaultValue;
+        this.defaultValue = !!(useSpnSetting.GlobalDefault ?? useSpnSetting.DefaultValue);
         this.currentValue = getActualValue(useSpnSetting);
         if (useSpnSetting.Value !== undefined && useSpnSetting.Value !== null) {
           this.mode = useSpnSetting.Value ? 'vpn' : 'direct';
