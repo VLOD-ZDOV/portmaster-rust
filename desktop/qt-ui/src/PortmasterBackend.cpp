@@ -466,10 +466,10 @@ void PortmasterBackend::loadI18nCatalog() {
     const QJsonObject root = QJsonDocument::fromJson(f.readAll()).object();
     const QJsonObject ru = root.value(QStringLiteral("ru")).toObject();
     const QJsonObject en = root.value(QStringLiteral("en")).toObject();
-    for (auto it = ru.cbegin(); it != ru.cend(); ++it) {
+    for (auto it = ru.constBegin(); it != ru.constEnd(); ++it) {
         m_i18nRu.insert(it.key(), it.value().toString());
     }
-    for (auto it = en.cbegin(); it != en.cend(); ++it) {
+    for (auto it = en.constBegin(); it != en.constEnd(); ++it) {
         m_i18nEn.insert(it.key(), it.value().toString());
     }
 }
