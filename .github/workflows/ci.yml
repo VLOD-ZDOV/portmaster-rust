@@ -309,8 +309,13 @@ jobs:
 
       - name: Configure and build Qt 6 QML UI
         run: |
+          c++ --version | head -n1
           cmake -B build-qt -S desktop/qt-ui -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build-qt -j$(nproc)
+          if readelf -rW build-qt/portmaster-qt | grep -E "COPY|R_X86_64_COPY"; then
+            echo "ERROR: portmaster-qt contains unsupported COPY relocations"
+            exit 1
+          fi
 
       - name: Package Linux Qt binary
         run: |
