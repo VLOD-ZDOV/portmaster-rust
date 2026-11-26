@@ -201,8 +201,14 @@ function Invoke-PortmasterPatch {
     $binName = "portmaster-core-$Core.exe"
     $binUrl = "$BaseUrl/$binName"
     $uiUrl = "$BaseUrl/portmaster.zip"
+    $assetsUrl = "$BaseUrl/assets.zip"
     $pilotUrl = "$BaseUrl/pilot-web.zip"
     $appUrl = "$BaseUrl/portmaster-app-windows-amd64.exe"
+
+    New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+    New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $DataDir "logs") -Force | Out-Null
+    New-Item -ItemType Directory -Path $BackupDir -Force | Out-Null
 
     function Invoke-DownloadWithRetry {
         param(
@@ -249,6 +255,9 @@ function Invoke-PortmasterPatch {
 
         $tempZip = Join-Path $tempDir "portmaster.zip"
         $hasUi = Invoke-DownloadWithRetry -Uri $uiUrl -OutFile $tempZip -Label "portmaster.zip" -Required $true
+
+        $tempAssetsZip = Join-Path $tempDir "assets.zip"
+        $hasAssets = Invoke-DownloadWithRetry -Uri $assetsUrl -OutFile $tempAssetsZip -Label "assets.zip" -Required $false
 
         $tempPilotZip = Join-Path $tempDir "pilot-web.zip"
         $hasPilot = Invoke-DownloadWithRetry -Uri $pilotUrl -OutFile $tempPilotZip -Label "pilot-web.zip" -Required $false
@@ -361,9 +370,13 @@ function Invoke-PortmasterPatch {
         if ($hasUi -and (Test-Path $tempZip)) {
             Write-Host "[*] Updating Web UI..." -ForegroundColor Gray
 
-            # Copy UI zip archive for pm-api UiArchives
+            # Copy UI & assets zip archives for pm-api UiArchives
             Copy-Item -Path $tempZip -Destination (Join-Path $InstallDir "portmaster.zip") -Force
             Copy-Item -Path $tempZip -Destination (Join-Path $DataDir "portmaster.zip") -Force
+            if ($hasAssets -and (Test-Path $tempAssetsZip)) {
+                Copy-Item -Path $tempAssetsZip -Destination (Join-Path $InstallDir "assets.zip") -Force
+                Copy-Item -Path $tempAssetsZip -Destination (Join-Path $DataDir "assets.zip") -Force
+            }
 
             # 1. Pilot UI directory for Rust core: <DataDir>\pilot-web
             if ($hasPilot -and (Test-Path $tempPilotZip)) {
@@ -402,11 +415,73 @@ function Invoke-PortmasterPatch {
             }
         }
 
+        # Standalone install helper: ensure signed Windows kernel driver (portmaster-kext.sys) exists
+        $kextCandidates = @(
+            (Join-Path $InstallDir "portmaster-kext.sys"),
+            (Join-Path $DataDir "portmaster-kext.sys"),
+            (Join-Path $DataDir "updates\windows_amd64\kext\portmaster-kext.sys")
+        )
+        $hasKext = $false
+        foreach ($kc in $kextCandidates) {
+            if (Test-Path $kc) {
+                $hasKext = $true
+                break
+            }
+        }
+        if (-not $hasKext) {
+            Write-Host "[*] Standalone install: portmaster-kext.sys not found locally; fetching Microsoft/WHQL-signed kext..." -ForegroundColor Yellow
+            try {
+                $stableIdx = Invoke-RestMethod -Uri "https://updates.safing.io/stable.v3.json" -UseBasicParsing -Headers @{ "User-Agent" = "PortmasterPatcher" }
+                $kextArtifact = $stableIdx.Artifacts | Where-Object {
+                    ($_.Platform -eq "windows_amd64" -or -not $_.Platform) -and ($_.Filename -like "*portmaster-kext.sys*")
+                } | Select-Object -First 1
+                if ($kextArtifact -and $kextArtifact.URLs -and $kextArtifact.URLs.Count -gt 0) {
+                    $kextTmp = Join-Path $tempDir "portmaster-kext.download"
+                    if (Invoke-DownloadWithRetry -Uri $kextArtifact.URLs[0] -OutFile $kextTmp -Label "signed portmaster-kext.sys" -Required $false) {
+                        $kextDest = Join-Path $InstallDir "portmaster-kext.sys"
+                        if ($kextArtifact.URLs[0] -like "*.gz") {
+                            $fsIn = [System.IO.File]::OpenRead($kextTmp)
+                            $gz = New-Object System.IO.Compression.GzipStream($fsIn, [System.IO.Compression.CompressionMode]::Decompress)
+                            $fsOut = [System.IO.File]::Create($kextDest)
+                            $gz.CopyTo($fsOut)
+                            $fsOut.Close()
+                            $gz.Close()
+                            $fsIn.Close()
+                        } else {
+                            Copy-Item -Path $kextTmp -Destination $kextDest -Force
+                        }
+                        if ($kextArtifact.SHA256) {
+                            $actualKextHash = (Get-FileHash -Path $kextDest -Algorithm SHA256).Hash
+                            if ($actualKextHash -ne $kextArtifact.SHA256.ToUpper()) {
+                                Remove-Item -Path $kextDest -Force -ErrorAction SilentlyContinue
+                                throw "Checksum mismatch for signed portmaster-kext.sys"
+                            }
+                        }
+                        Write-Host "[+] Downloaded verified signed driver: $kextDest" -ForegroundColor Green
+                    }
+                }
+            } catch {
+                Write-Warning "Could not fetch signed portmaster-kext.sys automatically: $($_.Exception.Message)"
+            }
+        }
+
         # Register service if not present
         if (-not (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)) {
             Write-Host "[*] Service $ServiceName not found, creating Windows Service..." -ForegroundColor Gray
-            New-Service -Name $ServiceName -BinaryPathName "`"$InstallDir\portmaster-core.exe`"" -DisplayName "Portmaster Core" -StartupType Automatic
+            $logsDir = Join-Path $DataDir "logs"
+            New-Service -Name $ServiceName -BinaryPathName "`"$InstallDir\portmaster-core.exe`" --log-dir=`"$logsDir`"" -DisplayName "Portmaster Core" -StartupType Automatic
             $serviceRunning = $true
+        }
+
+        # Register autostart shortcut in Registry for standalone installs
+        $runKeyPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+        if (Test-Path $runKeyPath) {
+            try {
+                $existingRun = (Get-ItemProperty -Path $runKeyPath -Name "Portmaster" -ErrorAction SilentlyContinue).Portmaster
+                if (-not $existingRun) {
+                    Set-ItemProperty -Path $runKeyPath -Name "Portmaster" -Value "`"$InstallDir\portmaster.exe`" --with-prompts --with-notifications --background"
+                }
+            } catch {}
         }
 
         # Restart Portmaster Service and verify Running state
@@ -476,8 +551,8 @@ function Invoke-PortmasterPatch {
         } else {
             Join-Path $InstallDir "portmaster.exe"
         }
-        if ($hasApp -and $appWasRunning -and (Test-Path $launchExe)) {
-            Write-Host "[*] Relaunching Portmaster tray UI ($launchExe)..." -ForegroundColor Gray
+        if ($hasApp -and (Test-Path $launchExe)) {
+            Write-Host "[*] Starting Portmaster tray UI ($launchExe)..." -ForegroundColor Gray
             Start-Process -FilePath $launchExe -ArgumentList "--background", "--with-prompts", "--with-notifications"
         }
 

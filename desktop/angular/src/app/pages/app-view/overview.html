@@ -227,7 +227,7 @@
       </div>
     </ng-container>
 
-    <ng-container *ngIf="loading">
+    <ng-container *ngIf="loading && profiles.length === 0">
       <div class="card-header">
         <fa-icon class="card-icon loading" icon="square"></fa-icon>
         <app-text-placeholder
@@ -265,8 +265,30 @@
 </div>
 
 <div
-  *ngIf="total === 0 && searchTerm !== ''"
-  class="flex justify-center items-center p-2 bg-gray-200 text-secondary"
+  *ngIf="loading && profiles.length === 0"
+  class="scrollable"
 >
-  {{ 'app.noMatch' | t: undefined : ('' | i18nVersion) }}
+  <div class="card-header">
+    <fa-icon class="card-icon loading" icon="square"></fa-icon>
+    <app-text-placeholder mode="input" width="small" class="card-title"></app-text-placeholder>
+  </div>
+  <div class="card-header">
+    <fa-icon class="card-icon loading" icon="square"></fa-icon>
+    <app-text-placeholder mode="input" width="7rem" class="card-title"></app-text-placeholder>
+  </div>
+</div>
+
+<div
+  *ngIf="!loading && total === 0"
+  class="flex flex-col justify-center items-center gap-2 p-4 bg-gray-200 rounded text-secondary"
+>
+  <span>{{ (searchTerm !== '' || routingFilter !== 'all' ? 'app.noMatch' : 'app.noProfiles') | t: undefined : ('' | i18nVersion) }}</span>
+  <button
+    *ngIf="routingFilter !== 'all'"
+    type="button"
+    (click)="setRoutingFilter('all')"
+    class="px-2.5 py-1 text-xxs rounded border border-gray-500 bg-gray-300 hover:bg-gray-400 text-primary cursor-pointer"
+  >
+    {{ 'app.routeFilterAll' | t: undefined : ('' | i18nVersion) }}
+  </button>
 </div>

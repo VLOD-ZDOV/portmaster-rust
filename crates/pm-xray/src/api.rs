@@ -384,5 +384,33 @@ pub fn register_api(xray: &Arc<Xray>, api: &Api) -> pm_api::Result<()> {
         }),
     )?;
 
+    let geodata = Arc::clone(xray);
+    api.register_endpoint(
+        Endpoint::new(
+            "xray/download-geodata",
+            "Download Xray GeoIP and GeoSite Databases",
+            "Downloads the latest community geoip.dat and geosite.dat rulesets into the Portmaster xray directory.",
+        )
+        .with_write(PERMIT_ADMIN)
+        .with_write_method("POST")
+        .with_struct(move |_| {
+            let (geoip_path, geosite_path) =
+                geodata.download_and_install_geodata().map_err(crate::Error::api)?;
+            if geodata.is_connected() {
+                if let Err(error) = geodata.connect_last() {
+                    tracing::warn!(%error, "xray: failed to reload active node after geodata update");
+                }
+            }
+            serde_json::to_value(json!({
+                "success": true,
+                "geoipPath": geoip_path,
+                "geositePath": geosite_path,
+                "geoipAvailable": true,
+                "geositeAvailable": true,
+            }))
+            .map_err(pm_api::ApiError::Json)
+        }),
+    )?;
+
     Ok(())
 }

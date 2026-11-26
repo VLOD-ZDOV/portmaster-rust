@@ -45,6 +45,9 @@ export class RuleListComponent implements ControlValueAccessor {
     '-': 'Block',
   }
 
+  @Input()
+  placeholder = 'example.com, .ru, 1.2.3.0/24';
+
   /**
    * Whether or not the component should be displayed as read-only.
    */
@@ -197,7 +200,7 @@ export class RuleListComponent implements ControlValueAccessor {
   }
 
   /** @private onChange callback registered by ngModel and form controls */
-  onChange = (_: string[]): void => { };
+  onChange: (value: string[]) => void = () => undefined;
 
   /** Registers the onChange callback and required for the ControlValueAccessor interface */
   registerOnChange(fn: (value: string[]) => void) {
@@ -205,7 +208,7 @@ export class RuleListComponent implements ControlValueAccessor {
   }
 
   /** @private onTouch callback registered by ngModel and form controls */
-  onTouch = (): void => { };
+  onTouch: () => void = () => undefined;
 
   /** Registers the onChange callback and required for the ControlValueAccessor interface */
   registerOnTouched(fn: () => void) {

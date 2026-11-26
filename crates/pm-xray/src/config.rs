@@ -552,8 +552,45 @@ pub fn write_config_full(
         std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
             .map_err(|error| Error::Config(error.to_string()))?;
     }
+    let has_geoip = directory.join("geoip.dat").is_file();
+    let has_geosite = directory.join("geosite.dat").is_file();
     let path = directory.join(format!("xray-{}.json", node.id));
-    let config = generate_config_full(node, inbound_port, inbound, stats_port, rules)?;
+    let mut config = generate_config_full(node, inbound_port, inbound, stats_port, rules)?;
+    if !has_geoip || !has_geosite {
+        if let Some(rule_arr) = config
+            .get_mut("routing")
+            .and_then(|r| r.get_mut("rules"))
+            .and_then(Value::as_array_mut)
+        {
+            let before = rule_arr.len();
+            rule_arr.retain(|rule| {
+                let needs_geoip = rule
+                    .get("ip")
+                    .and_then(Value::as_array)
+                    .is_some_and(|ips| {
+                        ips.iter()
+                            .any(|v| v.as_str().is_some_and(|s| s.starts_with("geoip:")))
+                    });
+                let needs_geosite = rule
+                    .get("domain")
+                    .and_then(Value::as_array)
+                    .is_some_and(|ds| {
+                        ds.iter()
+                            .any(|v| v.as_str().is_some_and(|s| s.starts_with("geosite:")))
+                    });
+                (!needs_geoip || has_geoip) && (!needs_geosite || has_geosite)
+            });
+            if rule_arr.len() < before {
+                tracing::warn!(
+                    skipped = before - rule_arr.len(),
+                    has_geoip,
+                    has_geosite,
+                    dir = %directory.display(),
+                    "xray: skipped geoip:/geosite: rules because geoip.dat/geosite.dat is missing; download GeoIP/GeoSite data to enable them"
+                );
+            }
+        }
+    }
     let text = serde_json::to_string_pretty(&config).map_err(|error| Error::Config(error.to_string()))?;
     std::fs::write(&path, text).map_err(|error| Error::Config(error.to_string()))?;
     #[cfg(unix)]
@@ -637,5 +674,35 @@ mod tests {
             assert_eq!(config["inbounds"][0]["protocol"], "http");
             assert_eq!(config["inbounds"][0]["port"], 2080);
         }
+    }
+
+    #[test]
+    fn skips_geo_rules_when_dat_assets_missing() {
+        let dir = std::env::temp_dir().join(format!("pm-xray-geotest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let xray_dir = dir.join(CONFIG_DIR);
+        std::fs::create_dir_all(&xray_dir).unwrap();
+
+        let test_node = node("vless://00010203-0405-0607-0809-0a0b0c0d0e0f@example.com:443");
+        let rules = vec![
+            "- LAN".to_string(),
+            "- geoip:ru".to_string(),
+            "+ geosite:youtube".to_string(),
+            "+ .example.com".to_string(),
+        ];
+
+        // Without geoip.dat / geosite.dat, geoip:/geosite: rules are omitted so Xray can still start.
+        let cfg_path = write_config_full(&dir, &test_node, 1080, InboundProtocol::Socks, 0, Some(&rules)).unwrap();
+        let written: Value = serde_json::from_str(&std::fs::read_to_string(&cfg_path).unwrap()).unwrap();
+        assert_eq!(written["routing"]["rules"].as_array().unwrap().len(), 2);
+
+        // Once geoip.dat and geosite.dat exist, all 4 rules are emitted.
+        std::fs::write(xray_dir.join("geoip.dat"), b"dummy").unwrap();
+        std::fs::write(xray_dir.join("geosite.dat"), b"dummy").unwrap();
+        let cfg_path2 = write_config_full(&dir, &test_node, 1080, InboundProtocol::Socks, 0, Some(&rules)).unwrap();
+        let written2: Value = serde_json::from_str(&std::fs::read_to_string(&cfg_path2).unwrap()).unwrap();
+        assert_eq!(written2["routing"]["rules"].as_array().unwrap().len(), 4);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

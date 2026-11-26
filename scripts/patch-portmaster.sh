@@ -134,6 +134,7 @@ APP_NAME="portmaster-app-linux-amd64"
 DOWNLOAD_BIN_URL="${BASE_URL}/${BIN_NAME}"
 DOWNLOAD_APP_URL="${BASE_URL}/${APP_NAME}"
 DOWNLOAD_UI_URL="${BASE_URL}/portmaster.zip"
+DOWNLOAD_ASSETS_URL="${BASE_URL}/assets.zip"
 DOWNLOAD_PILOT_URL="${BASE_URL}/pilot-web.zip"
 
 TMP_DIR=$(mktemp -d /tmp/pm-patch.XXXXXX)
@@ -158,6 +159,11 @@ if ! download_file "${DOWNLOAD_UI_URL}" "${TMP_DIR}/portmaster.zip"; then
   echo "[!] Failed to download UI bundle from: ${DOWNLOAD_UI_URL}" >&2
   exit 1
 fi
+
+echo "[*] Downloading UI static assets (assets.zip)..."
+download_file "${DOWNLOAD_ASSETS_URL}" "${TMP_DIR}/assets.zip" || {
+  echo "[*] Notice: assets.zip not found in release ${TAG}, keeping existing if any."
+}
 
 echo "[*] Downloading Rust Pilot UI bundle (pilot-web.zip)..."
 download_file "${DOWNLOAD_PILOT_URL}" "${TMP_DIR}/pilot-web.zip" || {
@@ -251,6 +257,79 @@ TARGET_BIN_PATH="${INSTALL_DIR}/${BIN_NAME}"
 cp -af "${TMP_DIR}/${BIN_NAME}" "${TARGET_BIN_PATH}"
 chmod 755 "${TARGET_BIN_PATH}"
 
+# Install standalone systemd service & desktop integration if missing
+mkdir -p "${DATA_DIR}/log"
+if [[ ! -f "/usr/lib/systemd/system/portmaster.service" && ! -f "/lib/systemd/system/portmaster.service" && ! -f "/etc/systemd/system/portmaster.service" ]]; then
+  echo "[*] No existing portmaster.service found; installing standalone systemd service..."
+  mkdir -p /usr/lib/systemd/system
+  cat > /usr/lib/systemd/system/portmaster.service <<EOF
+[Unit]
+Description=Portmaster by Safing (standalone fork install)
+After=systemd-networkd.service
+Before=nss-lookup.target network.target shutdown.target
+Conflicts=shutdown.target firewalld.service
+Wants=nss-lookup.target
+
+[Service]
+Type=simple
+Restart=on-failure
+RestartSec=10
+RestartForceExitStatus=23
+RestartPreventExitStatus=24
+LockPersonality=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+Environment=LOGLEVEL=info
+ProtectSystem=true
+ReadWritePaths=${INSTALL_DIR}
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+RestrictNamespaces=yes
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+PrivateDevices=yes
+AmbientCapabilities=cap_chown cap_kill cap_net_admin cap_net_bind_service cap_net_broadcast cap_net_raw cap_sys_module cap_sys_ptrace cap_dac_override cap_fowner cap_fsetid cap_sys_resource cap_bpf cap_perfmon
+CapabilityBoundingSet=cap_chown cap_kill cap_net_admin cap_net_bind_service cap_net_broadcast cap_net_raw cap_sys_module cap_sys_ptrace cap_dac_override cap_fowner cap_fsetid cap_sys_resource cap_bpf cap_perfmon
+StateDirectory=portmaster
+WorkingDirectory=${DATA_DIR}
+ExecStart=${INSTALL_DIR}/portmaster-core --log=\${LOGLEVEL} --log-dir=${DATA_DIR}/log
+ExecStopPost=-${INSTALL_DIR}/portmaster-core --recover-iptables
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload || true
+  systemctl enable portmaster.service || true
+fi
+
+if [[ ! -f "/usr/share/applications/Portmaster.desktop" && -d "/usr/share/applications" ]]; then
+  cat > /usr/share/applications/Portmaster.desktop <<EOF
+[Desktop Entry]
+Name=Portmaster
+GenericName=Application Firewall & Xray VPN
+Exec=/usr/bin/portmaster --with-prompts --with-notifications
+Icon=portmaster
+StartupWMClass=portmaster
+Terminal=false
+Type=Application
+Categories=System;Network;
+EOF
+fi
+if [[ ! -f "/etc/xdg/autostart/portmaster-autostart.desktop" && -d "/etc/xdg/autostart" ]]; then
+  cat > /etc/xdg/autostart/portmaster-autostart.desktop <<EOF
+[Desktop Entry]
+Name=Portmaster
+GenericName=Application Firewall Notifier
+Exec=/usr/bin/portmaster --with-prompts --with-notifications --background
+Icon=portmaster
+Terminal=false
+Type=Application
+Categories=System;
+NoDisplay=true
+EOF
+fi
+
 # Ensure default execution points to chosen core
 if [[ "${TARGET_CORE}" == "rs" ]]; then
   cp -af "${TMP_DIR}/${BIN_NAME}" "${INSTALL_DIR}/portmaster-core"
@@ -303,6 +382,14 @@ cp -af "${TMP_DIR}/portmaster.zip" "${INSTALL_DIR}/portmaster.zip"
 chmod 644 "${INSTALL_DIR}/portmaster.zip"
 cp -af "${TMP_DIR}/portmaster.zip" "${DATA_DIR}/portmaster.zip"
 chmod 644 "${DATA_DIR}/portmaster.zip"
+
+if [[ -f "${TMP_DIR}/assets.zip" ]]; then
+  echo "[*] Installing UI assets archive (assets.zip)..."
+  cp -af "${TMP_DIR}/assets.zip" "${INSTALL_DIR}/assets.zip"
+  chmod 644 "${INSTALL_DIR}/assets.zip"
+  cp -af "${TMP_DIR}/assets.zip" "${DATA_DIR}/assets.zip"
+  chmod 644 "${DATA_DIR}/assets.zip"
+fi
 
 if command -v unzip >/dev/null 2>&1; then
   UI_DEST="${DATA_DIR}/ui/modules/portmaster"

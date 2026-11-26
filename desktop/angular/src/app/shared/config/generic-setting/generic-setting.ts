@@ -14,6 +14,7 @@ import { ExpertiseService } from '../../expertise/expertise.service';
 import { SPNAccountDetailsComponent } from '../../spn-account-details';
 import { I18nService } from 'src/i18n';
 import { DNS_PRESETS } from '../dns-presets';
+import { FIREWALL_VPN_POLICY_PRESETS, XRAY_RULE_PRESETS } from '../routing-presets';
 
 export interface SaveSettingEvent<S extends BaseSetting<any, any> = any> {
   key: string;
@@ -550,6 +551,8 @@ export class GenericSettingComponent<S extends BaseSetting<any, any>> implements
     this._rejected = null;
   }
 
+  appendQuickSettings = false;
+
   /**
    * @private
    * Update the current value by applying a quick-setting.
@@ -561,7 +564,13 @@ export class GenericSettingComponent<S extends BaseSetting<any, any>> implements
       return;
     }
 
-    const value = applyQuickSetting(this._currentValue, qs);
+    const effectiveQs: QuickSetting<SettingValueType<S>> =
+      this.appendQuickSettings && (!qs.Action || qs.Action === 'replace') && Array.isArray(qs.Value)
+        ? { ...qs, Action: 'merge-bottom' }
+        : qs;
+
+    const current = (this._currentValue ?? null) as SettingValueType<S> | null;
+    const value = applyQuickSetting(current, effectiveQs);
     if (value === null) {
       return;
     }
@@ -705,9 +714,42 @@ export class GenericSettingComponent<S extends BaseSetting<any, any>> implements
    * A list of quick-settings available for the setting.
    * The getter makes sure to always return an array.
    */
+  get rulePlaceholder(): string {
+    if (this.setting?.Key === 'xray/rules') {
+      return 'geosite:youtube, geoip:ru, .example.com, 1.2.3.0/24';
+    }
+    if (this.setting?.Key === 'spn/usagePolicy') {
+      return '.youtube.com, .ru, RU, AS62041, LAN, 1.2.3.0/24';
+    }
+    return 'example.com, .ru, 1.2.3.0/24';
+  }
+
+  get ruleHelperKey(): string | null {
+    if (this.setting?.Key === 'xray/rules') {
+      return 'cfg.xrayRulesHelp';
+    }
+    if (this.setting?.Key === 'spn/usagePolicy') {
+      return 'cfg.vpnPolicyHelp';
+    }
+    return null;
+  }
+
+  get showAppendQuickSettingOption(): boolean {
+    if (this.setting?.OptType !== OptionType.StringArray) {
+      return false;
+    }
+    return this.quickSettings.some((q) => !q.Action || q.Action === 'replace');
+  }
+
   get quickSettings(): QuickSetting<SettingValueType<S>>[] {
     if (this.setting?.Key === 'dns/nameservers') {
       return DNS_PRESETS as any;
+    }
+    if (this.setting?.Key === 'xray/rules') {
+      return XRAY_RULE_PRESETS as any;
+    }
+    if (this.setting?.Key === 'spn/usagePolicy') {
+      return FIREWALL_VPN_POLICY_PRESETS as any;
     }
     if (!this.setting || !this.setting.Annotations[WellKnown.QuickSetting]) {
       return [];

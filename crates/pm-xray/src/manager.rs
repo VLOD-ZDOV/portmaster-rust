@@ -359,10 +359,15 @@ impl XrayManager {
             .as_ref()
             .filter(|node| !node.country_code.is_empty())
             .map(|node| node.country_code.clone());
+        let xray_dir = self.data_dir.join("xray");
+        let geoip_available = xray_dir.join("geoip.dat").is_file();
+        let geosite_available = xray_dir.join("geosite.dat").is_file();
         XrayStatus {
             enabled: self.binary_available(),
             binary: self.binary(),
             binary_available: self.binary_available(),
+            geoip_available,
+            geosite_available,
             state: state.state,
             node_id: state.node.as_ref().map(|node| node.id.clone()),
             node_name: state.node.as_ref().map(|node| node.name.clone()),

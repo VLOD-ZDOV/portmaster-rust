@@ -15,7 +15,7 @@
           <span *ngIf="st.exitCountry"> ({{ st.exitCountry }})</span>
         </span>
       </p>
-      <div *ngIf="status$ | async as st" class="mt-0.5 text-xxs flex flex-row items-center gap-2">
+      <div *ngIf="status$ | async as st" class="mt-0.5 text-xxs flex flex-row flex-wrap items-center gap-2">
         <span *ngIf="st.binary_available" class="text-secondary">
           {{ 'xray.binaryAvailable' | t: { path: st.binary }: ('' | i18nVersion) }}
         </span>
@@ -26,6 +26,18 @@
           class="px-2 py-0.5 text-xxs font-medium rounded bg-blue text-white hover:bg-opacity-90 inline-flex items-center gap-1 cursor-pointer">
           <fa-icon icon="spinner" [spin]="true" *ngIf="downloadingBinary"></fa-icon>
           <span>{{ (downloadingBinary ? 'xray.downloadingBinary' : 'xray.downloadBinaryBtn') | t: undefined : ('' | i18nVersion) }}</span>
+        </button>
+
+        <span *ngIf="st.geoipAvailable && st.geositeAvailable" class="text-green-300">
+          · {{ 'xray.geodataAvailable' | t: undefined : ('' | i18nVersion) }}
+        </span>
+        <span *ngIf="!st.geoipAvailable || !st.geositeAvailable" class="text-amber-400">
+          · {{ 'xray.geodataMissing' | t: undefined : ('' | i18nVersion) }}
+        </span>
+        <button type="button" (click)="downloadGeodata()" [disabled]="downloadingGeodata"
+          class="px-2 py-0.5 text-xxs font-medium rounded border border-gray-500 bg-gray-300 text-primary hover:bg-gray-200 inline-flex items-center gap-1 cursor-pointer">
+          <fa-icon icon="spinner" [spin]="true" *ngIf="downloadingGeodata"></fa-icon>
+          <span>{{ (downloadingGeodata ? 'xray.downloadingGeodata' : 'xray.downloadGeodataBtn') | t: undefined : ('' | i18nVersion) }}</span>
         </button>
       </div>
       <label class="inline-flex flex-row items-center gap-1.5 mt-1 text-xs text-secondary cursor-pointer" *ngIf="(status$ | async)?.connected">

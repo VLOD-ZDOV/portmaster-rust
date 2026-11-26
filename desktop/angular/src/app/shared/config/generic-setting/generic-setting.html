@@ -88,6 +88,16 @@
     </app-menu-trigger>
 
     <app-menu #quickSettingsMenu>
+      <div
+        *ngIf="showAppendQuickSettingOption"
+        (click)="$event.stopPropagation()"
+        class="px-3 py-1.5 border-b border-gray-500 text-xxs bg-gray-300"
+      >
+        <label class="inline-flex items-center gap-1.5 cursor-pointer text-primary">
+          <input type="checkbox" [(ngModel)]="appendQuickSettings" />
+          <span>{{ 'cfg.appendQuickSetting' | t: undefined : ('' | i18nVersion) }}</span>
+        </label>
+      </div>
       <app-menu-item *ngFor="let quick of quickSettings" (click)="applyQuickSetting(quick)">
         {{ quickSettingName(quick) }}
       </app-menu-item>
@@ -99,8 +109,22 @@
 
     <!-- Rule lists -->
     <ng-container *ngSwitchCase="optionHint.EndpointList">
-      <app-rule-list class="w-full mt-4" [readonly]="disabled" [ngModel]="_currentValue"
-        (ngModelChange)="updateValue($event, true)" [symbolMap]="symbolMap"></app-rule-list>
+      <div *ngIf="ruleHelperKey && !disabled" class="mt-3 p-2.5 rounded border border-gray-500 bg-gray-300 bg-opacity-40 text-xxs text-secondary flex flex-col gap-2">
+        <div>{{ ruleHelperKey | t: undefined : ('' | i18nVersion) }}</div>
+        <div *ngIf="(quickSettings || []).length > 0" class="flex flex-row flex-wrap items-center gap-1.5">
+          <span class="text-tertiary mr-1">{{ 'cfg.quickPresetsLabel' | t: undefined : ('' | i18nVersion) }}</span>
+          <button
+            *ngFor="let quick of quickSettings"
+            type="button"
+            (click)="applyQuickSetting(quick)"
+            class="px-2 py-0.5 rounded border border-gray-500 bg-gray-200 hover:bg-gray-400 text-primary cursor-pointer transition-colors"
+          >
+            + {{ quickSettingName(quick) }}
+          </button>
+        </div>
+      </div>
+      <app-rule-list class="w-full mt-3" [readonly]="disabled" [ngModel]="_currentValue"
+        (ngModelChange)="updateValue($event, true)" [symbolMap]="symbolMap" [placeholder]="rulePlaceholder"></app-rule-list>
 
       <div class="stacked-values" *ngIf="showStackable">
         <h4>{{ 'cfg.stacksOnTop' | t: undefined : ('' | i18nVersion) }} <a class="underline text-tertiary hover:text-primary"

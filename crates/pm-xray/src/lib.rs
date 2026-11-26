@@ -565,24 +565,25 @@ impl Xray {
         })
     }
 
-    /// Returns the SHA-256 digest GitHub publishes for the latest release asset.
-    fn latest_asset_digest(agent: &ureq::Agent, asset_name: &str) -> Result<String> {
+    /// Returns the SHA-256 digest GitHub publishes for a latest release asset.
+    fn latest_asset_digest(agent: &ureq::Agent, repo: &str, asset_name: &str) -> Result<String> {
         use std::io::Read;
+        let url = format!("https://api.github.com/repos/{repo}/releases/latest");
         let mut response = agent
-            .get("https://api.github.com/repos/XTLS/Xray-core/releases/latest")
+            .get(&url)
             .header("User-Agent", "Portmaster-Rust")
             .header("Accept", "application/vnd.github+json")
             .call()
-            .map_err(|e| Error::Fetch(format!("failed to fetch Xray release metadata: {e}")))?;
+            .map_err(|e| Error::Fetch(format!("failed to fetch {repo} release metadata: {e}")))?;
         let mut body = Vec::new();
         response
             .body_mut()
             .as_reader()
             .take(2 * 1024 * 1024)
             .read_to_end(&mut body)
-            .map_err(|e| Error::Fetch(format!("failed to read Xray release metadata: {e}")))?;
+            .map_err(|e| Error::Fetch(format!("failed to read {repo} release metadata: {e}")))?;
         let release: serde_json::Value = serde_json::from_slice(&body)
-            .map_err(|e| Error::Fetch(format!("invalid Xray release metadata: {e}")))?;
+            .map_err(|e| Error::Fetch(format!("invalid {repo} release metadata: {e}")))?;
         let digest = release
             .get("assets")
             .and_then(|assets| assets.as_array())
@@ -593,11 +594,48 @@ impl Xray {
             })
             .and_then(|asset| asset.get("digest"))
             .and_then(|digest| digest.as_str())
-            .ok_or_else(|| Error::Fetch(format!("no digest for {asset_name}")))?;
+            .ok_or_else(|| Error::Fetch(format!("no digest for {asset_name} in {repo}")))?;
         digest
             .strip_prefix("sha256:")
             .map(str::to_string)
             .ok_or_else(|| Error::Fetch(format!("unsupported digest for {asset_name}: {digest}")))
+    }
+
+    fn download_verified_asset(
+        agent: &ureq::Agent,
+        repo: &str,
+        asset_name: &str,
+        max_size: u64,
+    ) -> Result<Vec<u8>> {
+        use sha2::{Digest, Sha256};
+        use std::io::Read;
+
+        let expected_digest = Self::latest_asset_digest(agent, repo, asset_name)?;
+        let download_url = format!("https://github.com/{repo}/releases/latest/download/{asset_name}");
+        let mut response = agent
+            .get(&download_url)
+            .header("User-Agent", "Portmaster-Rust")
+            .call()
+            .map_err(|e| Error::Fetch(format!("failed to download {asset_name}: {e}")))?;
+
+        let mut payload = Vec::new();
+        response
+            .body_mut()
+            .as_reader()
+            .take(max_size + 1)
+            .read_to_end(&mut payload)
+            .map_err(|e| Error::Process(format!("failed to read {asset_name} payload: {e}")))?;
+        if payload.len() as u64 > max_size || payload.is_empty() {
+            return Err(Error::Process(format!("{asset_name} archive/file size out of bounds")));
+        }
+
+        let actual = hex::encode(Sha256::digest(&payload));
+        if !actual.eq_ignore_ascii_case(&expected_digest) {
+            return Err(Error::Process(format!(
+                "{asset_name} checksum mismatch: expected {expected_digest}, got {actual}"
+            )));
+        }
+        Ok(payload)
     }
 
     /// Downloads the latest official Xray-core binary from GitHub, extracts it
@@ -620,38 +658,9 @@ impl Xray {
         };
 
         let asset_name = format!("Xray-{os}-{arch}.zip");
-        let download_url = format!("https://github.com/XTLS/Xray-core/releases/latest/download/{asset_name}");
-
-        tracing::info!(%download_url, "downloading Xray-core release binary");
+        tracing::info!(%asset_name, "downloading Xray-core release binary");
         let agent = ureq::Agent::new_with_defaults();
-        let expected_digest = Self::latest_asset_digest(&agent, &asset_name)?;
-        let mut response = agent
-            .get(&download_url)
-            .header("User-Agent", "Portmaster-Rust")
-            .call()
-            .map_err(|e| Error::Fetch(format!("failed to download {asset_name}: {e}")))?;
-
-        const MAX_DOWNLOAD_SIZE: u64 = 64 * 1024 * 1024;
-        let mut zip_bytes = Vec::new();
-        let mut reader = response
-            .body_mut()
-            .as_reader()
-            .take(MAX_DOWNLOAD_SIZE + 1);
-        reader
-            .read_to_end(&mut zip_bytes)
-            .map_err(|e| Error::Process(format!("failed to read zip payload: {e}")))?;
-        if zip_bytes.len() as u64 > MAX_DOWNLOAD_SIZE {
-            return Err(Error::Process("Xray release archive is too large".to_string()));
-        }
-        {
-            use sha2::{Digest, Sha256};
-            let actual = hex::encode(Sha256::digest(&zip_bytes));
-            if !actual.eq_ignore_ascii_case(&expected_digest) {
-                return Err(Error::Process(format!(
-                    "Xray release checksum mismatch: expected {expected_digest}, got {actual}"
-                )));
-            }
-        }
+        let zip_bytes = Self::download_verified_asset(&agent, "XTLS/Xray-core", &asset_name, 64 * 1024 * 1024)?;
 
         let cursor = std::io::Cursor::new(zip_bytes);
         let mut archive = zip::ZipArchive::new(cursor)
@@ -681,7 +690,7 @@ impl Xray {
                     .map_err(|e| Error::Process(format!("failed to extract binary: {e}")))?;
                 binary_bytes = Some(buf);
             } else if raw_name == "geoip.dat" || raw_name.ends_with("/geoip.dat") {
-                if file.size() > 32 * 1024 * 1024 {
+                if file.size() > 64 * 1024 * 1024 {
                     return Err(Error::Process("Xray geoip.dat is too large".to_string()));
                 }
                 let mut buf = Vec::new();
@@ -689,7 +698,7 @@ impl Xray {
                     .map_err(|e| Error::Process(format!("failed to extract geoip.dat: {e}")))?;
                 geoip_bytes = Some(buf);
             } else if raw_name == "geosite.dat" || raw_name.ends_with("/geosite.dat") {
-                if file.size() > 32 * 1024 * 1024 {
+                if file.size() > 64 * 1024 * 1024 {
                     return Err(Error::Process("Xray geosite.dat is too large".to_string()));
                 }
                 let mut buf = Vec::new();
@@ -738,6 +747,55 @@ impl Xray {
         let _ = self.config.set_config_option(CFG_XRAY_ENABLE, serde_json::Value::Bool(true));
 
         Ok(path_str)
+    }
+
+    /// Downloads the latest community `geoip.dat` and `geosite.dat` rulesets
+    /// (`Loyalsoldier/v2ray-rules-dat`) into `<data-dir>/xray` with SHA-256 verification.
+    pub fn download_and_install_geodata(&self) -> Result<(String, String)> {
+        let xray_dir = self.data_dir.join("xray");
+        std::fs::create_dir_all(&xray_dir)
+            .map_err(|e| Error::Process(format!("failed to create dir {}: {e}", xray_dir.display())))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&xray_dir, std::fs::Permissions::from_mode(0o700))
+                .map_err(|e| Error::Process(format!("failed to secure xray dir: {e}")))?;
+        }
+
+        let agent = ureq::Agent::new_with_defaults();
+        const MAX_DAT_SIZE: u64 = 64 * 1024 * 1024;
+        let geoip_bytes = Self::download_verified_asset(
+            &agent,
+            "Loyalsoldier/v2ray-rules-dat",
+            "geoip.dat",
+            MAX_DAT_SIZE,
+        )?;
+        let geosite_bytes = Self::download_verified_asset(
+            &agent,
+            "Loyalsoldier/v2ray-rules-dat",
+            "geosite.dat",
+            MAX_DAT_SIZE,
+        )?;
+
+        let write_atomic = |name: &str, bytes: &[u8]| -> Result<String> {
+            let final_path = xray_dir.join(name);
+            let tmp_path = xray_dir.join(format!("{name}.tmp"));
+            std::fs::write(&tmp_path, bytes)
+                .map_err(|e| Error::Process(format!("failed to write {}: {e}", tmp_path.display())))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o644));
+            }
+            std::fs::rename(&tmp_path, &final_path)
+                .map_err(|e| Error::Process(format!("failed to install {}: {e}", final_path.display())))?;
+            Ok(final_path.to_string_lossy().into_owned())
+        };
+
+        let geoip_path = write_atomic("geoip.dat", &geoip_bytes)?;
+        let geosite_path = write_atomic("geosite.dat", &geosite_bytes)?;
+        tracing::info!(%geoip_path, %geosite_path, "Xray GeoIP/GeoSite rulesets installed");
+        Ok((geoip_path, geosite_path))
     }
 
     /// Returns the process state enriched with live traffic counters. Stats

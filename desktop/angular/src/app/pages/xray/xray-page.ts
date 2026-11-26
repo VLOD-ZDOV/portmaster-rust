@@ -30,6 +30,7 @@ export class XrayPageComponent implements OnInit, OnDestroy {
   selectedPinId: string | null = null;
   showRealExitIp = false;
   downloadingBinary = false;
+  downloadingGeodata = false;
   spnEnabled = false;
   routeByDefault = false;
   autoConnect = false;
@@ -368,6 +369,30 @@ export class XrayPageComponent implements OnInit, OnDestroy {
       error: err => {
         this.downloadingBinary = false;
         this.actionIndicator.error(this.i18n.t('xray.downloadFailed'), err);
+        this.cdr.markForCheck();
+      },
+    });
+  }
+
+  downloadGeodata(): void {
+    if (this.downloadingGeodata) {
+      return;
+    }
+    this.downloadingGeodata = true;
+    this.cdr.markForCheck();
+    this.xray.downloadGeodata().subscribe({
+      next: () => {
+        this.downloadingGeodata = false;
+        this.actionIndicator.success(
+          this.i18n.t('xray.downloadGeodataSuccess'),
+          'geoip.dat + geosite.dat'
+        );
+        this.reload();
+        this.cdr.markForCheck();
+      },
+      error: err => {
+        this.downloadingGeodata = false;
+        this.actionIndicator.error(this.i18n.t('xray.downloadGeodataFailed'), err);
         this.cdr.markForCheck();
       },
     });

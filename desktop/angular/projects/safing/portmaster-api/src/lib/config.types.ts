@@ -263,8 +263,8 @@ export function applyQuickSetting<V extends OptionValueType>(current: V | null, 
     return current;
   }
 
-  const clone = deepClone(current);
-  let missing: any[] = [];
+  const clone: any[] = Array.isArray(current) ? deepClone(current) : [];
+  const missing: any[] = [];
 
   qs.Value.forEach(val => {
     if (clone.includes(val)) {

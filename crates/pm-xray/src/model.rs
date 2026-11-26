@@ -190,6 +190,10 @@ pub struct XrayStatus {
     /// Configured or resolved binary path.
     pub binary: String,
     pub binary_available: bool,
+    #[serde(rename = "geoipAvailable", alias = "geoip_available")]
+    pub geoip_available: bool,
+    #[serde(rename = "geositeAvailable", alias = "geosite_available")]
+    pub geosite_available: bool,
     pub state: ProcessState,
     /// UI-facing alias of `node_id`.
     #[serde(rename = "nodeId", alias = "node_id", skip_serializing_if = "Option::is_none")]

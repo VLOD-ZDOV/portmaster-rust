@@ -16,8 +16,8 @@ import {
   trackById,
 } from '@safing/portmaster-api';
 import { SfngDialogService } from '@safing/ui';
-import { BehaviorSubject, Subscription, combineLatest, forkJoin } from 'rxjs';
-import { debounceTime, filter, startWith, switchMap } from 'rxjs/operators';
+import { BehaviorSubject, Subscription, combineLatest, forkJoin, of } from 'rxjs';
+import { catchError, debounceTime, filter, startWith, switchMap } from 'rxjs/operators';
 import {
   fadeInAnimation,
   fadeInListAnimation,
@@ -234,13 +234,33 @@ export class AppOverviewComponent implements OnInit, OnDestroy {
     // watch all profiles and re-emit (debounced) when the user
     // enters or chanages the search-text.
     this.subscription = combineLatest([
-      this.profileService.watchProfiles(),
+      this.profileService.watchProfiles().pipe(
+        catchError((err) => {
+          console.error('[overview] watchProfiles error:', err);
+          return of([] as AppProfile[]);
+        })
+      ),
       this.onSearch.pipe(debounceTime(100), startWith('')),
-      this.netquery.getActiveProfileIDs().pipe(startWith([] as string[])),
-      this.configService.watch<BoolSetting>('spn/use').pipe(startWith(false)),
-      this.configService.watch<BoolSetting>('spn/enable').pipe(startWith(false)),
-      this.configService.watch<BoolSetting>('splittun/enable').pipe(startWith(false)),
-      this.configService.watch<BoolSetting>('splittun/use').pipe(startWith(false)),
+      this.netquery.getActiveProfileIDs().pipe(
+        catchError(() => of([] as string[])),
+        startWith([] as string[])
+      ),
+      this.configService.watch<BoolSetting>('spn/use').pipe(
+        catchError(() => of(false)),
+        startWith(false)
+      ),
+      this.configService.watch<BoolSetting>('spn/enable').pipe(
+        catchError(() => of(false)),
+        startWith(false)
+      ),
+      this.configService.watch<BoolSetting>('splittun/enable').pipe(
+        catchError(() => of(false)),
+        startWith(false)
+      ),
+      this.configService.watch<BoolSetting>('splittun/use').pipe(
+        catchError(() => of(false)),
+        startWith(false)
+      ),
       this.onFilterChange,
     ]).subscribe(([profiles, searchTerm, activeProfiles, globalSpnUse, spnEnable, splitTunEnable, globalSplitTunUse, routingFilter]) => {
       this.loading = false;
@@ -250,9 +270,18 @@ export class AppOverviewComponent implements OnInit, OnDestroy {
       this.globalSplitTunUse = !!globalSplitTunUse;
       this.routingFilter = routingFilter;
 
+      const validProfiles = (profiles || [])
+        .filter((profile): profile is AppProfile => !!profile && !!profile.ID && (profile.Source as string) !== 'special' && profile.ID !== 'global-config')
+        .map((profile) => ({
+          ...profile,
+          Name: profile.Name || profile.PresentationPath || profile.ID || '',
+        }));
+
+      const activeList = Array.isArray(activeProfiles) ? activeProfiles : [];
+
       // find all profiles that match the search term. For searchTerm="" thsi
       // will return all profiles.
-      const filtered = this.searchService.searchList(profiles, searchTerm, {
+      const filtered = this.searchService.searchList(validProfiles, searchTerm, {
         ignoreLocation: true,
         ignoreFieldNorm: true,
         threshold: 0.1,
@@ -281,8 +310,8 @@ export class AppOverviewComponent implements OnInit, OnDestroy {
       const sortedLocal: LocalAppProfile[] = filtered
         .map((item) => item.item)
         .sort((a, b) => {
-          const aName = a.Name.toLocaleLowerCase();
-          const bName = b.Name.toLocaleLowerCase();
+          const aName = (a.Name || a.ID || '').toLocaleLowerCase();
+          const bName = (b.Name || b.ID || '').toLocaleLowerCase();
 
           if (aName > bName) {
             return 1;
@@ -360,7 +389,7 @@ export class AppOverviewComponent implements OnInit, OnDestroy {
 
       this.total = visibleProfiles.length;
       visibleProfiles.forEach((local) => {
-        if (activeProfiles.includes(local.Source + '/' + local.ID)) {
+        if (activeList.includes(local.Source + '/' + local.ID)) {
           this.runningProfiles.push(local);
         } else if (local.LastEdited >= recentlyUsedThreshold) {
           this.recentlyEdited.push(local);

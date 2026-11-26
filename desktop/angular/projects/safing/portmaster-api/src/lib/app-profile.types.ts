@@ -114,8 +114,13 @@ export function getAppSetting<T extends OptionValueType>(
   obj: ConfigMap | null | undefined,
   path: string
 ): T | null {
-  if (obj === null || obj === undefined) {
-    return null
+  if (!isConfigMap(obj)) {
+    return null;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(obj, path)) {
+    const direct = obj[path];
+    return direct === undefined ? null : (direct as T);
   }
 
   const parts = path.split('/');
@@ -130,7 +135,7 @@ export function getAppSetting<T extends OptionValueType>(
 
     const value = iter[propName];
     if (idx === parts.length - 1) {
-      return value as T;
+      return value === undefined ? null : (value as T);
     }
 
     if (!isConfigMap(value)) {
@@ -162,10 +167,17 @@ export function getActualValue<S extends BaseSetting<any, any>>(
  * @param value The new value to set.
  */
 export function setAppSetting(obj: ConfigObject, path: string, value: any) {
-  const parts = path.split('/');
-  if (typeof obj !== 'object' || Array.isArray(obj)) {
+  if (!isConfigMap(obj)) {
     return;
   }
+
+  if (value === undefined) {
+    delete obj[path];
+  } else if (Object.prototype.hasOwnProperty.call(obj, path) && path.includes('/')) {
+    delete obj[path];
+  }
+
+  const parts = path.split('/');
 
   let iter = obj;
   for (let idx = 0; idx < parts.length; idx++) {
@@ -180,7 +192,10 @@ export function setAppSetting(obj: ConfigObject, path: string, value: any) {
       return;
     }
 
-    if (iter[propName] === undefined) {
+    if (!isConfigMap(iter[propName])) {
+      if (value === undefined) {
+        return;
+      }
       iter[propName] = {};
     }
 
@@ -190,7 +205,7 @@ export function setAppSetting(obj: ConfigObject, path: string, value: any) {
 
 /** Typeguard to ensure v is a ConfigMap */
 function isConfigMap(v: any): v is ConfigMap {
-  return typeof v === 'object' && !Array.isArray(v);
+  return v !== null && typeof v === 'object' && !Array.isArray(v);
 }
 
 /**

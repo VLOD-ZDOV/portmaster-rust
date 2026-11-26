@@ -266,6 +266,7 @@ jobs:
           chmod +x dist/portmaster-app-linux-amd64
           cp release-artifacts/portmaster-app-windows-amd64.exe dist/portmaster-app-windows-amd64.exe
           cp release-artifacts/portmaster.zip dist/portmaster.zip
+          (cd assets/data && zip -r ../../dist/assets.zip .)
           (cd pilot/leptos/web && zip -r ../../../dist/pilot-web.zip .)
           cp scripts/patch-portmaster.sh dist/patch-portmaster.sh
           cp scripts/patch-portmaster.ps1 dist/patch-portmaster.ps1

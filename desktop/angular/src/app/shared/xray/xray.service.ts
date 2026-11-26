@@ -97,6 +97,24 @@ export class XrayService {
       .pipe(tap(() => this.refresh()));
   }
 
+  /** Download / update geoip.dat and geosite.dat rulesets into Portmaster xray directory. */
+  downloadGeodata(): Observable<{
+    success: boolean;
+    geoipPath: string;
+    geositePath: string;
+    geoipAvailable: boolean;
+    geositeAvailable: boolean;
+  }> {
+    return this.http.post<{
+      success: boolean;
+      geoipPath: string;
+      geositePath: string;
+      geoipAvailable: boolean;
+      geositeAvailable: boolean;
+    }>(`${this.basePath}/download-geodata`, {})
+      .pipe(tap(() => this.refresh()));
+  }
+
   /** Reset per-app VPN (spn/use) and Split Tunnel (splittun/use) overrides across all apps. */
   resetRoutingOverrides(): Observable<{ updated: number; profiles: string[] }> {
     return this.http.post<{ updated: number; profiles: string[] }>(`${this.apiBase}/profiles/reset-routing`, {});

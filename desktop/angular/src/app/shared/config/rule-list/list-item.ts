@@ -21,6 +21,9 @@ export class RuleListItemComponent implements OnInit {
   @Input()
   symbolMap: { [key: string]: string } = {}
 
+  @Input()
+  placeholder = 'example.com, .ru, 1.2.3.0/24';
+
   /**
    * The current value (rule) displayed by this component.
    * Supports two-way bindings.
@@ -66,7 +69,7 @@ export class RuleListItemComponent implements OnInit {
   get edit() {
     return this._edit;
   }
-  private _edit: boolean = false;
+  private _edit = false;
 
   /**
    * Emits whenever the component switch to or away from edit
@@ -86,7 +89,7 @@ export class RuleListItemComponent implements OnInit {
   get readonly() {
     return this._readonly;
   }
-  private _readonly: boolean = false;
+  private _readonly = false;
 
   /**
    * Emits when the user presses the delete button of
@@ -118,8 +121,10 @@ export class RuleListItemComponent implements OnInit {
   constructor(private cdr: ChangeDetectorRef) { }
 
   ngOnInit() {
-    // new entries always start in edit mode
+    // new entries always start in edit mode with a valid default verdict
     if (!this.isAllow && !this.isBlock) {
+      this.isAllow = true;
+      this.isBlock = false;
       this._edit = true;
     }
   }
@@ -170,8 +175,15 @@ export class RuleListItemComponent implements OnInit {
    * @param entity The new rule value
    */
   setEntity(entity: string) {
-    const action = this.isAllow ? '+' : '-';
-    this.updateValue(`${action} ${entity}`);
+    const trimmed = entity.trimStart();
+    if (trimmed.startsWith('+ ') || trimmed.startsWith('- ')) {
+      const verdict = trimmed[0];
+      const rest = trimmed.slice(1).trimStart();
+      this.updateValue(`${verdict} ${rest}`);
+      return;
+    }
+    const action = this.isBlock ? '-' : '+';
+    this.updateValue(`${action} ${trimmed}`);
   }
 
   /**
