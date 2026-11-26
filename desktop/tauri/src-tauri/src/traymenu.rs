@@ -369,7 +369,13 @@ fn build_tray_menu(
 fn spawn_qt_gui_no_tray() -> bool {
     if let Some(qt_bin) = find_qt_binary() {
         match std::process::Command::new(&qt_bin).arg("--no-tray").spawn() {
-            Ok(_) => return true,
+            Ok(mut child) => {
+                // Reap the child asynchronously so closed Qt windows never leave <defunct> zombies.
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+                return true;
+            }
             Err(err) => {
                 error!("[tauri] failed to launch portmaster-qt ({}): {}", qt_bin.display(), err);
             }

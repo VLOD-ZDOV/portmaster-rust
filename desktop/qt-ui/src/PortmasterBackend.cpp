@@ -2,19 +2,75 @@
 
 #include <QApplication>
 #include <QDateTime>
+#include <QDir>
+#include <QDirIterator>
+#include <QFile>
+#include <QFileInfo>
 #include <QIcon>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QMenu>
+#include <QMutexLocker>
 #include <QPainter>
 #include <QPixmap>
+#include <QPointer>
 #include <QPolygon>
 #include <QRegularExpression>
 #include <QSettings>
+#include <QStandardPaths>
+#include <QTextStream>
 #include <QUrl>
 #include <QtMath>
+#include <cmath>
 
 namespace {
+double mercatorLatToY(double latDeg) {
+    const double clamped = qBound(-60.0, latDeg, 78.0);
+    return std::asinh(std::tan(qDegreesToRadians(clamped)));
+}
+
+QPointF projectNormalized(double lat, double lon) {
+    static const double yMax = mercatorLatToY(78.0);
+    static const double yMin = mercatorLatToY(-60.0);
+    static const double ySpan = yMax - yMin;
+    const double nx = qBound(0.0, (lon + 180.0) / 360.0, 1.0);
+    const double ny = qBound(0.0, (yMax - mercatorLatToY(lat)) / ySpan, 1.0);
+    return QPointF(nx, ny);
+}
+
+QString appAvatarColor(const QString& seed) {
+    static const char* kPalette[] = {
+        "#d32f2f", "#c2185b", "#7b1fa2", "#512da8", "#303f9f",
+        "#1976d2", "#0288d1", "#0097a7", "#00796b", "#388e3c",
+        "#689f38", "#827717", "#f57f17", "#ef6c00", "#d84315",
+        "#5d4037", "#455a64", "#283593", "#00695c"
+    };
+    quint32 sum = 0;
+    for (const QChar ch : seed) sum += ch.unicode();
+    return QLatin1String(kPalette[sum % 19]);
+}
+
+QString localizeChoiceName(const QString& rawName, const QString& val, bool ru) {
+    if (!ru) return rawName;
+    if (val == QLatin1String("permit") || rawName == QLatin1String("Allow")) return QStringLiteral("Разрешить");
+    if (val == QLatin1String("block") || rawName == QLatin1String("Block")) return QStringLiteral("Блокировать");
+    if (val == QLatin1String("ask") || rawName == QLatin1String("Prompt")) return QStringLiteral("Запрашивать");
+    if (val == QLatin1String("angular")) return QStringLiteral("Angular (Веб-интерфейс)");
+    if (val == QLatin1String("rust-wasm")) return QStringLiteral("Rust WASM (Лёгкий веб)");
+    if (val == QLatin1String("qt")) return QStringLiteral("Qt 6 Native (Без браузера)");
+    if (val.isEmpty() && rawName.startsWith(QLatin1String("Auto-detect"))) return QStringLiteral("Автопоиск (рекомендуется)");
+    return rawName;
+}
+
+QStringList moveArrayElement(const QJsonArray& arr, int index, int delta) {
+    QStringList list;
+    for (const auto& v : arr) list << v.toString();
+    const int target = index + delta;
+    if (index >= 0 && index < list.size() && target >= 0 && target < list.size() && delta != 0) {
+        list.swapItemsAt(index, target);
+    }
+    return list;
+}
 struct CountryCenter { const char* code; double lat; double lon; };
 static const CountryCenter kCountryCenters[] = {
     {"AD", 42.54, 1.58}, {"AE", 23.42, 53.85}, {"AL", 41.15, 20.17}, {"AM", 40.07, 45.04},
@@ -52,17 +108,90 @@ bool lookupCountry(const QString& code, double& lat, double& lon) {
     return false;
 }
 
-QPointF projectNormalized(double lat, double lon) {
-    double nx = qBound(0.0, (lon + 180.0) / 360.0, 1.0);
-    double ny = qBound(0.0, (84.0 - lat) / 145.0, 1.0);
-    return QPointF(nx, ny);
-}
-
 QJsonValue effectiveCfgVal(const QJsonObject& s) {
     if (s.contains(QLatin1String("Value")) && !s.value(QLatin1String("Value")).isNull()) {
         return s.value(QLatin1String("Value"));
     }
     return s.value(QLatin1String("DefaultValue"));
+}
+
+bool jsonToBool(const QJsonValue& v, bool fallback = false) {
+    if (v.isBool()) return v.toBool();
+    if (v.isDouble()) return v.toDouble() != 0.0;
+    return fallback;
+}
+
+QJsonValue variantToJsonValue(const QVariant& val) {
+    if (val.metaType().id() == QMetaType::QStringList) {
+        return QJsonArray::fromStringList(val.toStringList());
+    }
+    return QJsonValue::fromVariant(val);
+}
+
+QStringList mergePresetValues(const QJsonArray& cur, const QStringList& values, bool append) {
+    QStringList next;
+    if (append) {
+        for (const auto& v : cur) next << v.toString();
+    }
+    for (const auto& v : values) {
+        if (!next.contains(v)) next << v;
+    }
+    return next;
+}
+
+QString summarizeDnsList(const QStringList& servers, bool ru) {
+    if (servers.isEmpty()) return ru ? QStringLiteral("Системный / По умолч.") : QStringLiteral("System / Default");
+    const QString first = servers.first();
+    QString tag;
+    if (first.contains(QLatin1String("cloudflare"), Qt::CaseInsensitive) || first.contains(QLatin1String("1.1.1."))) {
+        tag = first.startsWith(QLatin1String("dot://")) ? QStringLiteral("Cloudflare DoT") : QStringLiteral("Cloudflare DoH");
+    } else if (first.contains(QLatin1String("quad9"), Qt::CaseInsensitive) || first.contains(QLatin1String("9.9.9.9"))) {
+        tag = first.startsWith(QLatin1String("dot://")) ? QStringLiteral("Quad9 DoT") : QStringLiteral("Quad9 DoH");
+    } else if (first.contains(QLatin1String("adguard"), Qt::CaseInsensitive) || first.contains(QLatin1String("94.140.14."))) {
+        tag = first.startsWith(QLatin1String("dot://")) ? QStringLiteral("AdGuard DoT") : QStringLiteral("AdGuard DoH");
+    } else if (first.contains(QLatin1String("mullvad"), Qt::CaseInsensitive)) {
+        tag = QStringLiteral("Mullvad DoH");
+    } else {
+        QUrl u(first);
+        tag = !u.host().isEmpty() ? u.host() : first.left(24);
+    }
+    if (servers.size() > 1) {
+        return QStringLiteral("%1 (+%2)").arg(tag).arg(servers.size() - 1);
+    }
+    return tag;
+}
+
+QString formatSettingDisplay(const QJsonValue& v, int optType, const QVariantList& choices, bool ru) {
+    if (optType == 4) {
+        return jsonToBool(v) ? (ru ? QStringLiteral("Вкл") : QStringLiteral("On"))
+                             : (ru ? QStringLiteral("Выкл") : QStringLiteral("Off"));
+    }
+    if (v.isArray()) {
+        const auto arr = v.toArray();
+        if (arr.isEmpty()) return ru ? QStringLiteral("Пусто (0)") : QStringLiteral("Empty (0)");
+        if (arr.size() == 1) return arr.first().toString();
+        return QStringLiteral("%1 (%2)").arg(arr.first().toString()).arg(arr.size());
+    }
+    QString raw = v.isDouble() ? QString::number(static_cast<qint64>(v.toDouble())) : v.toString();
+    for (const auto& chv : choices) {
+        const auto m = chv.toMap();
+        if (m.value(QStringLiteral("Value")).toString() == raw) {
+            QString name = m.value(QStringLiteral("Name")).toString();
+            if (!name.isEmpty()) return name;
+        }
+    }
+    return raw.isEmpty() ? QStringLiteral("-") : raw;
+}
+
+void sortSettingsByOrder(QVariantList& list) {
+    std::sort(list.begin(), list.end(), [](const QVariant& a, const QVariant& b) {
+        const auto ma = a.toMap();
+        const auto mb = b.toMap();
+        int oa = ma.value(QStringLiteral("order"), 9999).toInt();
+        int ob = mb.value(QStringLiteral("order"), 9999).toInt();
+        if (oa != ob) return oa < ob;
+        return ma.value(QStringLiteral("key")).toString() < mb.value(QStringLiteral("key")).toString();
+    });
 }
 
 // Portmaster stores app Config both flat ("spn/use") and nested ({"spn":{"use":...}}).
@@ -187,6 +316,17 @@ QJsonObject normalizeConn(const QJsonObject& raw) {
                     : QStringLiteral("core:profiles/%1").arg(profRaw.contains('/') ? profRaw : QStringLiteral("local/") + profRaw);
     }
 
+    const QJsonValue stVal = pick("started", "Started");
+    qint64 startedTs = 0;
+    if (stVal.isString()) {
+        QDateTime dt = QDateTime::fromString(stVal.toString(), Qt::ISODateWithMs);
+        if (!dt.isValid()) dt = QDateTime::fromString(stVal.toString(), Qt::ISODate);
+        if (dt.isValid()) startedTs = dt.toSecsSinceEpoch();
+    } else if (stVal.isDouble()) {
+        qint64 rawTs = static_cast<qint64>(stVal.toDouble(0));
+        startedTs = (rawTs > 100000000000LL) ? (rawTs / 1000) : rawTs;
+    }
+
     return QJsonObject{
         {QStringLiteral("id"), pick("id", "ID").toString()},
         {QStringLiteral("profile"), profRaw},
@@ -205,20 +345,68 @@ QJsonObject normalizeConn(const QJsonObject& raw) {
         {QStringLiteral("reason"), reason},
         {QStringLiteral("bytes_received"), static_cast<double>(pick("bytes_received", "BytesReceived").toDouble(0))},
         {QStringLiteral("bytes_sent"), static_cast<double>(pick("bytes_sent", "BytesSent").toDouble(0))},
+        {QStringLiteral("started_ts"), static_cast<double>(startedTs)},
         {QStringLiteral("active"), pick("active", "Active").toBool(false)},
     };
 }
 } // namespace
 
+PortmasterIconProvider::PortmasterIconProvider(QSharedPointer<PortmasterIconStore> store)
+    : QQuickImageProvider(QQuickImageProvider::Image), m_store(std::move(store)) {}
+
+QImage PortmasterIconProvider::requestImage(const QString& id, QSize* size, const QSize& requestedSize) {
+    const QString key = QUrl::fromPercentEncoding(id.section('?', 0, 0).toUtf8());
+    QImage img;
+    {
+        QMutexLocker lock(&m_store->mutex);
+        img = m_store->images.value(key);
+    }
+    if (img.isNull()) {
+        static const QImage kEmptyPx = []() {
+            QImage px(1, 1, QImage::Format_ARGB32_Premultiplied);
+            px.fill(Qt::transparent);
+            return px;
+        }();
+        if (size) *size = kEmptyPx.size();
+        return kEmptyPx;
+    }
+    if (requestedSize.width() > 0 && requestedSize.height() > 0) {
+        img = img.scaled(requestedSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+    if (size) *size = img.size();
+    return img;
+}
+
 PortmasterBackend::PortmasterBackend(bool startBackground, bool withTray, QObject* parent)
     : QObject(parent),
       m_api(new PortApiClient(this)),
       m_appsTimer(new QTimer(this)),
+      m_appsTickTimer(new QTimer(this)),
       m_settingsTimer(new QTimer(this)),
       m_connsTimer(new QTimer(this)),
-      m_withTray(withTray) {
+      m_withTray(withTray),
+      m_iconStore(QSharedPointer<PortmasterIconStore>::create()),
+      m_iconBatchTimer(new QTimer(this)),
+      m_iconNotifyTimer(new QTimer(this)) {
     QSettings qs(QStringLiteral("portmaster"), QStringLiteral("qt-ui"));
     m_ru = qs.value(QStringLiteral("lang"), QStringLiteral("ru")).toString() == QLatin1String("ru");
+    m_hwAccel = qs.value(QStringLiteral("hwAccel"), true).toBool();
+    m_historyLimit = qBound(250, qs.value(QStringLiteral("historyLimit"), 2000).toInt(), 10000);
+    loadI18nCatalog();
+    buildDesktopIconIndex();
+
+    m_iconBatchTimer->setInterval(20);
+    connect(m_iconBatchTimer, &QTimer::timeout, this, &PortmasterBackend::processNextIconBatch);
+
+    m_iconNotifyTimer->setSingleShot(true);
+    m_iconNotifyTimer->setInterval(300);
+    connect(m_iconNotifyTimer, &QTimer::timeout, this, [this]() {
+        ++m_iconVersion;
+        emit iconsChanged();
+        if (m_iconQueue.isEmpty() && m_iconPending.isEmpty()) {
+            scheduleAppsRebuild();
+        }
+    });
 
     m_appsTimer->setSingleShot(true);
     m_appsTimer->setInterval(60);
@@ -227,16 +415,25 @@ PortmasterBackend::PortmasterBackend(bool startBackground, bool withTray, QObjec
         if (!m_selectedProfileKey.isEmpty()) rebuildSelectedAppCache();
     });
 
-    m_settingsTimer->setSingleShot(true);
-    m_settingsTimer->setInterval(60);
-    connect(m_settingsTimer, &QTimer::timeout, this, &PortmasterBackend::rebuildSettingsCache);
-
-    m_connsTimer->setSingleShot(true);
-    m_connsTimer->setInterval(120);
-    connect(m_connsTimer, &QTimer::timeout, this, [this]() {
-        rebuildConnectionsCache();
+    m_appsTickTimer->setSingleShot(true);
+    m_appsTickTimer->setInterval(1000);
+    connect(m_appsTickTimer, &QTimer::timeout, this, [this]() {
         rebuildAppsCache();
         if (!m_selectedProfileKey.isEmpty()) rebuildSelectedAppCache();
+    });
+
+    m_settingsTimer->setSingleShot(true);
+    m_settingsTimer->setInterval(60);
+    connect(m_settingsTimer, &QTimer::timeout, this, [this]() {
+        rebuildSettingsCache();
+        if (!m_selectedProfileKey.isEmpty()) rebuildSelectedAppCache();
+    });
+
+    m_connsTimer->setSingleShot(true);
+    m_connsTimer->setInterval(250);
+    connect(m_connsTimer, &QTimer::timeout, this, [this]() {
+        rebuildConnectionsCache();
+        scheduleAppsTickRebuild();
     });
 
     if (m_withTray) setupTray();
@@ -250,6 +447,194 @@ PortmasterBackend::PortmasterBackend(bool startBackground, bool withTray, QObjec
     Q_UNUSED(startBackground);
 }
 
+PortmasterBackend::~PortmasterBackend() {
+    if (m_iconBatchTimer) m_iconBatchTimer->stop();
+    if (m_iconNotifyTimer) m_iconNotifyTimer->stop();
+    if (m_appsTimer) m_appsTimer->stop();
+    if (m_appsTickTimer) m_appsTickTimer->stop();
+    if (m_settingsTimer) m_settingsTimer->stop();
+    if (m_connsTimer) m_connsTimer->stop();
+}
+
+QQuickImageProvider* PortmasterBackend::createIconProvider() const {
+    return new PortmasterIconProvider(m_iconStore);
+}
+
+void PortmasterBackend::loadI18nCatalog() {
+    QFile f(QStringLiteral(":/qt/qml/Portmaster/cfg_i18n.json"));
+    if (!f.open(QIODevice::ReadOnly)) return;
+    const QJsonObject root = QJsonDocument::fromJson(f.readAll()).object();
+    const QJsonObject ru = root.value(QStringLiteral("ru")).toObject();
+    const QJsonObject en = root.value(QStringLiteral("en")).toObject();
+    for (auto it = ru.cbegin(); it != ru.cend(); ++it) {
+        m_i18nRu.insert(it.key(), it.value().toString());
+    }
+    for (auto it = en.cbegin(); it != en.cend(); ++it) {
+        m_i18nEn.insert(it.key(), it.value().toString());
+    }
+}
+
+void PortmasterBackend::buildDesktopIconIndex() {
+    QStringList dirs = QStandardPaths::standardLocations(QStandardPaths::ApplicationsLocation);
+    const QString flatpakSys = QStringLiteral("/var/lib/flatpak/exports/share/applications");
+    if (QDir(flatpakSys).exists() && !dirs.contains(flatpakSys)) dirs.append(flatpakSys);
+
+    for (const QString& dir : dirs) {
+        QDirIterator it(dir, QStringList{QStringLiteral("*.desktop")}, QDir::Files, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            QFile f(it.next());
+            if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) continue;
+            QString execLine, iconName, dispName, wmClass;
+            bool inEntry = false;
+            QTextStream in(&f);
+            while (!in.atEnd()) {
+                const QString line = in.readLine().trimmed();
+                if (line.isEmpty() || line.startsWith('#')) continue;
+                if (line.startsWith('[')) {
+                    inEntry = (line == QLatin1String("[Desktop Entry]"));
+                    continue;
+                }
+                if (!inEntry) continue;
+                if (line.startsWith(QLatin1String("Exec="))) execLine = line.mid(5).trimmed();
+                else if (line.startsWith(QLatin1String("Icon="))) iconName = line.mid(5).trimmed();
+                else if (line.startsWith(QLatin1String("Name="))) dispName = line.mid(5).trimmed();
+                else if (line.startsWith(QLatin1String("StartupWMClass="))) wmClass = line.mid(15).trimmed();
+            }
+            if (iconName.isEmpty()) continue;
+
+            auto putIfEmpty = [&](const QString& k, const QString& v) {
+                if (!k.isEmpty() && !m_desktopIcons.contains(k)) m_desktopIcons.insert(k, v);
+            };
+            if (!execLine.isEmpty()) {
+                QString tok;
+                const QStringList parts = execLine.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts);
+                for (const QString& raw : parts) {
+                    QString p = raw;
+                    p.remove('"').remove('\'');
+                    if (p.isEmpty() || p.contains('=')) continue;
+                    const QString base = QFileInfo(p).fileName().toLower();
+                    if (base == QLatin1String("env") || base == QLatin1String("sh") || base == QLatin1String("bash") || base == QLatin1String("gtk-launch")) continue;
+                    tok = base;
+                    break;
+                }
+                if (!tok.isEmpty()) m_desktopIcons.insert(tok, iconName);
+            }
+            putIfEmpty(wmClass.toLower(), iconName);
+            putIfEmpty(dispName.toLower(), iconName);
+            putIfEmpty(QFileInfo(it.filePath()).completeBaseName().toLower(), iconName);
+        }
+    }
+}
+
+bool PortmasterBackend::hasCachedIcon(const QString& profileKey) const {
+    QMutexLocker lock(&m_iconStore->mutex);
+    return !m_iconStore->images.value(profileKey).isNull();
+}
+
+void PortmasterBackend::queueIconResolve(const QString& profileKey, bool prioritize) {
+    if (m_iconAttempted.contains(profileKey) || m_iconQueued.contains(profileKey)) return;
+    m_iconQueued.insert(profileKey);
+    if (prioritize) m_iconQueue.prepend(profileKey);
+    else m_iconQueue.append(profileKey);
+    if (m_iconBatchTimer && !m_iconBatchTimer->isActive()) {
+        m_iconBatchTimer->start();
+    }
+}
+
+void PortmasterBackend::processNextIconBatch() {
+    if (m_iconQueue.isEmpty()) {
+        if (m_iconBatchTimer) m_iconBatchTimer->stop();
+        return;
+    }
+    int resolvedAny = 0;
+    const int batchLimit = 10;
+    for (int processed = 0; processed < batchLimit && !m_iconQueue.isEmpty(); ++processed) {
+        const QString profileKey = m_iconQueue.takeFirst();
+        m_iconQueued.remove(profileKey);
+        if (m_iconAttempted.contains(profileKey) || !m_profiles.contains(profileKey)) continue;
+        m_iconAttempted.insert(profileKey);
+
+        const QJsonObject profile = m_profiles.value(profileKey);
+        QString path = profile.value(QStringLiteral("PresentationPath")).toString();
+        if (path.isEmpty()) path = profile.value(QStringLiteral("LinkedPath")).toString();
+        const QString name = profile.value(QStringLiteral("Name")).toString(profile.value(QStringLiteral("ID")).toString());
+
+        const QFileInfo fi(path);
+        QString base = fi.fileName().toLower();
+        if (base.endsWith(QLatin1String(".exe"))) base.chop(4);
+        QString baseNoBin = base;
+        if (baseNoBin.endsWith(QLatin1String("-bin"))) baseNoBin.chop(4);
+
+        QStringList candidates;
+        auto addCand = [&](const QString& s) {
+            if (!s.isEmpty() && !candidates.contains(s)) candidates.append(s);
+        };
+        addCand(m_desktopIcons.value(base));
+        addCand(m_desktopIcons.value(baseNoBin));
+        addCand(m_desktopIcons.value(name.toLower()));
+        addCand(base);
+        addCand(baseNoBin);
+        addCand(name.toLower());
+
+        QIcon resolved;
+        for (const QString& cand : candidates) {
+            if (QFileInfo::exists(cand) && QFileInfo(cand).isFile()) {
+                QIcon fileIcon(cand);
+                if (!fileIcon.isNull()) { resolved = fileIcon; break; }
+            }
+            if (QIcon::hasThemeIcon(cand)) {
+                resolved = QIcon::fromTheme(cand);
+                if (!resolved.isNull()) break;
+            }
+        }
+
+        if (!resolved.isNull()) {
+            const QImage img = resolved.pixmap(48, 48).toImage();
+            if (!img.isNull()) {
+                {
+                    QMutexLocker lock(&m_iconStore->mutex);
+                    m_iconStore->images.insert(profileKey, img);
+                }
+                ++resolvedAny;
+                continue;
+            }
+        }
+
+        const QJsonArray icons = profile.value(QStringLiteral("Icons")).toArray();
+        if (!icons.isEmpty() && m_iconPending.size() < 4) {
+            const QJsonObject first = icons.first().toObject();
+            if (first.value(QStringLiteral("Type")).toString() == QLatin1String("api")) {
+                const QString val = first.value(QStringLiteral("Value")).toString();
+                if (!val.isEmpty() && !m_iconPending.contains(profileKey)) {
+                    m_iconPending.insert(profileKey);
+                    QPointer<PortmasterBackend> self(this);
+                    m_api->httpGet(QStringLiteral("/api/v1/profile/icon/") + QString::fromUtf8(QUrl::toPercentEncoding(val)),
+                        [self, profileKey](int code, const QByteArray& body, const QString&) {
+                            if (!self) return;
+                            self->m_iconPending.remove(profileKey);
+                            if (code != 200 || body.isEmpty()) return;
+                            QImage img = QImage::fromData(body);
+                            if (img.isNull()) return;
+                            {
+                                QMutexLocker lock(&self->m_iconStore->mutex);
+                                self->m_iconStore->images.insert(profileKey, img.scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                            }
+                            if (self->m_iconNotifyTimer) self->m_iconNotifyTimer->start();
+                        });
+                }
+            }
+        }
+    }
+    if (resolvedAny > 0 || (m_iconQueue.isEmpty() && m_iconPending.isEmpty())) {
+        if (m_iconNotifyTimer) m_iconNotifyTimer->start();
+    }
+}
+
+QString PortmasterBackend::cfgText(const QString& key) const {
+    const auto& dict = m_ru ? m_i18nRu : m_i18nEn;
+    if (dict.contains(key)) return dict.value(key);
+    return key;
+}
 QString PortmasterBackend::formatBytes(qint64 bytes) const {
     if (bytes >= 1024LL * 1024 * 1024) return QStringLiteral("%1 GB").arg(bytes / (1024.0 * 1024.0 * 1024.0), 0, 'f', 2);
     if (bytes >= 1024LL * 1024) return QStringLiteral("%1 MB").arg(bytes / (1024.0 * 1024.0), 0, 'f', 1);
@@ -277,6 +662,51 @@ bool PortmasterBackend::historyEnabled() const {
     return effectiveValue(QStringLiteral("history/enable")).toBool(true);
 }
 
+bool PortmasterBackend::blockInternet() const {
+    return jsonToBool(effectiveValue(QStringLiteral("filter/blockInternet")));
+}
+
+bool PortmasterBackend::blockLan() const {
+    return jsonToBool(effectiveValue(QStringLiteral("filter/blockLAN")));
+}
+
+bool PortmasterBackend::blockP2p() const {
+    return jsonToBool(effectiveValue(QStringLiteral("filter/blockP2P")));
+}
+
+bool PortmasterBackend::blockInbound() const {
+    return jsonToBool(effectiveValue(QStringLiteral("filter/blockInbound")), true);
+}
+
+bool PortmasterBackend::preventDnsBypass() const {
+    return jsonToBool(effectiveValue(QStringLiteral("filter/preventBypassing")), true);
+}
+
+bool PortmasterBackend::dnsNoInsecure() const {
+    return jsonToBool(effectiveValue(QStringLiteral("dns/noInsecureProtocols")));
+}
+
+bool PortmasterBackend::dnsIgnoreSystem() const {
+    return jsonToBool(effectiveValue(QStringLiteral("dns/noAssignedNameservers")));
+}
+
+bool PortmasterBackend::dnsUseStaleCache() const {
+    return jsonToBool(effectiveValue(QStringLiteral("dns/useStaleCache")));
+}
+
+QStringList PortmasterBackend::dnsServers() const {
+    QStringList out;
+    for (const auto& v : effectiveValue(QStringLiteral("dns/nameservers")).toArray()) {
+        const QString s = v.toString().trimmed();
+        if (!s.isEmpty()) out << s;
+    }
+    return out;
+}
+
+QString PortmasterBackend::dnsSummary() const {
+    return summarizeDnsList(dnsServers(), m_ru);
+}
+
 void PortmasterBackend::setLanguage(const QString& code) {
     bool next = (code == QLatin1String("ru"));
     if (m_ru == next) return;
@@ -286,6 +716,7 @@ void PortmasterBackend::setLanguage(const QString& code) {
     emit langChanged();
     rebuildAppsCache();
     rebuildSettingsCache();
+    if (!m_selectedProfileKey.isEmpty()) rebuildSelectedAppCache();
 }
 
 QString PortmasterBackend::t(const QString& key) const {
@@ -417,8 +848,7 @@ void PortmasterBackend::updateTrayIcon() {
     if (!m_tray) return;
     QColor c(0xd1, 0x2e, 0x2e);
     if (m_api->isConnected()) {
-        if (m_xrayStatusMap.value(QStringLiteral("connected")).toBool()) c = QColor(0x4e, 0x97, 0xfa);
-        else c = QColor(0x1d, 0xe9, 0x66);
+        c = m_paused ? QColor(0xe9, 0xd8, 0x1d) : QColor(0x1d, 0xe9, 0x66);
     }
     m_tray->setIcon(buildShieldIcon(c));
 }
@@ -427,14 +857,22 @@ void PortmasterBackend::onConnectionChanged(bool connected, const QString&) {
     emit connectionChanged();
     updateTrayIcon();
     if (connected) {
+        m_uiPollTick = 0;
         startSubscriptions();
         refreshHttpData();
         if (!m_worldLoaded) fetchWorldMap();
+    } else {
+        m_historyLoaded = false;
+        m_historyFetching = false;
     }
 }
 
 void PortmasterBackend::scheduleAppsRebuild() {
     if (!m_appsTimer->isActive()) m_appsTimer->start();
+}
+
+void PortmasterBackend::scheduleAppsTickRebuild() {
+    if (!m_appsTickTimer->isActive()) m_appsTickTimer->start();
 }
 
 void PortmasterBackend::scheduleSettingsRebuild() {
@@ -461,7 +899,7 @@ void PortmasterBackend::startSubscriptions() {
         k.remove(QStringLiteral("config:"));
         m_settings.insert(k, val.toObject());
         scheduleSettingsRebuild();
-        if (k == QLatin1String("spn/use") || k == QLatin1String("splittun/use")) {
+        if (k == QLatin1String("spn/use") || k == QLatin1String("splittun/use") || k == QLatin1String("filter/defaultAction") || k == QLatin1String("filter/blockInternet")) {
             scheduleAppsRebuild();
         }
     });
@@ -486,7 +924,8 @@ void PortmasterBackend::startSubscriptions() {
         }
         if (!found) {
             m_connections.prepend(obj);
-            if (m_connections.size() > 400) m_connections.resize(400);
+            const int cap = qMax(250, m_historyLimit);
+            if (m_connections.size() > cap) m_connections.resize(cap);
         }
         scheduleConnsRebuild();
     });
@@ -495,12 +934,17 @@ void PortmasterBackend::startSubscriptions() {
 void PortmasterBackend::refreshHttpData() {
     if (!m_api->isConnected()) return;
 
-    m_api->httpGet(QStringLiteral("/api/v1/ui/flavors"), [this](int code, const QByteArray& body, const QString&) {
-        if (code == 200) {
-            m_uiReportMap = QJsonDocument::fromJson(body).object().toVariantMap();
-            emit uiReportChanged();
-        }
-    });
+    // Poll /api/v1/ui/flavors at most every ~15s (5 x 3s) to avoid frequent /proc scans.
+    if ((m_uiPollTick % 5) == 0) {
+        m_api->httpGet(QStringLiteral("/api/v1/ui/flavors"), [this](int code, const QByteArray& body, const QString&) {
+            if (code == 200) {
+                m_uiReportMap = QJsonDocument::fromJson(body).object().toVariantMap();
+                emit uiReportChanged();
+            }
+        });
+    }
+    ++m_uiPollTick;
+
     m_api->httpGet(QStringLiteral("/api/v1/xray/status"), [this](int code, const QByteArray& body, const QString&) {
         if (code == 200) {
             QVariantMap st = QJsonDocument::fromJson(body).object().toVariantMap();
@@ -536,23 +980,106 @@ void PortmasterBackend::refreshHttpData() {
             emit xrayChanged();
         }
     });
-    if (m_connections.isEmpty()) {
-        const QByteArray payload = R"({"databases":["main"],"orderBy":[{"field":"started","desc":true}],"pageSize":250})";
-        m_api->httpPost(QStringLiteral("/api/v1/netquery/query"), payload, QStringLiteral("application/json"),
-            [this](int code, const QByteArray& body, const QString&) {
-                if (code == 200) {
-                    const QJsonArray arr = QJsonDocument::fromJson(body).object().value(QStringLiteral("results")).toArray();
-                    m_connections.clear();
-                    for (const auto& v : arr) {
-                        if (v.isObject()) m_connections.append(normalizeConn(v.toObject()));
-                    }
-                    if (m_connections.size() > 400) m_connections.resize(400);
-                    rebuildConnectionsCache();
-                    rebuildAppsCache();
-                    if (!m_selectedProfileKey.isEmpty()) rebuildSelectedAppCache();
-                }
-            });
+    if (!m_historyLoaded && !m_historyFetching) {
+        loadHistoryFromDb(false);
     }
+}
+
+void PortmasterBackend::loadHistoryFromDb(bool forceReload) {
+    if (!m_api->isConnected()) return;
+    if (m_historyFetching && !forceReload) return;
+    m_historyFetching = true;
+    ++m_historyFetchGen;
+    emit historyConfigChanged();
+    QVector<QJsonObject> acc;
+    acc.reserve(qMin(m_historyLimit, 2000));
+    fetchHistoryPage(m_historyFetchGen, QStringLiteral("main"), 0, m_historyLimit, std::move(acc));
+}
+
+void PortmasterBackend::fetchHistoryPage(int gen, const QString& db, int page, int targetLimit, QVector<QJsonObject> acc) {
+    if (gen != m_historyFetchGen || !m_api->isConnected()) {
+        if (gen == m_historyFetchGen) {
+            m_historyFetching = false;
+            emit historyConfigChanged();
+        }
+        return;
+    }
+    const int pageSize = 100;
+    const QJsonObject req{
+        {QStringLiteral("databases"), QJsonArray{db}},
+        {QStringLiteral("orderBy"), QJsonArray{QJsonObject{{QStringLiteral("field"), QStringLiteral("started")}, {QStringLiteral("desc"), true}}}},
+        {QStringLiteral("page"), page},
+        {QStringLiteral("pageSize"), pageSize},
+    };
+    const QByteArray payload = QJsonDocument(req).toJson(QJsonDocument::Compact);
+    QPointer<PortmasterBackend> self(this);
+    m_api->httpPost(QStringLiteral("/api/v1/netquery/query"), payload, QStringLiteral("application/json"),
+        [self, gen, db, page, targetLimit, acc = std::move(acc)](int code, const QByteArray& body, const QString& err) mutable {
+            if (!self || gen != self->m_historyFetchGen) return;
+            if (code != 200) {
+                qWarning("netquery/query (%s p%d) failed: http=%d err=%s", qPrintable(db), page, code, qPrintable(err));
+                self->m_historyFetching = false;
+                if (!acc.isEmpty()) {
+                    self->m_historyLoaded = true;
+                    self->mergeDbConnections(acc);
+                }
+                emit self->historyConfigChanged();
+                return;
+            }
+            const QJsonArray arr = QJsonDocument::fromJson(body).object().value(QStringLiteral("results")).toArray();
+            for (const auto& v : arr) {
+                if (v.isObject()) acc.append(normalizeConn(v.toObject()));
+            }
+            if (!arr.isEmpty() && (page == 0 || acc.size() % 500 < 100)) {
+                self->mergeDbConnections(acc);
+            }
+            if (arr.size() >= 100 && acc.size() < targetLimit) {
+                self->fetchHistoryPage(gen, db, page + 1, targetLimit, std::move(acc));
+                return;
+            }
+            if (db == QLatin1String("main") && acc.size() < targetLimit) {
+                self->fetchHistoryPage(gen, QStringLiteral("history"), 0, targetLimit, std::move(acc));
+                return;
+            }
+            self->m_historyLoaded = true;
+            self->m_historyFetching = false;
+            self->mergeDbConnections(acc);
+            emit self->historyConfigChanged();
+        });
+}
+
+void PortmasterBackend::mergeDbConnections(const QVector<QJsonObject>& rows) {
+    QHash<QString, int> idxById;
+    idxById.reserve(m_connections.size() + rows.size());
+    for (int i = 0; i < m_connections.size(); ++i) {
+        const QString id = m_connections[i].value(QStringLiteral("id")).toString();
+        if (!id.isEmpty()) idxById.insert(id, i);
+    }
+    for (const auto& r : rows) {
+        const QString id = r.value(QStringLiteral("id")).toString();
+        if (id.isEmpty()) {
+            m_connections.append(r);
+            continue;
+        }
+        auto it = idxById.constFind(id);
+        if (it == idxById.constEnd()) {
+            idxById.insert(id, m_connections.size());
+            m_connections.append(r);
+        }
+    }
+    std::stable_sort(m_connections.begin(), m_connections.end(), [](const QJsonObject& a, const QJsonObject& b) {
+        const qint64 ta = static_cast<qint64>(a.value(QStringLiteral("started_ts")).toDouble(0));
+        const qint64 tb = static_cast<qint64>(b.value(QStringLiteral("started_ts")).toDouble(0));
+        return ta > tb;
+    });
+    const int cap = qMax(250, m_historyLimit);
+    if (m_connections.size() > cap) {
+        m_connections.resize(cap);
+        m_connections.squeeze();
+    }
+    rebuildConnectionsCache();
+    scheduleAppsTickRebuild();
+    if (!m_selectedProfileKey.isEmpty()) rebuildSelectedAppCache();
 }
 
 void PortmasterBackend::fetchWorldMap() {
@@ -567,20 +1094,18 @@ void PortmasterBackend::fetchWorldMap() {
         const double tx = tl[0].toDouble(), ty = tl[1].toDouble();
 
         const QJsonArray arcs = root.value(QStringLiteral("arcs")).toArray();
-        const QJsonArray landArcs = root.value(QStringLiteral("objects")).toObject().value(QStringLiteral("land")).toObject().value(QStringLiteral("arcs")).toArray();
 
-        QVariantList polygons;
-        for (const auto& polyVal : landArcs) {
-            const QJsonArray rings = polyVal.toArray();
-            if (rings.isEmpty()) continue;
-            // Outer ring for clean fast Continent outline
+        auto decodeRings = [&](const QJsonArray& rings, double& bMinX, double& bMinY, double& bMaxX, double& bMaxY) -> QVariantList {
+            QVariantList out;
+            if (rings.isEmpty()) return out;
             const QJsonArray ring = rings[0].toArray();
             QVariantList polyPts;
             double prevLon = 0.0;
             bool hasPrev = false;
 
             auto flushPoly = [&]() {
-                if (polyPts.size() >= 3) polygons.append(QVariant::fromValue(polyPts));
+                // Packed flat [x0, y0, x1, y1, ...] avoids ~70k heap QVariantMap allocations.
+                if (polyPts.size() >= 6) out.append(QVariant::fromValue(polyPts));
                 polyPts.clear();
             };
 
@@ -601,7 +1126,7 @@ void PortmasterBackend::fetchWorldMap() {
                 }
                 if (rev) std::reverse(pts.begin(), pts.end());
                 for (const auto& ll : pts) {
-                    if (ll.first < -58.0) {
+                    if (ll.first < -60.0) {
                         flushPoly();
                         hasPrev = false;
                         continue;
@@ -610,14 +1135,60 @@ void PortmasterBackend::fetchWorldMap() {
                         flushPoly();
                     }
                     QPointF np = projectNormalized(ll.first, ll.second);
-                    polyPts.append(QVariantMap{{QStringLiteral("x"), np.x()}, {QStringLiteral("y"), np.y()}});
+                    polyPts.append(np.x());
+                    polyPts.append(np.y());
+                    bMinX = qMin(bMinX, np.x());
+                    bMinY = qMin(bMinY, np.y());
+                    bMaxX = qMax(bMaxX, np.x());
+                    bMaxY = qMax(bMaxY, np.y());
                     prevLon = ll.second;
                     hasPrev = true;
                 }
             }
             flushPoly();
+            return out;
+        };
+
+        m_countryNames.clear();
+        QVariantList countries;
+        const QJsonArray geoms = root.value(QStringLiteral("objects")).toObject().value(QStringLiteral("countries")).toObject().value(QStringLiteral("geometries")).toArray();
+        for (const auto& gVal : geoms) {
+            const QJsonObject g = gVal.toObject();
+            const QJsonObject props = g.value(QStringLiteral("properties")).toObject();
+            const QString iso = props.value(QStringLiteral("iso_a2")).toString().trimmed().toUpper();
+            if (iso == QLatin1String("AQ")) continue;
+            const QString name = props.value(QStringLiteral("name")).toString();
+            if (!iso.isEmpty() && iso != QLatin1String("-99") && !name.isEmpty()) {
+                m_countryNames.insert(iso, name);
+            }
+            const QString gtype = g.value(QStringLiteral("type")).toString();
+            const QJsonArray gArcs = g.value(QStringLiteral("arcs")).toArray();
+
+            double bMinX = 1.0, bMinY = 1.0, bMaxX = 0.0, bMaxY = 0.0;
+            QVariantList cPolys;
+            if (gtype == QLatin1String("Polygon")) {
+                cPolys.append(decodeRings(gArcs, bMinX, bMinY, bMaxX, bMaxY));
+            } else if (gtype == QLatin1String("MultiPolygon")) {
+                for (const auto& polyVal : gArcs) {
+                    cPolys.append(decodeRings(polyVal.toArray(), bMinX, bMinY, bMaxX, bMaxY));
+                }
+            }
+            if (!cPolys.isEmpty()) {
+                countries.append(QVariantMap{
+                    {QStringLiteral("code"), iso},
+                    {QStringLiteral("name"), name},
+                    {QStringLiteral("minX"), bMinX},
+                    {QStringLiteral("minY"), bMinY},
+                    {QStringLiteral("maxX"), bMaxX},
+                    {QStringLiteral("maxY"), bMaxY},
+                    {QStringLiteral("polygons"), cPolys},
+                });
+            }
         }
-        m_worldPolygons = polygons;
+
+        m_worldPolygons.clear();
+        m_worldPolygons.squeeze();
+        m_worldCountries = countries;
         m_worldLoaded = true;
         emit worldMapReady();
     });
@@ -671,7 +1242,42 @@ void PortmasterBackend::rebuildAppsCache() {
     m_offlineAppsCache.clear();
     m_allAppsCache.clear();
 
+    // Single linear pass over connections so we avoid O(profiles * connections) scans.
+    struct ConnAgg {
+        int total = 0;
+        int alive = 0;
+        int blocked = 0;
+        qint64 maxRx = 0;
+        qint64 maxTx = 0;
+    };
+    QHash<QString, ConnAgg> aggById;
+    QHash<QString, ConnAgg> aggByName;
+    aggById.reserve(128);
+    aggByName.reserve(128);
+
+    for (const auto& c : m_connections) {
+        const QString cp = c.value(QStringLiteral("profile")).toString();
+        const QString bareCp = cp.contains('/') ? cp.section('/', -1) : cp;
+        const QString pName = c.value(QStringLiteral("profile_name")).toString().toLower();
+        const qint64 rxVal = static_cast<qint64>(c.value(QStringLiteral("bytes_received")).toDouble());
+        const qint64 txVal = static_cast<qint64>(c.value(QStringLiteral("bytes_sent")).toDouble());
+        const bool isAlive = c.value(QStringLiteral("active")).toBool();
+        const QString vd = c.value(QStringLiteral("verdict")).toString();
+        const bool isBlk = (vd == QLatin1String("block") || vd == QLatin1String("drop") || vd == QLatin1String("failed"));
+
+        auto accum = [&](ConnAgg& a) {
+            ++a.total;
+            a.maxRx = qMax(a.maxRx, rxVal);
+            a.maxTx = qMax(a.maxTx, txVal);
+            if (isAlive) ++a.alive;
+            if (isBlk) ++a.blocked;
+        };
+        if (!bareCp.isEmpty()) accum(aggById[bareCp]);
+        else if (!pName.isEmpty()) accum(aggByName[pName]);
+    }
+
     QVector<QPair<QString, QJsonObject>> sorted;
+    sorted.reserve(m_profiles.size());
     for (auto it = m_profiles.cbegin(); it != m_profiles.cend(); ++it) {
         const QJsonObject& p = it.value();
         const QString src = p.value(QStringLiteral("Source")).toString();
@@ -696,7 +1302,10 @@ void PortmasterBackend::rebuildAppsCache() {
         if (path.isEmpty()) path = p.value(QStringLiteral("LinkedPath")).toString();
         QJsonObject cfg = p.value(QStringLiteral("Config")).toObject();
 
-        QString defAct = readProfileCfg(cfg, QStringLiteral("filter/defaultAction")).toString(QStringLiteral("permit"));
+        QString globalAction = effectiveValue(QStringLiteral("filter/defaultAction")).toString(QStringLiteral("permit"));
+        QString defAct = readProfileCfg(cfg, QStringLiteral("filter/defaultAction")).toString(globalAction);
+        QJsonValue blkNetVal = readProfileCfg(cfg, QStringLiteral("filter/blockInternet"));
+        bool appBlkNet = blkNetVal.isUndefined() || blkNetVal.isNull() ? blockInternet() : jsonToBool(blkNetVal);
         QJsonValue vpnVal = readProfileCfg(cfg, QStringLiteral("spn/use"));
         QString vpnMode = vpnVal.isBool() ? (vpnVal.toBool() ? QStringLiteral("vpn") : QStringLiteral("direct")) : QStringLiteral("default");
         bool effectiveVpn = vpnVal.isBool() ? vpnVal.toBool() : gVpn;
@@ -710,17 +1319,28 @@ void PortmasterBackend::rebuildAppsCache() {
         qint64 tx = static_cast<qint64>(p.value(QStringLiteral("Stats")).toObject().value(QStringLiteral("BytesSent")).toDouble());
         int totalSeen = 0, blockedSeen = 0;
 
-        for (const auto& c : m_connections) {
-            QString cp = c.value(QStringLiteral("profile")).toString();
-            if (cp == id || cp.endsWith('/' + id) || (!name.isEmpty() && c.value(QStringLiteral("profile_name")).toString().compare(name, Qt::CaseInsensitive) == 0)) {
-                ++totalSeen;
-                rx = qMax(rx, static_cast<qint64>(c.value(QStringLiteral("bytes_received")).toDouble()));
-                tx = qMax(tx, static_cast<qint64>(c.value(QStringLiteral("bytes_sent")).toDouble()));
-                if (c.value(QStringLiteral("active")).toBool()) ++liveActive;
-                QString vd = c.value(QStringLiteral("verdict")).toString();
-                if (vd == QLatin1String("block") || vd == QLatin1String("drop")) ++blockedSeen;
+        auto idIt = aggById.constFind(id);
+        if (idIt != aggById.constEnd()) {
+            totalSeen = idIt->total;
+            blockedSeen = idIt->blocked;
+            liveActive += idIt->alive;
+            rx = qMax(rx, idIt->maxRx);
+            tx = qMax(tx, idIt->maxTx);
+        } else if (!name.isEmpty()) {
+            auto nIt = aggByName.constFind(name.toLower());
+            if (nIt != aggByName.constEnd()) {
+                totalSeen = nIt->total;
+                blockedSeen = nIt->blocked;
+                liveActive += nIt->alive;
+                rx = qMax(rx, nIt->maxRx);
+                tx = qMax(tx, nIt->maxTx);
             }
         }
+
+        const bool hasIcon = hasCachedIcon(key);
+        if (!hasIcon) queueIconResolve(key, liveActive > 0);
+        const QString iconKey = QString::fromUtf8(QUrl::toPercentEncoding(key));
+        const QString avatarColor = appAvatarColor(id.isEmpty() ? name : id);
 
         QVariantMap item{
             {QStringLiteral("key"), key},
@@ -728,8 +1348,12 @@ void PortmasterBackend::rebuildAppsCache() {
             {QStringLiteral("source"), p.value(QStringLiteral("Source")).toString(QStringLiteral("local"))},
             {QStringLiteral("name"), name},
             {QStringLiteral("initials"), name.left(2).toUpper()},
+            {QStringLiteral("hasIcon"), hasIcon},
+            {QStringLiteral("iconKey"), iconKey},
+            {QStringLiteral("avatarColor"), avatarColor},
             {QStringLiteral("path"), path},
             {QStringLiteral("action"), defAct},
+            {QStringLiteral("blockInternet"), appBlkNet},
             {QStringLiteral("vpnMode"), vpnMode},
             {QStringLiteral("effectiveVpn"), effectiveVpn},
             {QStringLiteral("splitMode"), splitMode},
@@ -764,6 +1388,7 @@ void PortmasterBackend::selectApp(const QString& scopedKey) {
 
 void PortmasterBackend::rebuildSelectedAppCache() {
     m_selectedAppConns.clear();
+    m_selectedAppSettings.clear();
     if (!m_profiles.contains(m_selectedProfileKey)) {
         m_selectedAppMap.clear();
         emit selectedAppChanged();
@@ -782,10 +1407,6 @@ void PortmasterBackend::rebuildSelectedAppCache() {
             {QStringLiteral("allow"), r.trimmed().startsWith('+')},
             {QStringLiteral("pattern"), r.trimmed().mid(1).trimmed()},
         });
-    }
-    QStringList dnsList;
-    for (const auto& dv : readProfileCfg(cfg, QStringLiteral("dns/servers")).toArray()) {
-        dnsList << dv.toString();
     }
 
     QJsonValue vpnVal = readProfileCfg(cfg, QStringLiteral("spn/use"));
@@ -816,8 +1437,32 @@ void PortmasterBackend::rebuildSelectedAppCache() {
         }
     }
 
+    int customSettingsCount = 0;
+    for (auto it = m_settings.cbegin(); it != m_settings.cend(); ++it) {
+        QVariantMap item = buildSettingMap(it.value(), &cfg);
+        if (!item.value(QStringLiteral("settablePerApp")).toBool()) continue;
+        if (item.value(QStringLiteral("modified")).toBool()) ++customSettingsCount;
+        m_selectedAppSettings.append(item);
+    }
+    sortSettingsByOrder(m_selectedAppSettings);
+
+    auto readScopeBool = [&](const QString& cfgKey, bool globalFallback, bool& overridden) -> bool {
+        QJsonValue local = readProfileCfg(cfg, cfgKey);
+        overridden = !local.isUndefined() && !local.isNull();
+        return overridden ? jsonToBool(local, globalFallback) : globalFallback;
+    };
+    bool ovInternet = false, ovLan = false, ovP2p = false, ovInbound = false;
+    bool appBlkInternet = readScopeBool(QStringLiteral("filter/blockInternet"), blockInternet(), ovInternet);
+    bool appBlkLan = readScopeBool(QStringLiteral("filter/blockLAN"), blockLan(), ovLan);
+    bool appBlkP2p = readScopeBool(QStringLiteral("filter/blockP2P"), blockP2p(), ovP2p);
+    bool appBlkInbound = readScopeBool(QStringLiteral("filter/blockInbound"), blockInbound(), ovInbound);
+
     QString path = p.value(QStringLiteral("PresentationPath")).toString();
     if (path.isEmpty()) path = p.value(QStringLiteral("LinkedPath")).toString();
+    const bool hasIcon = hasCachedIcon(m_selectedProfileKey);
+    if (!hasIcon) queueIconResolve(m_selectedProfileKey, true);
+    const QString iconKey = QString::fromUtf8(QUrl::toPercentEncoding(m_selectedProfileKey));
+    const QString avatarColor = appAvatarColor(id.isEmpty() ? name : id);
 
     m_selectedAppMap = QVariantMap{
         {QStringLiteral("key"), m_selectedProfileKey},
@@ -825,12 +1470,23 @@ void PortmasterBackend::rebuildSelectedAppCache() {
         {QStringLiteral("source"), p.value(QStringLiteral("Source")).toString()},
         {QStringLiteral("name"), name},
         {QStringLiteral("initials"), name.left(2).toUpper()},
+        {QStringLiteral("hasIcon"), hasIcon},
+        {QStringLiteral("iconKey"), iconKey},
+        {QStringLiteral("avatarColor"), avatarColor},
         {QStringLiteral("path"), path},
-        {QStringLiteral("action"), readProfileCfg(cfg, QStringLiteral("filter/defaultAction")).toString(QStringLiteral("permit"))},
+        {QStringLiteral("action"), readProfileCfg(cfg, QStringLiteral("filter/defaultAction")).toString(effectiveValue(QStringLiteral("filter/defaultAction")).toString(QStringLiteral("permit")))},
+        {QStringLiteral("actionOverridden"), !readProfileCfg(cfg, QStringLiteral("filter/defaultAction")).isUndefined()},
         {QStringLiteral("vpnMode"), vpnVal.isBool() ? (vpnVal.toBool() ? QStringLiteral("vpn") : QStringLiteral("direct")) : QStringLiteral("default")},
         {QStringLiteral("splitMode"), stVal.isBool() ? (stVal.toBool() ? QStringLiteral("on") : QStringLiteral("off")) : QStringLiteral("default")},
-        {QStringLiteral("blockLan"), readProfileCfg(cfg, QStringLiteral("filter/blockLAN")).toBool(false)},
-        {QStringLiteral("customDns"), dnsList.join(QStringLiteral(", "))},
+        {QStringLiteral("blockInternet"), appBlkInternet},
+        {QStringLiteral("blockLan"), appBlkLan},
+        {QStringLiteral("blockP2p"), appBlkP2p},
+        {QStringLiteral("blockInbound"), appBlkInbound},
+        {QStringLiteral("overriddenInternet"), ovInternet},
+        {QStringLiteral("overriddenLan"), ovLan},
+        {QStringLiteral("overriddenP2p"), ovP2p},
+        {QStringLiteral("overriddenInbound"), ovInbound},
+        {QStringLiteral("customCount"), customSettingsCount},
         {QStringLiteral("rules"), rules},
         {QStringLiteral("alive"), alive},
         {QStringLiteral("blocked"), blocked},
@@ -843,70 +1499,255 @@ void PortmasterBackend::rebuildSelectedAppCache() {
 
 void PortmasterBackend::rebuildConnectionsCache() {
     m_connectionsCache.clear();
-    m_connectionsCache.reserve(qMin(250, m_connections.size()));
-    for (int i = 0; i < m_connections.size() && i < 250; ++i) {
+    const int limit = qMin(qMax(250, m_historyLimit), m_connections.size());
+    m_connectionsCache.reserve(limit);
+
+    int allowedTotal = 0;
+    int blockedTotal = 0;
+    int internetBlockedTotal = 0;
+    int activeTotal = 0;
+    int tunneledTotal = 0;
+    qint64 totalRx = 0;
+    qint64 totalTx = 0;
+
+    qint64 minTs = 0;
+    qint64 maxTs = 0;
+    int recentCount = 0;
+    const qint64 nowSec = QDateTime::currentSecsSinceEpoch();
+
+    QHash<QString, int> countryCounts;
+    QHash<QString, int> blockedAppCounts;
+    QHash<QString, QString> blockedAppNames;
+
+    for (int i = 0; i < m_connections.size(); ++i) {
         const auto& c = m_connections[i];
-        QString vd = c.value(QStringLiteral("verdict")).toString().toLower();
-        qint64 rx = static_cast<qint64>(c.value(QStringLiteral("bytes_received")).toDouble());
-        qint64 tx = static_cast<qint64>(c.value(QStringLiteral("bytes_sent")).toDouble());
-        QString dom = c.value(QStringLiteral("domain")).toString();
-        m_connectionsCache.append(QVariantMap{
-            {QStringLiteral("id"), c.value(QStringLiteral("id")).toString()},
-            {QStringLiteral("profileKey"), c.value(QStringLiteral("profileKey")).toString()},
-            {QStringLiteral("target"), dom.isEmpty() ? c.value(QStringLiteral("remote_ip")).toString() : dom},
-            {QStringLiteral("domain"), dom},
-            {QStringLiteral("ip"), c.value(QStringLiteral("remote_ip")).toString()},
-            {QStringLiteral("port"), c.value(QStringLiteral("remote_port")).toInt()},
-            {QStringLiteral("proto"), c.value(QStringLiteral("ip_protocol")).toString()},
-            {QStringLiteral("country"), c.value(QStringLiteral("country")).toString()},
-            {QStringLiteral("app"), c.value(QStringLiteral("profile_name")).toString()},
-            {QStringLiteral("scope"), c.value(QStringLiteral("scope")).toString()},
-            {QStringLiteral("direction"), c.value(QStringLiteral("direction")).toString()},
-            {QStringLiteral("verdict"), vd},
-            {QStringLiteral("tunneled"), c.value(QStringLiteral("tunneled")).toBool()},
-            {QStringLiteral("reason"), c.value(QStringLiteral("reason")).toString()},
-            {QStringLiteral("asOwner"), c.value(QStringLiteral("as_owner")).toString()},
-            {QStringLiteral("bytes"), formatBytes(rx + tx)},
+        const QString vd = c.value(QStringLiteral("verdict")).toString().toLower();
+        const bool isBlk = (vd == QLatin1String("block") || vd == QLatin1String("drop") || vd == QLatin1String("failed"));
+        const QString sc = c.value(QStringLiteral("scope")).toString().toLower();
+        const bool isActive = c.value(QStringLiteral("active")).toBool();
+        const bool isTun = c.value(QStringLiteral("tunneled")).toBool() || vd == QLatin1String("tunneled");
+        const qint64 rx = static_cast<qint64>(c.value(QStringLiteral("bytes_received")).toDouble());
+        const qint64 tx = static_cast<qint64>(c.value(QStringLiteral("bytes_sent")).toDouble());
+        const qint64 ts = static_cast<qint64>(c.value(QStringLiteral("started_ts")).toDouble(0));
+        const QString dom = c.value(QStringLiteral("domain")).toString();
+        const QString ip = c.value(QStringLiteral("remote_ip")).toString();
+        const QString cc = c.value(QStringLiteral("country")).toString().trimmed().toUpper();
+        const QString profKey = c.value(QStringLiteral("profileKey")).toString();
+        const QString profName = c.value(QStringLiteral("profile_name")).toString();
+
+        if (isBlk) {
+            ++blockedTotal;
+            if (sc.contains(QLatin1String("internet"))) ++internetBlockedTotal;
+            if (!profKey.isEmpty()) {
+                blockedAppCounts[profKey] += 1;
+                if (!profName.isEmpty()) blockedAppNames[profKey] = profName;
+            }
+        } else {
+            ++allowedTotal;
+        }
+        if (isActive) ++activeTotal;
+        if (isTun) ++tunneledTotal;
+        totalRx += rx;
+        totalTx += tx;
+
+        if (!isBlk && !cc.isEmpty() && cc != QLatin1String("-99")) {
+            countryCounts[cc] += 1;
+        }
+
+        if (ts > 0) {
+            if (minTs == 0 || ts < minTs) minTs = ts;
+            if (ts > maxTs) maxTs = ts;
+            if (ts >= nowSec - 600) ++recentCount;
+        }
+
+        if (i < limit) {
+            m_connectionsCache.append(QVariantMap{
+                {QStringLiteral("id"), c.value(QStringLiteral("id")).toString()},
+                {QStringLiteral("profileKey"), profKey},
+                {QStringLiteral("target"), dom.isEmpty() ? ip : dom},
+                {QStringLiteral("domain"), dom},
+                {QStringLiteral("ip"), ip},
+                {QStringLiteral("port"), c.value(QStringLiteral("remote_port")).toInt()},
+                {QStringLiteral("proto"), c.value(QStringLiteral("ip_protocol")).toString()},
+                {QStringLiteral("country"), cc},
+                {QStringLiteral("app"), profName},
+                {QStringLiteral("scope"), sc},
+                {QStringLiteral("direction"), c.value(QStringLiteral("direction")).toString()},
+                {QStringLiteral("verdict"), vd},
+                {QStringLiteral("tunneled"), isTun},
+                {QStringLiteral("reason"), c.value(QStringLiteral("reason")).toString()},
+                {QStringLiteral("asOwner"), c.value(QStringLiteral("as_owner")).toString()},
+                {QStringLiteral("bytes"), formatBytes(rx + tx)},
+                {QStringLiteral("active"), isActive},
+            });
+        }
+    }
+
+    m_connAllowedTotal = allowedTotal;
+    m_connBlockedTotal = blockedTotal;
+    m_connInternetBlockedTotal = internetBlockedTotal;
+    m_connActiveTotal = activeTotal;
+    m_connTunneledTotal = tunneledTotal;
+    m_connRxStr = formatBytes(totalRx);
+    m_connTxStr = formatBytes(totalTx);
+
+    // 36-bin green/red activity chart (10-minute rolling window when active, else recent history window).
+    constexpr int kBins = 36;
+    QVector<int> okBins(kBins, 0);
+    QVector<int> blkBins(kBins, 0);
+    qint64 winEnd = (recentCount >= 3) ? nowSec : (maxTs > 0 ? maxTs : nowSec);
+    qint64 winStart = (recentCount >= 3) ? (nowSec - 600) : (minTs > 0 ? qMax(minTs, winEnd - 3600) : (winEnd - 600));
+    if (winEnd <= winStart) winStart = winEnd - 600;
+    const double span = static_cast<double>(winEnd - winStart);
+
+    const int chartSampleMax = qMin(m_connections.size(), 600);
+    for (int i = 0; i < chartSampleMax; ++i) {
+        const auto& c = m_connections[i];
+        const qint64 ts = static_cast<qint64>(c.value(QStringLiteral("started_ts")).toDouble(0));
+        int bin = -1;
+        if (ts > 0 && ts >= winStart && ts <= winEnd + 10) {
+            double norm = qBound(0.0, (static_cast<double>(ts) - winStart) / span, 0.9999);
+            bin = static_cast<int>(norm * kBins);
+        } else if (ts == 0) {
+            bin = qBound(0, kBins - 1 - (i * kBins) / qMax(1, chartSampleMax), kBins - 1);
+        }
+        if (bin < 0 || bin >= kBins) continue;
+        const QString vd = c.value(QStringLiteral("verdict")).toString().toLower();
+        if (vd == QLatin1String("block") || vd == QLatin1String("drop") || vd == QLatin1String("failed")) {
+            ++blkBins[bin];
+        } else {
+            ++okBins[bin];
+        }
+    }
+    m_connChartBins.clear();
+    m_connChartBins.reserve(kBins);
+    for (int i = 0; i < kBins; ++i) {
+        m_connChartBins.append(QVariantMap{
+            {QStringLiteral("allowed"), okBins[i]},
+            {QStringLiteral("blocked"), blkBins[i]},
+            {QStringLiteral("total"), okBins[i] + blkBins[i]},
         });
     }
+
+    QVector<QPair<QString, int>> cList;
+    cList.reserve(countryCounts.size());
+    for (auto it = countryCounts.cbegin(); it != countryCounts.cend(); ++it) {
+        cList.append({it.key(), it.value()});
+    }
+    std::sort(cList.begin(), cList.end(), [](const auto& a, const auto& b) {
+        if (a.second != b.second) return a.second > b.second;
+        return a.first < b.first;
+    });
+    m_connCountriesSummary.clear();
+    for (int i = 0; i < cList.size() && i < 24; ++i) {
+        const QString& cc = cList[i].first;
+        m_connCountriesSummary.append(QVariantMap{
+            {QStringLiteral("code"), cc},
+            {QStringLiteral("name"), countryName(cc)},
+            {QStringLiteral("count"), cList[i].second},
+        });
+    }
+
+    QVector<QPair<QString, int>> bList;
+    bList.reserve(blockedAppCounts.size());
+    for (auto it = blockedAppCounts.cbegin(); it != blockedAppCounts.cend(); ++it) {
+        bList.append({it.key(), it.value()});
+    }
+    std::sort(bList.begin(), bList.end(), [](const auto& a, const auto& b) {
+        if (a.second != b.second) return a.second > b.second;
+        return a.first < b.first;
+    });
+    m_blockedAppsSummary.clear();
+    for (int i = 0; i < bList.size() && i < 18; ++i) {
+        const QString& pk = bList[i].first;
+        QString nm = blockedAppNames.value(pk);
+        if (m_profiles.contains(pk)) {
+            const auto& p = m_profiles.value(pk);
+            const QString pn = p.value(QStringLiteral("Name")).toString();
+            if (!pn.isEmpty()) nm = pn;
+        }
+        if (nm.isEmpty()) nm = pk.section('/', -1);
+        m_blockedAppsSummary.append(QVariantMap{
+            {QStringLiteral("profileKey"), pk},
+            {QStringLiteral("name"), nm},
+            {QStringLiteral("initials"), nm.left(2).toUpper()},
+            {QStringLiteral("hasIcon"), hasCachedIcon(pk)},
+            {QStringLiteral("iconKey"), QString::fromUtf8(QUrl::toPercentEncoding(pk))},
+            {QStringLiteral("avatarColor"), appAvatarColor(nm)},
+            {QStringLiteral("count"), bList[i].second},
+        });
+    }
+
     emit connectionsChanged();
+}
+
+QVariantMap PortmasterBackend::buildSettingMap(const QJsonObject& s, const QJsonObject* appCfg) const {
+    const QString key = s.value(QStringLiteral("Key")).toString();
+    const int optType = s.value(QStringLiteral("OptType")).toInt(1);
+    const QJsonObject ann = s.value(QStringLiteral("Annotations")).toObject();
+    const int order = ann.value(QStringLiteral("safing/portbase:ui:order")).toInt(9999);
+    const QString category = ann.value(QStringLiteral("safing/portbase:ui:category")).toString();
+    const bool settablePerApp = ann.value(QStringLiteral("safing/portmaster:settable-per-app")).toBool(false);
+
+    QVariantList choices;
+    for (const auto& pv : s.value(QStringLiteral("PossibleValues")).toArray()) {
+        QVariantMap cm = pv.toObject().toVariantMap();
+        const QString rawVal = cm.value(QStringLiteral("Value")).toString();
+        const QString rawName = cm.value(QStringLiteral("Name")).toString();
+        cm.insert(QStringLiteral("Name"), localizeChoiceName(rawName, rawVal, m_ru));
+        choices.append(cm);
+    }
+
+    const auto& dict = m_ru ? m_i18nRu : m_i18nEn;
+    const QString locName = dict.value(QStringLiteral("cfg.%1.name").arg(key), s.value(QStringLiteral("Name")).toString());
+    const QString locDesc = dict.value(QStringLiteral("cfg.%1.desc").arg(key), s.value(QStringLiteral("Description")).toString());
+
+    const QJsonValue globalEff = effectiveCfgVal(s);
+    QJsonValue eff = globalEff;
+    bool modified = s.contains(QLatin1String("Value")) && !s.value(QLatin1String("Value")).isNull();
+
+    if (appCfg != nullptr) {
+        const QJsonValue localVal = readProfileCfg(*appCfg, key);
+        modified = !localVal.isUndefined() && !localVal.isNull();
+        if (modified) eff = localVal;
+    }
+
+    QString strVal;
+    QStringList arrayItems;
+    if (eff.isBool()) strVal = eff.toBool() ? QStringLiteral("true") : QStringLiteral("false");
+    else if (eff.isDouble()) strVal = QString::number(static_cast<qint64>(eff.toDouble()));
+    else if (eff.isString()) strVal = eff.toString();
+    else if (eff.isArray()) {
+        for (const auto& a : eff.toArray()) arrayItems << a.toString();
+        strVal = arrayItems.join(QStringLiteral(", "));
+    }
+
+    return QVariantMap{
+        {QStringLiteral("key"), key},
+        {QStringLiteral("subsystem"), key.section('/', 0, 0)},
+        {QStringLiteral("category"), category},
+        {QStringLiteral("order"), order},
+        {QStringLiteral("settablePerApp"), settablePerApp},
+        {QStringLiteral("name"), locName},
+        {QStringLiteral("description"), locDesc},
+        {QStringLiteral("optType"), optType},
+        {QStringLiteral("expertise"), s.value(QStringLiteral("ExpertiseLevel")).toInt(0)},
+        {QStringLiteral("modified"), modified},
+        {QStringLiteral("valueStr"), strVal},
+        {QStringLiteral("boolVal"), jsonToBool(eff)},
+        {QStringLiteral("intVal"), static_cast<int>(eff.toDouble(0))},
+        {QStringLiteral("arrayItems"), arrayItems},
+        {QStringLiteral("choices"), choices},
+        {QStringLiteral("globalDisplay"), formatSettingDisplay(globalEff, optType, choices, m_ru)},
+    };
 }
 
 void PortmasterBackend::rebuildSettingsCache() {
     m_settingsCache.clear();
     for (auto it = m_settings.cbegin(); it != m_settings.cend(); ++it) {
-        const auto& s = it.value();
-        QString key = s.value(QStringLiteral("Key")).toString();
-        QJsonValue eff = effectiveCfgVal(s);
-        bool modified = s.contains(QLatin1String("Value")) && !s.value(QLatin1String("Value")).isNull();
-        QString strVal;
-        QStringList arrayItems;
-        if (eff.isBool()) strVal = eff.toBool() ? QStringLiteral("true") : QStringLiteral("false");
-        else if (eff.isDouble()) strVal = QString::number(static_cast<qint64>(eff.toDouble()));
-        else if (eff.isString()) strVal = eff.toString();
-        else if (eff.isArray()) {
-            for (const auto& a : eff.toArray()) arrayItems << a.toString();
-            strVal = arrayItems.join(QStringLiteral(", "));
-        }
-        QVariantList choices;
-        for (const auto& pv : s.value(QStringLiteral("PossibleValues")).toArray()) {
-            choices.append(pv.toObject().toVariantMap());
-        }
-        m_settingsCache.append(QVariantMap{
-            {QStringLiteral("key"), key},
-            {QStringLiteral("subsystem"), key.section('/', 0, 0)},
-            {QStringLiteral("name"), s.value(QStringLiteral("Name")).toString()},
-            {QStringLiteral("description"), s.value(QStringLiteral("Description")).toString()},
-            {QStringLiteral("optType"), s.value(QStringLiteral("OptType")).toInt(1)},
-            {QStringLiteral("expertise"), s.value(QStringLiteral("ExpertiseLevel")).toInt(0)},
-            {QStringLiteral("modified"), modified},
-            {QStringLiteral("valueStr"), strVal},
-            {QStringLiteral("boolVal"), eff.toBool(false)},
-            {QStringLiteral("intVal"), static_cast<int>(eff.toDouble(0))},
-            {QStringLiteral("arrayItems"), arrayItems},
-            {QStringLiteral("choices"), choices},
-        });
+        m_settingsCache.append(buildSettingMap(it.value(), nullptr));
     }
+    sortSettingsByOrder(m_settingsCache);
     emit settingsChanged();
 }
 
@@ -941,70 +1782,55 @@ void PortmasterBackend::rebuildNotificationsCache() {
 }
 
 void PortmasterBackend::setAppAction(const QString& scopedKey, const QString& action) {
-    if (!m_profiles.contains(scopedKey)) return;
-    QJsonObject p = m_profiles.value(scopedKey);
-    QJsonObject cfg = p.value(QStringLiteral("Config")).toObject();
-    writeProfileCfg(cfg, QStringLiteral("filter/defaultAction"), action);
-    p.insert(QStringLiteral("Config"), cfg);
-    m_profiles.insert(scopedKey, p);
-    m_api->sendPutFrame(QStringLiteral("update"), scopedKey, p);
-    rebuildAppsCache();
-    rebuildSelectedAppCache();
+    setAppSetting(scopedKey, QStringLiteral("filter/defaultAction"), action);
 }
 
 void PortmasterBackend::setAppVpnMode(const QString& scopedKey, const QString& mode) {
-    if (!m_profiles.contains(scopedKey)) return;
-    QJsonObject p = m_profiles.value(scopedKey);
-    QJsonObject cfg = p.value(QStringLiteral("Config")).toObject();
-    if (mode == QLatin1String("vpn")) writeProfileCfg(cfg, QStringLiteral("spn/use"), true);
-    else if (mode == QLatin1String("direct")) writeProfileCfg(cfg, QStringLiteral("spn/use"), false);
-    else writeProfileCfg(cfg, QStringLiteral("spn/use"), QJsonValue::Undefined);
-    p.insert(QStringLiteral("Config"), cfg);
-    m_profiles.insert(scopedKey, p);
-    m_api->sendPutFrame(QStringLiteral("update"), scopedKey, p);
-    rebuildAppsCache();
-    rebuildSelectedAppCache();
+    if (mode == QLatin1String("vpn")) setAppSetting(scopedKey, QStringLiteral("spn/use"), true);
+    else if (mode == QLatin1String("direct")) setAppSetting(scopedKey, QStringLiteral("spn/use"), false);
+    else resetAppSetting(scopedKey, QStringLiteral("spn/use"));
 }
 
 void PortmasterBackend::setAppSplitMode(const QString& scopedKey, const QString& mode) {
-    if (!m_profiles.contains(scopedKey)) return;
+    if (mode == QLatin1String("on")) setAppSetting(scopedKey, QStringLiteral("splittun/use"), true);
+    else if (mode == QLatin1String("off")) setAppSetting(scopedKey, QStringLiteral("splittun/use"), false);
+    else resetAppSetting(scopedKey, QStringLiteral("splittun/use"));
+}
+
+void PortmasterBackend::setAppBlockLan(const QString& scopedKey, bool blocked) {
+    setAppSetting(scopedKey, QStringLiteral("filter/blockLAN"), blocked);
+}
+
+void PortmasterBackend::setAppSetting(const QString& scopedKey, const QString& cfgKey, const QVariant& val) {
+    if (!m_profiles.contains(scopedKey) || cfgKey.isEmpty()) return;
     QJsonObject p = m_profiles.value(scopedKey);
     QJsonObject cfg = p.value(QStringLiteral("Config")).toObject();
-    if (mode == QLatin1String("on")) writeProfileCfg(cfg, QStringLiteral("splittun/use"), true);
-    else if (mode == QLatin1String("off")) writeProfileCfg(cfg, QStringLiteral("splittun/use"), false);
-    else writeProfileCfg(cfg, QStringLiteral("splittun/use"), QJsonValue::Undefined);
+    writeProfileCfg(cfg, cfgKey, variantToJsonValue(val));
     p.insert(QStringLiteral("Config"), cfg);
     m_profiles.insert(scopedKey, p);
     m_api->sendPutFrame(QStringLiteral("update"), scopedKey, p);
     rebuildAppsCache();
-    rebuildSelectedAppCache();
+    if (scopedKey == m_selectedProfileKey) rebuildSelectedAppCache();
 }
 
-void PortmasterBackend::setAppBlockLan(const QString& scopedKey, bool blocked) {
-    if (!m_profiles.contains(scopedKey)) return;
+void PortmasterBackend::resetAppSetting(const QString& scopedKey, const QString& cfgKey) {
+    if (!m_profiles.contains(scopedKey) || cfgKey.isEmpty()) return;
     QJsonObject p = m_profiles.value(scopedKey);
     QJsonObject cfg = p.value(QStringLiteral("Config")).toObject();
-    writeProfileCfg(cfg, QStringLiteral("filter/blockLAN"), blocked);
+    writeProfileCfg(cfg, cfgKey, QJsonValue::Undefined);
     p.insert(QStringLiteral("Config"), cfg);
     m_profiles.insert(scopedKey, p);
     m_api->sendPutFrame(QStringLiteral("update"), scopedKey, p);
-    rebuildSelectedAppCache();
+    rebuildAppsCache();
+    if (scopedKey == m_selectedProfileKey) rebuildSelectedAppCache();
 }
 
-void PortmasterBackend::setAppCustomDns(const QString& scopedKey, const QString& serversCsv) {
-    if (!m_profiles.contains(scopedKey)) return;
-    QJsonObject p = m_profiles.value(scopedKey);
-    QJsonObject cfg = p.value(QStringLiteral("Config")).toObject();
-    QJsonArray arr;
-    for (const auto& s : serversCsv.split(',', Qt::SkipEmptyParts)) {
-        if (!s.trimmed().isEmpty()) arr.append(s.trimmed());
-    }
-    if (arr.isEmpty()) writeProfileCfg(cfg, QStringLiteral("dns/servers"), QJsonValue::Undefined);
-    else writeProfileCfg(cfg, QStringLiteral("dns/servers"), arr);
-    p.insert(QStringLiteral("Config"), cfg);
-    m_profiles.insert(scopedKey, p);
-    m_api->sendPutFrame(QStringLiteral("update"), scopedKey, p);
-    rebuildSelectedAppCache();
+void PortmasterBackend::applyAppPreset(const QString& scopedKey, const QString& cfgKey, const QStringList& values, bool append) {
+    if (!m_profiles.contains(scopedKey) || cfgKey.isEmpty()) return;
+    const QJsonObject cfg = m_profiles.value(scopedKey).value(QStringLiteral("Config")).toObject();
+    QJsonValue baseVal = readProfileCfg(cfg, cfgKey);
+    if (baseVal.isUndefined() || baseVal.isNull()) baseVal = effectiveValue(cfgKey);
+    setAppSetting(scopedKey, cfgKey, mergePresetValues(baseVal.toArray(), values, append));
 }
 
 void PortmasterBackend::addAppRule(const QString& scopedKey, const QString& rule) {
@@ -1016,11 +1842,7 @@ void PortmasterBackend::addAppRule(const QString& scopedKey, const QString& rule
         if (v.toString() == rule.trimmed()) return;
     }
     arr.append(rule.trimmed());
-    writeProfileCfg(cfg, QStringLiteral("filter/endpoints"), arr);
-    p.insert(QStringLiteral("Config"), cfg);
-    m_profiles.insert(scopedKey, p);
-    m_api->sendPutFrame(QStringLiteral("update"), scopedKey, p);
-    rebuildSelectedAppCache();
+    setAppSetting(scopedKey, QStringLiteral("filter/endpoints"), arr.toVariantList());
 }
 
 void PortmasterBackend::removeAppRule(const QString& scopedKey, const QString& rule) {
@@ -1032,11 +1854,7 @@ void PortmasterBackend::removeAppRule(const QString& scopedKey, const QString& r
     for (const auto& v : arr) {
         if (v.toString() != rule) next.append(v);
     }
-    writeProfileCfg(cfg, QStringLiteral("filter/endpoints"), next);
-    p.insert(QStringLiteral("Config"), cfg);
-    m_profiles.insert(scopedKey, p);
-    m_api->sendPutFrame(QStringLiteral("update"), scopedKey, p);
-    rebuildSelectedAppCache();
+    setAppSetting(scopedKey, QStringLiteral("filter/endpoints"), next.toVariantList());
 }
 
 void PortmasterBackend::promoteRuleToGlobal(const QString& cfgKey, const QString& rule) {
@@ -1129,9 +1947,49 @@ void PortmasterBackend::clearHistory() {
     m_api->httpPost(QStringLiteral("/api/v1/netquery/history/clear"), "{}", QStringLiteral("application/json"), [this](int code, const QByteArray&, const QString&) {
         if (code >= 200 && code < 300) {
             m_connections.clear();
+            m_historyLoaded = true;
             rebuildConnectionsCache();
+            scheduleAppsTickRebuild();
         }
     });
+}
+
+void PortmasterBackend::setHistoryLimit(int limit) {
+    const int clamped = qBound(250, limit, 10000);
+    if (m_historyLimit == clamped) return;
+    m_historyLimit = clamped;
+    QSettings qs(QStringLiteral("portmaster"), QStringLiteral("qt-ui"));
+    qs.setValue(QStringLiteral("historyLimit"), m_historyLimit);
+    emit historyConfigChanged();
+    if (m_connections.size() > m_historyLimit) {
+        m_connections.resize(m_historyLimit);
+        m_connections.squeeze();
+        rebuildConnectionsCache();
+    } else {
+        loadHistoryFromDb(true);
+    }
+}
+
+void PortmasterBackend::refreshHistory() {
+    loadHistoryFromDb(true);
+}
+
+QString PortmasterBackend::countryFlagUrl(const QString& code) const {
+    QString up = code.trimmed().toUpper();
+    if (up == QLatin1String("UK")) up = QStringLiteral("GB");
+    if (up.size() != 2) return QString();
+    const QString rcPath = QStringLiteral(":/qt/qml/Portmaster/flags/%1.png").arg(up);
+    return QFile::exists(rcPath) ? (QStringLiteral("qrc") + rcPath) : QString();
+}
+
+QString PortmasterBackend::countryName(const QString& code) const {
+    const QString up = code.trimmed().toUpper();
+    if (up.isEmpty()) return QString();
+    if (m_countryNames.contains(up)) return m_countryNames.value(up);
+    if (up == QLatin1String("UK") && m_countryNames.contains(QStringLiteral("GB"))) {
+        return m_countryNames.value(QStringLiteral("GB"));
+    }
+    return up;
 }
 
 void PortmasterBackend::toggleGlobalVpn() {
@@ -1200,9 +2058,13 @@ void PortmasterBackend::downloadGeodata() {
 void PortmasterBackend::updateSetting(const QString& key, const QVariant& val) {
     QJsonObject payload = m_settings.contains(key) ? m_settings.value(key) : QJsonObject{{QStringLiteral("Key"), key}};
     payload.insert(QStringLiteral("Key"), key);
-    payload.insert(QStringLiteral("Value"), QJsonValue::fromVariant(val));
+    payload.insert(QStringLiteral("Value"), variantToJsonValue(val));
     m_settings.insert(key, payload);
     rebuildSettingsCache();
+    if (!m_selectedProfileKey.isEmpty()) rebuildSelectedAppCache();
+    if (key.startsWith(QLatin1String("filter/")) || key == QLatin1String("spn/use") || key == QLatin1String("splittun/use")) {
+        rebuildAppsCache();
+    }
     m_api->sendPutFrame(QStringLiteral("update"), QStringLiteral("config:") + key, payload);
 }
 
@@ -1212,19 +2074,27 @@ void PortmasterBackend::resetSetting(const QString& key) {
     payload.remove(QStringLiteral("Value"));
     m_settings.insert(key, payload);
     rebuildSettingsCache();
+    if (!m_selectedProfileKey.isEmpty()) rebuildSelectedAppCache();
+    if (key.startsWith(QLatin1String("filter/")) || key == QLatin1String("spn/use") || key == QLatin1String("splittun/use")) {
+        rebuildAppsCache();
+    }
     m_api->sendPutFrame(QStringLiteral("update"), QStringLiteral("config:") + key, payload);
 }
 
 void PortmasterBackend::applyPreset(const QString& key, const QStringList& values, bool append) {
-    QStringList next;
-    if (append) {
-        const QJsonArray cur = effectiveValue(key).toArray();
-        for (const auto& v : cur) next << v.toString();
-    }
-    for (const auto& v : values) {
-        if (!next.contains(v)) next << v;
-    }
-    updateSetting(key, next);
+    updateSetting(key, mergePresetValues(effectiveValue(key).toArray(), values, append));
+}
+
+void PortmasterBackend::moveSettingArrayItem(const QString& key, int index, int delta) {
+    updateSetting(key, moveArrayElement(effectiveValue(key).toArray(), index, delta));
+}
+
+void PortmasterBackend::moveAppArrayItem(const QString& scopedKey, const QString& cfgKey, int index, int delta) {
+    if (!m_profiles.contains(scopedKey) || cfgKey.isEmpty()) return;
+    const QJsonObject cfg = m_profiles.value(scopedKey).value(QStringLiteral("Config")).toObject();
+    QJsonValue baseVal = readProfileCfg(cfg, cfgKey);
+    if (baseVal.isUndefined() || baseVal.isNull()) baseVal = effectiveValue(cfgKey);
+    setAppSetting(scopedKey, cfgKey, moveArrayElement(baseVal.toArray(), index, delta));
 }
 
 void PortmasterBackend::switchUiFlavor(const QString& flavorId) {
@@ -1240,8 +2110,22 @@ void PortmasterBackend::switchUiFlavor(const QString& flavorId) {
 void PortmasterBackend::setKeepApiPortOpen(bool keep) {
     QByteArray body = QJsonDocument(QJsonObject{{QStringLiteral("keepOpen"), keep}}).toJson();
     m_api->httpPost(QStringLiteral("/api/v1/core/api-port"), body, QStringLiteral("application/json"), [this](int, const QByteArray&, const QString&) {
+        m_uiPollTick = 0;
         QTimer::singleShot(450, this, &PortmasterBackend::refreshHttpData);
     });
+}
+
+void PortmasterBackend::setHwAccel(bool enabled) {
+    if (m_hwAccel == enabled) return;
+    m_hwAccel = enabled;
+    QSettings qs(QStringLiteral("portmaster"), QStringLiteral("qt-ui"));
+    qs.setValue(QStringLiteral("hwAccel"), m_hwAccel);
+    emit uiReportChanged();
+    emit toastMessage(
+        m_ru ? QStringLiteral("Аппаратное ускорение") : QStringLiteral("Hardware Acceleration"),
+        m_ru ? QStringLiteral("Настройка сохранена. Перезапустите Qt UI, чтобы применить режим рендеринга.")
+             : QStringLiteral("Setting saved. Restart Qt UI to apply the graphics backend change."),
+        false);
 }
 
 void PortmasterBackend::exportSettings() {

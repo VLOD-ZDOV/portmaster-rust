@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(portmaster-qt VERSION 2.2.38 LANGUAGES CXX)
+project(portmaster-qt VERSION 2.2.39 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -26,6 +26,16 @@ find_package(Qt6 REQUIRED COMPONENTS
     WebSockets
 )
 
+file(GLOB FLAG_PNG_FILES "${CMAKE_CURRENT_SOURCE_DIR}/../angular/src/assets/img/flags/*.png")
+set(FLAGS_QRC "${CMAKE_CURRENT_BINARY_DIR}/flags.qrc")
+set(FLAGS_QRC_CONTENT "<RCC>\n    <qresource prefix=\"/qt/qml/Portmaster/flags\">\n")
+foreach(FLAG_FILE ${FLAG_PNG_FILES})
+    get_filename_component(FLAG_NAME "${FLAG_FILE}" NAME)
+    string(APPEND FLAGS_QRC_CONTENT "        <file alias=\"${FLAG_NAME}\">${FLAG_FILE}</file>\n")
+endforeach()
+string(APPEND FLAGS_QRC_CONTENT "    </qresource>\n</RCC>\n")
+file(WRITE "${FLAGS_QRC}" "${FLAGS_QRC_CONTENT}")
+
 add_executable(portmaster-qt
     src/main.cpp
     src/PortApiClient.h
@@ -33,6 +43,7 @@ add_executable(portmaster-qt
     src/PortmasterBackend.h
     src/PortmasterBackend.cpp
     resources.qrc
+    "${FLAGS_QRC}"
 )
 
 if(UNIX AND NOT APPLE)

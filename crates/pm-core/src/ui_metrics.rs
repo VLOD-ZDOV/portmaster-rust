@@ -1,7 +1,13 @@
 //! Live UI flavor inventory, memory telemetry (RSS/PSS), and web-port status.
 
+#[cfg(target_os = "linux")]
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "linux")]
+use std::sync::{Mutex, OnceLock};
 use std::sync::Arc;
+#[cfg(target_os = "linux")]
+use std::time::{Duration, Instant};
 
 use pm_api::{Api, Endpoint, PERMIT_ADMIN, PERMIT_USER};
 use pm_config::Config;
@@ -58,7 +64,7 @@ pub struct UiFlavorsReport {
     pub xray_memory: ProcessMemoryInfo,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct LiveStats {
     rss_kb: u64,
     pss_kb: u64,
@@ -126,6 +132,7 @@ fn read_proc_rss_pss(pid: u32) -> Option<(u64, Option<u64>)> {
 }
 
 #[cfg(target_os = "linux")]
+#[derive(Clone)]
 struct LinuxLiveTelemetry {
     webkit_ui: LiveStats,
     qt_ui: LiveStats,
@@ -134,7 +141,28 @@ struct LinuxLiveTelemetry {
 }
 
 #[cfg(target_os = "linux")]
+fn read_proc_ppid(pid: u32) -> Option<u32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let rparen = stat.rfind(')')?;
+    let mut fields = stat[rparen + 1..].split_whitespace();
+    let _state = fields.next()?;
+    fields.next()?.parse::<u32>().ok()
+}
+
+#[cfg(target_os = "linux")]
 fn collect_linux_telemetry() -> LinuxLiveTelemetry {
+    static CACHE: OnceLock<Mutex<Option<(Instant, LinuxLiveTelemetry)>>> = OnceLock::new();
+    const CACHE_TTL: Duration = Duration::from_secs(4);
+
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(guard) = cache.lock() {
+        if let Some((at, ref snap)) = *guard {
+            if at.elapsed() < CACHE_TTL {
+                return snap.clone();
+            }
+        }
+    }
+
     let mut telemetry = LinuxLiveTelemetry {
         webkit_ui: LiveStats::default(),
         qt_ui: LiveStats::default(),
@@ -146,6 +174,9 @@ fn collect_linux_telemetry() -> LinuxLiveTelemetry {
     let Ok(entries) = std::fs::read_dir("/proc") else {
         return telemetry;
     };
+
+    let mut portmaster_pids = HashSet::new();
+    let mut webkit_candidates = Vec::new();
 
     for entry in entries.flatten() {
         let Ok(name) = entry.file_name().into_string() else {
@@ -162,50 +193,48 @@ fn collect_linux_telemetry() -> LinuxLiveTelemetry {
             continue;
         }
 
-        let cmdline = std::fs::read(format!("/proc/{pid}/cmdline"))
-            .map(|bytes| {
-                bytes
-                    .split(|&b| b == 0)
-                    .filter(|s| !s.is_empty())
-                    .map(|s| String::from_utf8_lossy(s).into_owned())
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            })
-            .unwrap_or_default();
-        if cmdline.is_empty() {
+        // Read the short 16-byte comm name first so we skip ~98% of unrelated PIDs
+        // without opening cmdline or smaps_rollup.
+        let Ok(comm_raw) = std::fs::read_to_string(format!("/proc/{pid}/comm")) else {
             continue;
-        }
-        let comm = std::fs::read_to_string(format!("/proc/{pid}/comm"))
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-        let exe_name = cmdline
-            .split_whitespace()
-            .next()
-            .and_then(|p| Path::new(p).file_name())
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
+        };
+        let comm = comm_raw.trim();
 
-        if comm == "portmaster-qt" || exe_name == "portmaster-qt" {
+        if comm == "portmaster-qt" {
             if let Some((rss, pss)) = read_proc_rss_pss(pid) {
                 telemetry.qt_ui.add(rss, pss);
             }
-        } else if comm == "xray-rust" || exe_name == "xray-rust" {
+        } else if comm == "xray-rust" {
             if let Some((rss, pss)) = read_proc_rss_pss(pid) {
                 telemetry.xray.add(rss, pss);
             }
-        } else if (comm == "portmaster" || exe_name == "portmaster" || exe_name == "portmaster-app")
-            && !cmdline.contains("portmaster-core")
-            && !cmdline.contains("portmaster-qt")
-        {
-            if let Some((rss, pss)) = read_proc_rss_pss(pid) {
-                telemetry.webkit_ui.add(rss, pss);
+        } else if comm == "portmaster" || comm == "portmaster-app" {
+            let cmdline = std::fs::read(format!("/proc/{pid}/cmdline"))
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .unwrap_or_default();
+            if !cmdline.contains("portmaster-core") && !cmdline.contains("portmaster-qt") {
+                portmaster_pids.insert(pid);
+                if let Some((rss, pss)) = read_proc_rss_pss(pid) {
+                    telemetry.webkit_ui.add(rss, pss);
+                }
             }
-        } else if comm.starts_with("WebKit") || cmdline.contains("WebKitWebProcess") || cmdline.contains("WebKitNetworkProcess") {
-            if let Some((rss, pss)) = read_proc_rss_pss(pid) {
-                telemetry.webkit_ui.add(rss, pss);
+        } else if comm.starts_with("WebKit") {
+            webkit_candidates.push(pid);
+        }
+    }
+
+    for pid in webkit_candidates {
+        if let Some(ppid) = read_proc_ppid(pid) {
+            if portmaster_pids.contains(&ppid) {
+                if let Some((rss, pss)) = read_proc_rss_pss(pid) {
+                    telemetry.webkit_ui.add(rss, pss);
+                }
             }
         }
+    }
+
+    if let Ok(mut guard) = cache.lock() {
+        *guard = Some((Instant::now(), telemetry.clone()));
     }
 
     telemetry

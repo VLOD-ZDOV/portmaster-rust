@@ -9,12 +9,18 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickStyle>
+#include <QQuickWindow>
+#include <QSettings>
 #include <QTimer>
 
 #include "PortmasterBackend.h"
 
 int main(int argc, char* argv[]) {
     QQuickStyle::setStyle(QStringLiteral("Basic"));
+    const bool hwAccel = QSettings(QStringLiteral("portmaster"), QStringLiteral("qt-ui")).value(QStringLiteral("hwAccel"), true).toBool();
+    if (!hwAccel) {
+        QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
+    }
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("portmaster-qt"));
     app.setOrganizationName(QStringLiteral("Portmaster"));
@@ -68,6 +74,7 @@ int main(int argc, char* argv[]) {
     }
 
     QQmlApplicationEngine engine;
+    engine.addImageProvider(QStringLiteral("appicon"), backend.createIconProvider());
     engine.rootContext()->setContextProperty(QStringLiteral("pm"), &backend);
     engine.rootContext()->setContextProperty(QStringLiteral("startHidden"), background);
     engine.load(QUrl(QStringLiteral("qrc:/qt/qml/Portmaster/Main.qml")));
@@ -83,8 +90,16 @@ int main(int argc, char* argv[]) {
                 if (sv.toMap().value(QStringLiteral("optType")).toInt() == 4) ++boolOpts;
             }
             int nonAutoApps = 0;
+            int resolvedIcons = 0;
             for (const auto& av : backend.allApps()) {
-                if (av.toMap().value(QStringLiteral("vpnMode")).toString() != QLatin1String("default")) ++nonAutoApps;
+                const auto m = av.toMap();
+                if (m.value(QStringLiteral("vpnMode")).toString() != QLatin1String("default")) ++nonAutoApps;
+                if (m.value(QStringLiteral("hasIcon")).toBool()) ++resolvedIcons;
+            }
+            int perAppOpts = 0;
+            if (!backend.allApps().isEmpty()) {
+                backend.selectApp(backend.allApps().first().toMap().value(QStringLiteral("key")).toString());
+                perAppOpts = backend.selectedAppSettings().size();
             }
             QJsonObject out{
                 {QStringLiteral("connected"), backend.connected()},
@@ -95,11 +110,21 @@ int main(int argc, char* argv[]) {
                 {QStringLiteral("connections"), backend.connections().size()},
                 {QStringLiteral("settings"), backend.settingsList().size()},
                 {QStringLiteral("boolSettings"), boolOpts},
+                {QStringLiteral("perAppSettings"), perAppOpts},
+                {QStringLiteral("blockInternet"), backend.blockInternet()},
+                {QStringLiteral("dnsSummary"), backend.dnsSummary()},
                 {QStringLiteral("xrayConnected"), backend.xrayStatus().value(QStringLiteral("connected")).toBool()},
                 {QStringLiteral("xrayNodeName"), backend.xrayStatus().value(QStringLiteral("nodeName")).toString()},
                 {QStringLiteral("xrayNodes"), backend.xrayNodes().size()},
                 {QStringLiteral("mapPins"), backend.mapPins().size()},
                 {QStringLiteral("worldPolygons"), backend.worldPolygons().size()},
+                {QStringLiteral("worldCountries"), backend.worldCountries().size()},
+                {QStringLiteral("resolvedIcons"), resolvedIcons},
+                {QStringLiteral("hwAccel"), backend.hwAccel()},
+                {QStringLiteral("historyLimit"), backend.historyLimit()},
+                {QStringLiteral("connChartBins"), backend.connChartBins().size()},
+                {QStringLiteral("connAllowedTotal"), backend.connAllowedTotal()},
+                {QStringLiteral("connBlockedTotal"), backend.connBlockedTotal()},
             };
             std::printf("%s\n", QJsonDocument(out).toJson(QJsonDocument::Compact).constData());
             std::fflush(stdout);

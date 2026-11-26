@@ -51,92 +51,61 @@ Rectangle {
         anchors.bottomMargin: 16
         spacing: 4
 
-        // TOP: Concentric Shields (collapsed) OR Rotating Portmaster Ring Logo (expanded)
-        Item {
+        // TOP: Security Shield (collapsed) OR Portmaster Ring Logo (expanded) -> Opens Dashboard
+        Rectangle {
             Layout.alignment: Qt.AlignHCenter
-            width: 56
-            height: 56
+            width: 52
+            height: 52
+            radius: 12
+            color: (root.currentPage === "dashboard" && root.sideDashOpen) ? "#23252c" : (topMa.containsMouse ? "#1e1f24" : "transparent")
+            ToolTip.visible: topMa.containsMouse
+            ToolTip.text: pm.isRu ? "Панель управления (Dashboard)" : "Dashboard"
+            ToolTip.delay: 300
 
-            Canvas {
-                id: topBadgeCanvas
+            SecurityShield {
                 anchors.centerIn: parent
-                width: 34
-                height: 34
-                property real spinAngle: 0
-                NumberAnimation on spinAngle {
-                    from: 0; to: 360; duration: 3500; loops: Animation.Infinite; running: pm.connected && root.sideDashOpen
-                }
-                onSpinAngleChanged: requestPaint()
+                width: 40
+                height: 40
+                cutoutColor: "#121213"
+                visible: !root.sideDashOpen
+            }
+
+            // Static crisp vector Portmaster Ring mark when SideDash is open (zero idle Canvas repaints!)
+            Canvas {
+                id: topRingCanvas
+                anchors.centerIn: parent
+                width: 30
+                height: 30
+                visible: root.sideDashOpen
                 Connections {
                     target: pm
-                    function onConnectionChanged() { topBadgeCanvas.requestPaint() }
-                    function onXrayChanged() { topBadgeCanvas.requestPaint() }
-                    function onNotificationsChanged() { topBadgeCanvas.requestPaint() }
+                    function onConnectionChanged() { topRingCanvas.requestPaint() }
                 }
-                Connections {
-                    target: root
-                    function onSideDashOpenChanged() { topBadgeCanvas.requestPaint() }
-                }
-
                 onPaint: {
                     var ctx = getContext("2d")
                     ctx.clearRect(0, 0, width, height)
-                    var c1 = !pm.connected ? "#e01d1d" : (pm.paused ? "#e9d81d" : (pm.xrayStatus.connected ? "#4e97fa" : "#1de966"))
-                    var c2 = !pm.connected ? "#811818" : (pm.paused ? "#827918" : (pm.xrayStatus.connected ? "#1e4b8f" : "#18823d"))
-                    var c3 = !pm.connected ? "#3d1414" : (pm.paused ? "#3d3a14" : (pm.xrayStatus.connected ? "#16345c" : "#143d24"))
-
-                    if (!root.sideDashOpen) {
-                        function drawShield(scale, fill) {
-                            ctx.save()
-                            ctx.translate(width / 2, height / 2)
-                            ctx.scale(scale, scale)
-                            ctx.beginPath()
-                            ctx.moveTo(0, -13)
-                            ctx.lineTo(11, -8)
-                            ctx.quadraticCurveTo(11, 5, 0, 13)
-                            ctx.quadraticCurveTo(-11, 5, -11, -8)
-                            ctx.closePath()
-                            ctx.fillStyle = fill
-                            ctx.fill()
-                            ctx.restore()
-                        }
-                        drawShield(1.15, c3)
-                        drawShield(0.88, c2)
-                        drawShield(0.65, c1)
-                        ctx.strokeStyle = "#ffffff"
-                        ctx.lineWidth = 2.0
-                        ctx.lineCap = "round"
-                        ctx.lineJoin = "round"
-                        ctx.beginPath()
-                        ctx.moveTo(12, 18)
-                        ctx.lineTo(15.5, 21.5)
-                        ctx.lineTo(22.5, 13.5)
-                        ctx.stroke()
-                    } else {
-                        ctx.save()
-                        ctx.translate(width / 2, height / 2)
-                        ctx.strokeStyle = "#ffffff"
-                        ctx.lineWidth = 2.6
-                        ctx.beginPath(); ctx.arc(0, 0, 14, 0, Math.PI * 2); ctx.stroke()
-                        ctx.save(); ctx.rotate(-spinAngle * Math.PI / 180)
-                        ctx.strokeStyle = pm.connected ? "#ffffff" : "#d12e2e"
-                        ctx.globalAlpha = 0.8; ctx.lineWidth = 2.2
-                        ctx.beginPath(); ctx.arc(0, 0, 9.5, 0.2, 2.2); ctx.stroke()
-                        ctx.beginPath(); ctx.arc(0, 0, 9.5, 3.3, 5.3); ctx.stroke()
-                        ctx.restore()
-                        ctx.save(); ctx.rotate(spinAngle * Math.PI / 180)
-                        ctx.globalAlpha = 0.6; ctx.lineWidth = 2
-                        ctx.beginPath(); ctx.arc(0, 0, 5.5, 0.4, 3.8); ctx.stroke()
-                        ctx.restore()
-                        ctx.restore()
-                    }
+                    ctx.translate(width / 2, height / 2)
+                    ctx.strokeStyle = "#ffffff"
+                    ctx.lineWidth = 2.4
+                    ctx.beginPath(); ctx.arc(0, 0, 12, 0, Math.PI * 2); ctx.stroke()
+                    ctx.strokeStyle = pm.connected ? "#1de966" : "#d12e2e"
+                    ctx.lineWidth = 2.0
+                    ctx.beginPath(); ctx.arc(0, 0, 8, 0.3, 2.4); ctx.stroke()
+                    ctx.beginPath(); ctx.arc(0, 0, 8, 3.4, 5.5); ctx.stroke()
+                    ctx.strokeStyle = "#ffffff"
+                    ctx.globalAlpha = 0.7
+                    ctx.lineWidth = 1.8
+                    ctx.beginPath(); ctx.arc(0, 0, 4.5, 0.5, 4.0); ctx.stroke()
                 }
+                Component.onCompleted: requestPaint()
             }
 
             MouseArea {
+                id: topMa
                 anchors.fill: parent
+                hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: root.toggleSideDash()
+                onClicked: root.navigate("dashboard")
             }
         }
 

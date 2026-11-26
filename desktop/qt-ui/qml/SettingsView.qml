@@ -14,8 +14,8 @@ Item {
     // pm-config OptType values:
     // 1 = String, 2 = StringArray, 3 = Int, 4 = Bool
     function subsystemList() {
-        var seen = { "all": true, "ui": true }
-        var out = ["all", "ui"]
+        var seen = { "all": true, "network": true, "ui": true }
+        var out = ["all", "network", "ui"]
         var list = pm.settingsList || []
         for (var i = 0; i < list.length; i++) {
             var s = list[i].subsystem || "core"
@@ -32,7 +32,11 @@ Item {
         for (var i = 0; i < list.length; i++) {
             var st = list[i]
             if ((st.expertise || 0) > maxExpertise) continue
-            if (selectedSub !== "all" && st.subsystem !== selectedSub) continue
+            if (selectedSub === "network") {
+                if (st.subsystem !== "filter" && st.subsystem !== "dns") continue
+            } else if (selectedSub !== "all" && st.subsystem !== selectedSub) {
+                continue
+            }
             if (q !== "") {
                 var hay = ((st.key || "") + " " + (st.name || "") + " " + (st.description || "")).toLowerCase()
                 if (hay.indexOf(q) < 0) continue
@@ -40,15 +44,6 @@ Item {
             out.push(st)
         }
         return out
-    }
-
-    function isArraySetting(st) {
-        return st.optType === 2 ||
-               (st.arrayItems && st.arrayItems.length > 0) ||
-               st.key === "dns/nameservers" ||
-               st.key === "xray/rules" ||
-               st.key === "spn/usagePolicy" ||
-               st.key === "filter/endpoints"
     }
 
     ColumnLayout {
@@ -190,7 +185,9 @@ Item {
                             anchors.left: parent.left; anchors.leftMargin: 12
                             text: modelData === "all"
                                   ? (pm.isRu ? "Все разделы" : "All Sections")
-                                  : (modelData === "ui" ? (pm.isRu ? "UI и Порт :817" : "UI & Port :817") : modelData.toUpperCase())
+                                  : (modelData === "network"
+                                     ? (pm.isRu ? "Сеть и DNS" : "Network & DNS")
+                                     : (modelData === "ui" ? (pm.isRu ? "UI и Порт :817" : "UI & Port :817") : modelData.toUpperCase()))
                             color: root.selectedSub === modelData ? "#4e97fa" : "#b8b8c0"
                             font.pixelSize: 11; font.bold: root.selectedSub === modelData
                         }
@@ -208,19 +205,22 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
+                cacheBuffer: 1200
                 spacing: 8
                 model: root.filteredSettings()
                 ScrollBar.vertical: PmScrollBar {}
 
-                header: Item {
+                header: ColumnLayout {
                     width: settingsListView.width - 10
+                    height: implicitHeight
+                    spacing: 10
                     property bool showUiCard: root.selectedSub === "all" || root.selectedSub === "ui" || root.selectedSub === "core"
-                    height: showUiCard ? (uiCardRect.implicitHeight + 10) : 0
-                    visible: showUiCard
+                    property bool showNetCard: root.selectedSub === "all" || root.selectedSub === "network" || root.selectedSub === "filter" || root.selectedSub === "dns"
 
                     Rectangle {
                         id: uiCardRect
-                        width: parent.width
+                        visible: parent.showUiCard
+                        Layout.fillWidth: true
                         implicitHeight: uiCardCol.implicitHeight + 24
                         radius: 6
                         color: "#1b1b1e"
@@ -313,15 +313,23 @@ Item {
                                                 Layout.fillWidth: true
                                                 Label {
                                                     text: {
-                                                        var live = (modelData.liveRamMb !== null && modelData.liveRamMb !== undefined)
-                                                                   ? (modelData.liveRamMb.toFixed(1) + " MB PSS")
-                                                                   : (pm.isRu ? "не запущен" : "idle")
-                                                        var base = (modelData.benchmarkRamMb !== null && modelData.benchmarkRamMb !== undefined)
-                                                                   ? (" • " + (pm.isRu ? "эталон: " : "base: ") + modelData.benchmarkRamMb.toFixed(1) + " MB")
-                                                                   : ""
-                                                        return live + base
+                                                        if (modelData.liveRamMb !== null && modelData.liveRamMb !== undefined) {
+                                                            var cnt = modelData.processCount || 1
+                                                            var suffix = modelData.id === "qt"
+                                                                         ? (pm.isRu ? " (Qt активен)" : " (Qt active)")
+                                                                         : (" (" + cnt + (pm.isRu ? " проц. в фоне)" : " bg procs)"))
+                                                            return modelData.liveRamMb.toFixed(1) + " MB PSS" + suffix
+                                                        }
+                                                        var est = (modelData.benchmarkRamMb !== null && modelData.benchmarkRamMb !== undefined)
+                                                                  ? modelData.benchmarkRamMb.toFixed(1) + " MB"
+                                                                  : "-"
+                                                        return (pm.isRu ? "не запущен • оценка ~" : "not running • est. ~") + est
                                                     }
-                                                    color: "#9fd0ff"; font.pixelSize: 11; font.bold: true
+                                                    color: (modelData.liveRamMb !== null && modelData.liveRamMb !== undefined)
+                                                           ? (modelData.id === "angular" ? "#f5b864" : "#1de966")
+                                                           : "#8e8e98"
+                                                    font.pixelSize: 10; font.bold: true
+                                                    elide: Text.ElideRight
                                                     Layout.fillWidth: true
                                                 }
                                                 Rectangle {
@@ -354,133 +362,163 @@ Item {
                                     elide: Text.ElideRight; Layout.fillWidth: true
                                 }
                             }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 10
+                                PmSwitch {
+                                    checked: pm.hwAccel
+                                    onToggled: pm.setHwAccel(checked)
+                                }
+                                Label {
+                                    text: pm.isRu ? "Аппаратное ускорение GPU (Qt SceneGraph)" : "Hardware GPU Acceleration (Qt SceneGraph)"
+                                    color: "#ffffff"; font.pixelSize: 12; font.bold: true
+                                }
+                                Label {
+                                    text: pm.hwAccel
+                                          ? (pm.isRu ? "(Вкл — плавная прокрутка; выкл. уберёт VRAM, применить после перезапуска)" : "(ON — smooth GPU rendering; turn OFF for 0 VRAM on restart)")
+                                          : (pm.isRu ? "(Выкл — программный рендер CPU, 0 VRAM)" : "(OFF — CPU software renderer, 0 VRAM)")
+                                    color: pm.hwAccel ? "#1de966" : "#e9d81d"
+                                    font.pixelSize: 11
+                                    elide: Text.ElideRight; Layout.fillWidth: true
+                                }
+                            }
+
+                            Label {
+                                visible: !!(pm.uiReport.coreMemory && pm.uiReport.coreMemory.livePssMb !== null && pm.uiReport.coreMemory.livePssMb !== undefined)
+                                text: (pm.isRu ? "Фоновая служба ядра (portmaster-core-rs): " : "Core daemon (portmaster-core-rs): ")
+                                      + ((pm.uiReport.coreMemory && pm.uiReport.coreMemory.livePssMb) ? pm.uiReport.coreMemory.livePssMb.toFixed(1) : "0") + " MB PSS  ("
+                                      + (pm.isRu ? "базы GeoIP 102 МБ + списки фильтрации + SQLite в ОЗУ" : "102 MB GeoIP DBs + filterlists + SQLite in RAM") + ")"
+                                color: "#787c88"; font.pixelSize: 10
+                            }
                         }
                     }
-                }
 
-                delegate: Rectangle {
-                    id: stCard
-                    property var st: modelData
-                    property bool isArr: root.isArraySetting(st)
-                    width: ListView.view.width - 10
-                    implicitHeight: stCol.implicitHeight + 24
-                    radius: 5
-                    color: "#1a1a1d"
-                    border.color: "#26262b"
-
-                    // Modified blue bar on left (1:1 Portmaster Angular card look)
+                    // Quick Network Kill-Switches & DNS Card (Global)
                     Rectangle {
-                        visible: !!st.modified
-                        width: 3
-                        anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom
-                        color: "#4e97fa"
-                    }
+                        id: networkCardRect
+                        visible: parent.showNetCard
+                        Layout.fillWidth: true
+                        implicitHeight: netCardCol.implicitHeight + 24
+                        radius: 6
+                        color: pm.blockInternet ? "#261618" : "#191a1f"
+                        border.color: pm.blockInternet ? "#e01d1d" : "#2c3140"
 
-                    ColumnLayout {
-                        id: stCol
-                        anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
-                        anchors.margins: 12; anchors.leftMargin: 16
-                        spacing: 8
-
-                        RowLayout {
-                            Layout.fillWidth: true
+                        ColumnLayout {
+                            id: netCardCol
+                            anchors.fill: parent
+                            anchors.margins: 12
                             spacing: 10
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 10
+                                Label {
+                                    text: pm.isRu ? "Быстрые настройки сети и DNS (глобально)" : "Quick Network, Blocking & DNS (Global)"
+                                    color: "#ffffff"; font.pixelSize: 14; font.bold: true
+                                }
+                                Rectangle {
+                                    visible: pm.blockInternet
+                                    height: 20; radius: 4; color: "#7a1515"; border.color: "#e01d1d"
+                                    implicitWidth: blkWarnLbl.implicitWidth + 14
+                                    Label { id: blkWarnLbl; anchors.centerIn: parent; text: pm.isRu ? "ИНТЕРНЕТ ЗАБЛОКИРОВАН" : "INTERNET BLOCKED"; color: "#ffffff"; font.pixelSize: 9; font.bold: true }
+                                }
+                                Item { Layout.fillWidth: true }
+                                Rectangle {
+                                    height: 26; radius: 4; color: clrDnsMa.containsMouse ? "#283142" : "#22242c"; border.color: "#384152"
+                                    implicitWidth: clrDnsLbl.implicitWidth + 16
+                                    Label { id: clrDnsLbl; anchors.centerIn: parent; text: pm.isRu ? "Очистить кэш DNS" : "Clear DNS Cache"; color: "#89b7ff"; font.pixelSize: 11; font.bold: true }
+                                    MouseArea { id: clrDnsMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: pm.clearDnsCache() }
+                                }
+                            }
+
+                            // Network Blocking Quick Toggles
+                            Flow {
+                                Layout.fillWidth: true
+                                spacing: 14
+                                RowLayout {
+                                    spacing: 8
+                                    PmSwitch { checked: pm.blockInternet; onToggled: pm.updateSetting("filter/blockInternet", checked) }
+                                    Label { text: pm.isRu ? "Блокировать Интернет" : "Force Block Internet"; color: pm.blockInternet ? "#ff8888" : "#ffffff"; font.pixelSize: 12; font.bold: true }
+                                }
+                                RowLayout {
+                                    spacing: 8
+                                    PmSwitch { checked: pm.blockLan; onToggled: pm.updateSetting("filter/blockLAN", checked) }
+                                    Label { text: pm.isRu ? "Блокировать LAN" : "Force Block LAN"; color: "#dcdce2"; font.pixelSize: 12 }
+                                }
+                                RowLayout {
+                                    spacing: 8
+                                    PmSwitch { checked: pm.blockP2p; onToggled: pm.updateSetting("filter/blockP2P", checked) }
+                                    Label { text: pm.isRu ? "Блокировать P2P" : "Force Block P2P"; color: "#dcdce2"; font.pixelSize: 12 }
+                                }
+                                RowLayout {
+                                    spacing: 8
+                                    PmSwitch { checked: pm.blockInbound; onToggled: pm.updateSetting("filter/blockInbound", checked) }
+                                    Label { text: pm.isRu ? "Блокировать входящие" : "Block Inbound"; color: "#dcdce2"; font.pixelSize: 12 }
+                                }
+                                RowLayout {
+                                    spacing: 8
+                                    PmSwitch { checked: pm.preventDnsBypass; onToggled: pm.updateSetting("filter/preventBypassing", checked) }
+                                    Label { text: pm.isRu ? "Запретить обход DNS" : "Block DNS Bypassing"; color: "#dcdce2"; font.pixelSize: 12 }
+                                }
+                            }
+
+                            Rectangle { Layout.fillWidth: true; height: 1; color: "#272932" }
+
+                            // Active Ordered DNS List + Custom Add + Rich Provider Presets
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+                                Label { text: pm.isRu ? "Активные DNS-серверы (по приоритету):" : "Active DNS Servers (Priority Order):"; color: "#cacaca"; font.pixelSize: 12; font.bold: true }
+                                Item { Layout.fillWidth: true }
+                                PmCheckBox {
+                                    text: pm.t("set.appendDns")
+                                    checked: root.appendDns
+                                    onToggled: root.appendDns = checked
+                                }
+                            }
 
                             ColumnLayout {
                                 Layout.fillWidth: true
-                                spacing: 2
-                                RowLayout {
-                                    spacing: 8
-                                    Label { text: st.name || st.key; color: "#ffffff"; font.pixelSize: 13; font.bold: true }
-                                    Rectangle {
-                                        height: 16; radius: 3; color: "#25262b"
-                                        implicitWidth: kLbl.implicitWidth + 10
-                                        Label { id: kLbl; anchors.centerIn: parent; text: st.key; color: "#888894"; font.pixelSize: 10; font.family: "monospace" }
-                                    }
-                                    Label {
-                                        visible: !!st.modified
-                                        text: pm.isRu ? "↺ Сбросить" : "↺ Reset"
-                                        color: "#4e97fa"; font.pixelSize: 11
-                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: pm.resetSetting(st.key) }
-                                    }
-                                }
-                                Label {
-                                    visible: (st.description || "") !== ""
-                                    text: st.description || ""
-                                    color: "#84848e"; font.pixelSize: 11; wrapMode: Text.WordWrap
-                                    Layout.fillWidth: true
-                                }
-                            }
-
-                            // Bool Toggle Switch (optType == 4 in pm-config!)
-                            PmSwitch {
-                                visible: st.optType === 4 && !stCard.isArr
-                                checked: !!st.boolVal
-                                onToggled: pm.updateSetting(st.key, checked)
-                            }
-                        }
-
-                        // Choice Selector (choices.length > 0 for non-Bool)
-                        RowLayout {
-                            visible: st.choices && st.choices.length > 0 && st.optType !== 4 && !stCard.isArr
-                            Layout.fillWidth: true
-                            spacing: 6
-                            Flow {
-                                Layout.fillWidth: true
-                                spacing: 6
+                                spacing: 4
                                 Repeater {
-                                    model: st.choices || []
+                                    model: pm.dnsServers
                                     delegate: Rectangle {
-                                        property bool sel: String(modelData.Value) === String(st.valueStr)
-                                        height: 26; radius: 4
-                                        color: sel ? "#173b66" : "#242429"
-                                        border.color: sel ? "#4e97fa" : "#32323a"
-                                        implicitWidth: chLbl.implicitWidth + 16
-                                        Label {
-                                            id: chLbl; anchors.centerIn: parent
-                                            text: modelData.Name || String(modelData.Value)
-                                            color: sel ? "#ffffff" : "#cacaca"; font.pixelSize: 11
-                                        }
-                                        MouseArea {
-                                            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                            onClicked: pm.updateSetting(st.key, modelData.Value)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // Array Editor + DNS/Xray/Endpoint Presets (optType == 2 or known array keys)
-                        ColumnLayout {
-                            visible: stCard.isArr
-                            Layout.fillWidth: true
-                            spacing: 6
-
-                            Flow {
-                                Layout.fillWidth: true
-                                spacing: 6
-                                Repeater {
-                                    model: st.arrayItems || []
-                                    delegate: Rectangle {
-                                        height: 24; radius: 4; color: "#23252c"; border.color: "#343742"
-                                        implicitWidth: chipRow.implicitWidth + 14
-                                        Row {
-                                            id: chipRow; anchors.centerIn: parent; spacing: 6
-                                            Label { text: modelData; color: "#ffffff"; font.pixelSize: 11; font.family: "monospace" }
+                                        Layout.fillWidth: true
+                                        height: 28; radius: 4; color: "#20222a"; border.color: index === 0 ? "#3c5882" : "#2f323d"
+                                        RowLayout {
+                                            anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8; spacing: 8
+                                            Label { text: "#" + (index + 1); color: index === 0 ? "#4e97fa" : "#76767e"; font.pixelSize: 10; font.bold: true }
+                                            Label { text: modelData; color: "#9fd0ff"; font.pixelSize: 10; font.family: "monospace"; elide: Text.ElideMiddle; Layout.fillWidth: true }
                                             Label {
-                                                text: "✕"; color: "#e01d1d"; font.pixelSize: 10
+                                                visible: index > 0
+                                                text: "↑"; color: "#89b7ff"; font.pixelSize: 12; font.bold: true
+                                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: pm.moveSettingArrayItem("dns/nameservers", index, -1) }
+                                            }
+                                            Label {
+                                                visible: index < (pm.dnsServers.length - 1)
+                                                text: "↓"; color: "#89b7ff"; font.pixelSize: 12; font.bold: true
+                                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: pm.moveSettingArrayItem("dns/nameservers", index, 1) }
+                                            }
+                                            Label {
+                                                text: "✕"; color: "#e01d1d"; font.pixelSize: 11
                                                 MouseArea {
                                                     anchors.fill: parent; cursorShape: Qt.PointingHandCursor
                                                     onClicked: {
                                                         var next = []
-                                                        var cur = st.arrayItems || []
-                                                        for (var k = 0; k < cur.length; k++) if (cur[k] !== modelData) next.push(cur[k])
-                                                        pm.updateSetting(st.key, next)
+                                                        var cur = pm.dnsServers || []
+                                                        for (var k = 0; k < cur.length; k++) if (k !== index) next.push(cur[k])
+                                                        pm.updateSetting("dns/nameservers", next)
                                                     }
                                                 }
                                             }
                                         }
                                     }
+                                }
+                                Label {
+                                    visible: pm.dnsServers.length === 0
+                                    text: pm.isRu ? "Список пуст — используется системный DNS" : "List empty — using system/default DNS"
+                                    color: "#76767e"; font.pixelSize: 11
                                 }
                             }
 
@@ -488,143 +526,95 @@ Item {
                                 Layout.fillWidth: true
                                 spacing: 8
                                 TextField {
-                                    id: arrInput
+                                    id: quickDnsInput
                                     Layout.fillWidth: true
-                                    placeholderText: pm.isRu ? "Добавить значение..." : "Add value..."
+                                    placeholderText: pm.isRu ? "Добавить DNS (dot://..., https://.../dns-query, 9.9.9.9)..." : "Add custom DNS (dot://..., https://..., 9.9.9.9)..."
                                     placeholderTextColor: "#66666e"
                                     color: "#ffffff"; font.pixelSize: 11; font.family: "monospace"
                                     background: Rectangle { color: "#121213"; radius: 4; border.color: "#2e2e32" }
+                                    function addCustom() {
+                                        var v = quickDnsInput.text.trim()
+                                        if (v === "") return
+                                        pm.applyPreset("dns/nameservers", [v], true)
+                                        quickDnsInput.text = ""
+                                    }
+                                    onAccepted: addCustom()
                                 }
                                 Rectangle {
                                     height: 28; radius: 4; color: "#4e97fa"
-                                    implicitWidth: arrAddLbl.implicitWidth + 16
-                                    Label { id: arrAddLbl; anchors.centerIn: parent; text: "+"; color: "#ffffff"; font.pixelSize: 13; font.bold: true }
-                                    MouseArea {
-                                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                        onClicked: {
-                                            var v = arrInput.text.trim()
-                                            if (v === "") return
-                                            pm.applyPreset(st.key, [v], true)
-                                            arrInput.text = ""
-                                        }
-                                    }
+                                    implicitWidth: qdAddLbl.implicitWidth + 16
+                                    Label { id: qdAddLbl; anchors.centerIn: parent; text: pm.isRu ? "+ Добавить" : "+ Add"; color: "#ffffff"; font.pixelSize: 11; font.bold: true }
+                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: quickDnsInput.addCustom() }
                                 }
-                            }
-
-                            // DNS Append Checkbox + Presets
-                            PmCheckBox {
-                                visible: st.key === "dns/nameservers"
-                                text: pm.t("set.appendDns")
-                                checked: root.appendDns
-                                onToggled: root.appendDns = checked
                             }
 
                             Flow {
-                                visible: st.key === "dns/nameservers" || st.key === "xray/rules" || st.key === "spn/usagePolicy" || st.key === "filter/endpoints"
                                 Layout.fillWidth: true
                                 spacing: 6
                                 Repeater {
-                                    model: {
-                                        if (st.key === "dns/nameservers") return [
-                                            { label: "Cloudflare DoH", vals: ["https://cloudflare-dns.com/dns-query", "https://1.1.1.1/dns-query"] },
-                                            { label: "Quad9 DoH",      vals: ["https://dns.quad9.net/dns-query"] },
-                                            { label: "AdGuard DoH",    vals: ["https://dns.adguard-dns.com/dns-query"] },
-                                            { label: "Mullvad DoH",    vals: ["https://dns.mullvad.net/dns-query"] }
-                                        ]
-                                        if (st.key === "xray/rules" || st.key === "spn/usagePolicy") return [
-                                            { label: pm.isRu ? "RU напрямую (geoip:ru)" : "RU Direct", vals: ["direct:.ru", "direct:.xn--p1ai", "direct:geoip:ru", "direct:geosite:category-ru"] },
-                                            { label: "YouTube + Discord -> Xray", vals: ["proxy:geosite:youtube", "proxy:geosite:discord"] },
-                                            { label: "OpenAI / AI -> Xray", vals: ["proxy:geosite:openai", "proxy:geosite:anthropic"] }
-                                        ]
-                                        return [
-                                            { label: "+ KDE Connect LAN (1714-1764) #2324", vals: ["+ LAN 1714-1764"] },
-                                            { label: "- Ads (geosite)", vals: ["- geosite:category-ads-all"] }
-                                        ]
-                                    }
+                                    model: [
+                                        { label: pm.cfgText("qs.dns.allDot"), vals: ["dot://cloudflare-dns.com?ip=1.1.1.1&name=Cloudflare", "dot://dns.quad9.net?ip=9.9.9.9&name=Quad9&blockedif=empty", "dot://dns.adguard-dns.com?ip=94.140.14.14&name=AdGuard&blockedif=zeroip", "dot://dns.google?ip=8.8.8.8&name=Google"] },
+                                        { label: pm.cfgText("qs.dns.allDoh"), vals: ["https://cloudflare-dns.com/dns-query?ip=1.1.1.1&name=Cloudflare", "https://dns.quad9.net/dns-query?ip=9.9.9.9&name=Quad9&blockedif=empty", "https://dns.adguard-dns.com/dns-query?ip=94.140.14.14&name=AdGuard&blockedif=zeroip", "https://dns.google/dns-query?ip=8.8.8.8&name=Google"] },
+                                        { label: pm.cfgText("qs.dns.cloudflareMalwareDot"), vals: ["dot://cloudflare-dns.com?ip=1.1.1.2&name=Cloudflare&blockedif=zeroip", "dot://cloudflare-dns.com?ip=1.0.0.2&name=Cloudflare&blockedif=zeroip"] },
+                                        { label: pm.cfgText("qs.dns.cloudflareMalwareDoh"), vals: ["https://security.cloudflare-dns.com/dns-query?ip=1.1.1.2&name=Cloudflare&blockedif=zeroip", "https://security.cloudflare-dns.com/dns-query?ip=1.0.0.2&name=Cloudflare&blockedif=zeroip"] },
+                                        { label: pm.cfgText("qs.dns.quad9Dot"), vals: ["dot://dns.quad9.net?ip=9.9.9.9&name=Quad9&blockedif=empty", "dot://dns.quad9.net?ip=149.112.112.112&name=Quad9&blockedif=empty"] },
+                                        { label: pm.cfgText("qs.dns.quad9Doh"), vals: ["https://dns.quad9.net/dns-query?ip=9.9.9.9&name=Quad9&blockedif=empty", "https://dns.quad9.net/dns-query?ip=149.112.112.112&name=Quad9&blockedif=empty"] },
+                                        { label: pm.cfgText("qs.dns.adguardDot"), vals: ["dot://dns.adguard-dns.com?ip=94.140.14.14&name=AdGuard&blockedif=zeroip", "dot://dns.adguard-dns.com?ip=94.140.15.15&name=AdGuard&blockedif=zeroip"] },
+                                        { label: pm.cfgText("qs.dns.adguardDoh"), vals: ["https://dns.adguard-dns.com/dns-query?ip=94.140.14.14&name=AdGuard&blockedif=zeroip", "https://dns.adguard-dns.com/dns-query?ip=94.140.15.15&name=AdGuard&blockedif=zeroip"] },
+                                        { label: pm.cfgText("qs.dns.mullvadDot"), vals: ["dot://dns.mullvad.net?ip=194.242.2.3&name=Mullvad", "dot://dns.mullvad.net?ip=194.242.2.4&name=Mullvad"] },
+                                        { label: pm.cfgText("qs.dns.mullvadDoh"), vals: ["https://dns.mullvad.net/dns-query?ip=194.242.2.3&name=Mullvad", "https://dns.mullvad.net/dns-query?ip=194.242.2.4&name=Mullvad"] },
+                                        { label: pm.cfgText("qs.dns.controldDoh"), vals: ["https://freedns.controld.com/p2?ip=76.76.2.2&name=ControlD", "https://freedns.controld.com/p2?ip=76.76.10.2&name=ControlD"] },
+                                        { label: pm.cfgText("qs.dns.appliedPrivacyDot"), vals: ["dot://dot1.applied-privacy.net?ip=146.255.56.98&name=AppliedPrivacy"] },
+                                        { label: pm.cfgText("qs.dns.googleDoh"), vals: ["https://dns.google/dns-query?ip=8.8.8.8&name=Google", "https://dns.google/dns-query?ip=8.8.4.4&name=Google"] },
+                                        { label: pm.cfgText("qs.dns.yandexSafeDoh"), vals: ["https://safe.dns.yandex.net/dns-query?ip=77.88.8.88&name=YandexSafe", "https://safe.dns.yandex.net/dns-query?ip=77.88.8.2&name=YandexSafe"] },
+                                        { label: pm.cfgText("qs.dns.cloudflareFallback"), vals: ["dot://cloudflare-dns.com?ip=1.1.1.1&name=Cloudflare&blockedif=zeroip", "dot://cloudflare-dns.com?ip=1.0.0.1&name=Cloudflare&blockedif=zeroip"], forceAppend: true }
+                                    ]
                                     delegate: Rectangle {
-                                        height: 22; radius: 3; color: "#23262f"; border.color: "#384152"
-                                        implicitWidth: pL.implicitWidth + 12
-                                        Label { id: pL; anchors.centerIn: parent; text: modelData.label; color: "#89b7ff"; font.pixelSize: 10 }
-                                        MouseArea {
-                                            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                            onClicked: pm.applyPreset(st.key, modelData.vals, st.key === "dns/nameservers" ? root.appendDns : true)
-                                        }
+                                        height: 24; radius: 4; color: "#212530"; border.color: "#364054"
+                                        implicitWidth: dPLbl.implicitWidth + 14
+                                        Label { id: dPLbl; anchors.centerIn: parent; text: modelData.label; color: "#89b7ff"; font.pixelSize: 10; font.bold: true }
+                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: pm.applyPreset("dns/nameservers", modelData.vals, modelData.forceAppend ? true : root.appendDns) }
                                     }
                                 }
+                                Rectangle {
+                                    height: 24; radius: 4; color: "#232328"; border.color: "#36363e"
+                                    implicitWidth: dRstLbl.implicitWidth + 14
+                                    Label { id: dRstLbl; anchors.centerIn: parent; text: pm.isRu ? "↺ По умолчанию" : "↺ Default DNS"; color: "#cacaca"; font.pixelSize: 10 }
+                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: pm.resetSetting("dns/nameservers") }
+                                }
                             }
-                        }
 
-                        // Int Editor (optType == 3)
-                        RowLayout {
-                            visible: st.optType === 3 && (!st.choices || st.choices.length === 0) && !stCard.isArr
-                            Layout.fillWidth: true
-                            spacing: 8
-                            Rectangle {
-                                width: 28; height: 28; radius: 4; color: "#22242a"; border.color: "#343640"
-                                Label { anchors.centerIn: parent; text: "−"; color: "#ffffff"; font.pixelSize: 14 }
-                                MouseArea {
-                                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                    onClicked: {
-                                        var v = parseInt(intInput.text)
-                                        if (!isNaN(v)) pm.updateSetting(st.key, v - 1)
-                                    }
-                                }
-                            }
-                            TextField {
-                                id: intInput
-                                Layout.preferredWidth: 130
-                                text: String(st.intVal)
-                                color: "#ffffff"; font.pixelSize: 12; font.family: "monospace"
-                                background: Rectangle { color: "#121213"; radius: 4; border.color: "#2e2e32" }
-                            }
-                            Rectangle {
-                                width: 28; height: 28; radius: 4; color: "#22242a"; border.color: "#343640"
-                                Label { anchors.centerIn: parent; text: "+"; color: "#ffffff"; font.pixelSize: 14 }
-                                MouseArea {
-                                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                    onClicked: {
-                                        var v = parseInt(intInput.text)
-                                        if (!isNaN(v)) pm.updateSetting(st.key, v + 1)
-                                    }
-                                }
-                            }
-                            Rectangle {
-                                height: 28; radius: 4; color: "#282c36"; border.color: "#4e97fa"
-                                implicitWidth: intApLbl.implicitWidth + 18
-                                Label { id: intApLbl; anchors.centerIn: parent; text: pm.isRu ? "Применить" : "Apply"; color: "#ffffff"; font.pixelSize: 11 }
-                                MouseArea {
-                                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                    onClicked: {
-                                        var v = parseInt(intInput.text)
-                                        if (!isNaN(v)) pm.updateSetting(st.key, v)
-                                    }
-                                }
-                            }
-                        }
-
-                        // Plain String Editor (optType == 1)
-                        RowLayout {
-                            visible: st.optType === 1 && (!st.choices || st.choices.length === 0) && !stCard.isArr
-                            Layout.fillWidth: true
-                            spacing: 8
-                            TextField {
-                                id: scalarInput
+                            Flow {
                                 Layout.fillWidth: true
-                                text: st.valueStr || ""
-                                color: "#ffffff"; font.pixelSize: 12; font.family: "monospace"
-                                background: Rectangle { color: "#121213"; radius: 4; border.color: "#2e2e32" }
-                            }
-                            Rectangle {
-                                height: 28; radius: 4; color: "#282c36"; border.color: "#4e97fa"
-                                implicitWidth: apLbl.implicitWidth + 18
-                                Label { id: apLbl; anchors.centerIn: parent; text: pm.isRu ? "Применить" : "Apply"; color: "#ffffff"; font.pixelSize: 11 }
-                                MouseArea {
-                                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                    onClicked: pm.updateSetting(st.key, scalarInput.text)
+                                spacing: 14
+                                RowLayout {
+                                    spacing: 8
+                                    PmSwitch { checked: pm.dnsNoInsecure; onToggled: pm.updateSetting("dns/noInsecureProtocols", checked) }
+                                    Label { text: pm.isRu ? "Только защищенный DNS (DoT/DoH)" : "Secure DNS Only (DoT/DoH)"; color: "#dcdce2"; font.pixelSize: 11 }
+                                }
+                                RowLayout {
+                                    spacing: 8
+                                    PmSwitch { checked: pm.dnsIgnoreSystem; onToggled: pm.updateSetting("dns/noAssignedNameservers", checked) }
+                                    Label { text: pm.isRu ? "Игнорировать системный DNS" : "Ignore System DNS"; color: "#dcdce2"; font.pixelSize: 11 }
+                                }
+                                RowLayout {
+                                    spacing: 8
+                                    PmSwitch { checked: pm.dnsUseStaleCache; onToggled: pm.updateSetting("dns/useStaleCache", checked) }
+                                    Label { text: pm.isRu ? "Всегда использовать кэш DNS" : "Always Use DNS Cache"; color: "#dcdce2"; font.pixelSize: 11 }
                                 }
                             }
                         }
                     }
+
+                    Item { height: 2 }
+                }
+
+                delegate: SettingCard {
+                    width: ListView.view.width - 10
+                    st: modelData
+                    isPerApp: false
+                    appendDns: root.appendDns
+                    onAppendDnsToggled: function(checked) { root.appendDns = checked }
                 }
             }
         }

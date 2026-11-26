@@ -74,6 +74,7 @@ impl Database {
             conn.execute_batch(&create_statement(db, true))?;
             conn.execute_batch(&format!(
                 "CREATE INDEX IF NOT EXISTS {db}.profile_id_index ON connections (profile);
+                 CREATE INDEX IF NOT EXISTS {db}.started_desc_index ON connections (started DESC);
                  CREATE INDEX IF NOT EXISTS {db}.started_time_index ON connections (strftime('%s', started)+0);
                  CREATE INDEX IF NOT EXISTS {db}.started_ended_time_index ON connections (strftime('%s', started)+0, strftime('%s', ended)+0) WHERE ended IS NOT NULL;"
             ))?;

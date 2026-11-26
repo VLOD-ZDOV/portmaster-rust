@@ -5,6 +5,7 @@ import QtQuick.Layouts
 Item {
     id: root
     signal openApp(string key)
+    signal openNetworkSettings()
 
     property string searchQuery: ""
     property string routingFilter: "all" // "all" | "active" | "offline" | "vpn" | "blocked"
@@ -74,20 +75,31 @@ Item {
             anchors.rightMargin: 12
             spacing: 10
 
-            // Monogram / Blocked Icon
+            // App Icon (Real OS/.desktop/API icon or colorful Portmaster monogram fallback)
             Rectangle {
-                width: 32; height: 32; radius: 6
-                color: app.action === "block" ? "#3d1414" : (app.effectiveVpn ? "#162944" : "#2a2a30")
-                border.color: app.action === "block" ? "#e01d1d" : (app.effectiveVpn ? "#4e97fa" : "#3a3a42")
+                width: 34; height: 34; radius: 7
+                property bool iconReady: cardIconImg.status === Image.Ready && cardIconImg.implicitWidth > 1
+                color: iconReady ? "transparent" : (app.avatarColor || "#2a2a30")
+                border.color: (app.blockInternet || app.action === "block") ? "#e01d1d" : (iconReady ? "transparent" : "#3a3a42")
+                border.width: (app.blockInternet || app.action === "block") ? 1 : 0
+                Image {
+                    id: cardIconImg
+                    anchors.fill: parent
+                    fillMode: Image.PreserveAspectFit
+                    smooth: true
+                    source: "image://appicon/" + app.iconKey + "?v=" + pm.iconVersion
+                    visible: parent.iconReady
+                }
                 Label {
+                    visible: !parent.iconReady
                     anchors.centerIn: parent
                     text: app.initials || "A"
-                    color: app.action === "block" ? "#e01d1d" : "#ffffff"
-                    font.pixelSize: 11; font.bold: true
+                    color: "#ffffff"
+                    font.pixelSize: 12; font.bold: true
                 }
             }
 
-            // App Name + Path + Visual Status Badges (#2251)
+            // App Name + Readable Path + Visual Status Badges
             ColumnLayout {
                 Layout.fillWidth: true
                 spacing: 2
@@ -96,16 +108,10 @@ Item {
                     spacing: 5
                     Label {
                         text: app.name || ""
-                        color: cardMa.containsMouse ? "#ffffff" : "#dcdce2"
+                        color: cardMa.containsMouse ? "#ffffff" : "#f2f2f7"
                         font.pixelSize: 13; font.bold: true
                         elide: Text.ElideRight
                         Layout.fillWidth: true
-                    }
-                    Rectangle {
-                        visible: app.action === "block"
-                        height: 15; radius: 2; color: "#3d1414"; border.color: "#811818"
-                        implicitWidth: blkLbl.implicitWidth + 8
-                        Label { id: blkLbl; anchors.centerIn: parent; text: "BLK"; color: "#e01d1d"; font.pixelSize: 8; font.bold: true }
                     }
                     Rectangle {
                         visible: !!app.effectiveSplit
@@ -118,10 +124,34 @@ Item {
                     text: app.alive > 0
                           ? (app.alive + (pm.isRu ? " акт. • ↓" : " active • ↓") + app.rxStr + " ↑" + app.txStr)
                           : (app.path || app.source || "-")
-                    color: app.alive > 0 ? "#1de966" : "#7e7e88"
+                    color: app.alive > 0 ? "#1de966" : "#a0a2ae"
                     font.pixelSize: 10
                     elide: Text.ElideMiddle
                     Layout.fillWidth: true
+                }
+            }
+
+            // 1-Click Per-App Block/Allow Internet Button (without opening app settings)
+            Rectangle {
+                height: 24; radius: 4
+                color: (app.blockInternet || app.action === "block") ? "#7a1515" : "#154428"
+                border.color: (app.blockInternet || app.action === "block") ? "#e01d1d" : "#226b3f"
+                implicitWidth: qNetLbl.implicitWidth + 12
+                Label {
+                    id: qNetLbl; anchors.centerIn: parent
+                    text: (app.blockInternet || app.action === "block") ? (pm.isRu ? "Блок" : "Block") : (pm.isRu ? "Инет" : "Net")
+                    color: (app.blockInternet || app.action === "block") ? "#ffd0d0" : "#8cf5b0"
+                    font.pixelSize: 9; font.bold: true
+                }
+                MouseArea {
+                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        if (app.action === "block" && !app.blockInternet) {
+                            pm.setAppAction(app.key, "permit")
+                        } else {
+                            pm.setAppSetting(app.key, "filter/blockInternet", !app.blockInternet)
+                        }
+                    }
                 }
             }
 
@@ -304,6 +334,33 @@ Item {
                         MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.routingFilter = modelData.id }
                     }
                 }
+
+                Item { width: 8; height: 1 }
+
+                // Quick Global Block Internet + DNS pill
+                Rectangle {
+                    height: 26; radius: 4
+                    color: pm.blockInternet ? "#4d1212" : "#202025"
+                    border.color: pm.blockInternet ? "#e01d1d" : "#32323a"
+                    implicitWidth: gBlkLbl.implicitWidth + 16
+                    Label {
+                        id: gBlkLbl; anchors.centerIn: parent
+                        text: pm.blockInternet ? (pm.isRu ? "Интернет: БЛОК" : "Internet: BLOCKED") : (pm.isRu ? "Блок Инета" : "Block Internet")
+                        color: pm.blockInternet ? "#ff8888" : "#cacaca"; font.pixelSize: 10; font.bold: pm.blockInternet
+                    }
+                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: pm.updateSetting("filter/blockInternet", !pm.blockInternet) }
+                }
+
+                Rectangle {
+                    height: 26; radius: 4; color: "#1c222e"; border.color: "#334666"
+                    implicitWidth: gDnsLbl.implicitWidth + 16
+                    Label {
+                        id: gDnsLbl; anchors.centerIn: parent
+                        text: "DNS: " + pm.dnsSummary
+                        color: "#89b7ff"; font.pixelSize: 10; font.bold: true
+                    }
+                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.openNetworkSettings() }
+                }
             }
         }
 
@@ -367,7 +424,8 @@ Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
-            property int cols: Math.max(1, Math.floor((width - 12) / 370))
+            cacheBuffer: 1200
+            property int cols: Math.max(1, Math.floor((width - 12) / 400))
             cellWidth: Math.floor((width - 12) / cols)
             cellHeight: 72
             model: root.cachedFilteredMain
@@ -395,7 +453,7 @@ Item {
                         Layout.fillWidth: true
                         spacing: 10
                         visible: root.routingFilter === "all" && root.cachedFilteredActive.length > 0
-                        property int cols: Math.max(1, Math.floor((width + 10) / 370))
+                        property int cols: Math.max(1, Math.floor((width + 10) / 400))
                         property real cw: Math.floor((width - (cols - 1) * 10) / cols)
                         Repeater {
                             model: root.cachedFilteredActive

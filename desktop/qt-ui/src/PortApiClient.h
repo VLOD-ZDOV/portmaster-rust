@@ -19,6 +19,7 @@ public:
     using SubCallback = std::function<void(const QString& msgType, const QString& key, const QJsonValue& val)>;
 
     explicit PortApiClient(QObject* parent = nullptr);
+    ~PortApiClient() override;
 
     void start();
     QString discoveredSocketPath() const;

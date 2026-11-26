@@ -5,17 +5,39 @@ import QtQuick.Layouts
 Item {
     id: root
     signal goBack()
+    signal openNetworkSettings()
 
     property int activeTab: 0 // 0=Connections, 1=Rules, 2=Settings, 3=Details
     property var app: pm.selectedApp
     property string ruleDir: "+"
     property string testPathInput: ""
     property string testPathResult: ""
-    property string customDnsDraft: ""
+    property string appSetSearch: ""
+    property string appSetFilter: "all" // "all" | "custom" | "filter" | "spn" | "history"
+    property int appMaxExpertise: 2
     property bool confirmDelete: false
 
+    function filteredAppSettings() {
+        var list = pm.selectedAppSettings || []
+        var q = appSetSearch.toLowerCase().trim()
+        var out = []
+        for (var i = 0; i < list.length; i++) {
+            var st = list[i]
+            if ((st.expertise || 0) > appMaxExpertise) continue
+            if (appSetFilter === "custom" && !st.modified) continue
+            if (appSetFilter === "filter" && st.subsystem !== "filter") continue
+            if (appSetFilter === "spn" && st.subsystem !== "spn" && st.subsystem !== "splittun") continue
+            if (appSetFilter === "history" && st.subsystem !== "history") continue
+            if (q !== "") {
+                var hay = ((st.key || "") + " " + (st.name || "") + " " + (st.description || "")).toLowerCase()
+                if (hay.indexOf(q) < 0) continue
+            }
+            out.push(st)
+        }
+        return out
+    }
+
     onAppChanged: {
-        customDnsDraft = app.customDns || ""
         confirmDelete = false
     }
 
@@ -102,13 +124,23 @@ Item {
                 spacing: 14
 
                 Rectangle {
-                    width: 48; height: 48; radius: 8
-                    color: app.action === "block" ? "#3d1414" : "#2a2a2e"
-                    border.color: app.action === "block" ? "#e01d1d" : "#3a3a40"
+                    width: 48; height: 48; radius: 10
+                    property bool iconReady: detailIconImg.status === Image.Ready && detailIconImg.implicitWidth > 1
+                    color: iconReady ? "transparent" : (app.avatarColor || "#2a2a2e")
+                    border.color: (app.blockInternet || app.action === "block") ? "#e01d1d" : (iconReady ? "transparent" : "#3a3a40")
+                    Image {
+                        id: detailIconImg
+                        anchors.fill: parent
+                        fillMode: Image.PreserveAspectFit
+                        smooth: true
+                        source: (app.iconKey || "") !== "" ? ("image://appicon/" + app.iconKey + "?v=" + pm.iconVersion) : ""
+                        visible: parent.iconReady
+                    }
                     Label {
+                        visible: !parent.iconReady
                         anchors.centerIn: parent
                         text: app.initials || "A"
-                        color: app.action === "block" ? "#e01d1d" : "#ffffff"
+                        color: "#ffffff"
                         font.pixelSize: 18; font.bold: true
                     }
                 }
@@ -133,6 +165,27 @@ Item {
                         text: app.path || "-"
                         color: "#84848c"; font.pixelSize: 11; font.family: "monospace"
                         elide: Text.ElideMiddle; Layout.fillWidth: true
+                    }
+                }
+
+                // Quick Block Internet Pill
+                ColumnLayout {
+                    spacing: 3
+                    Label { text: pm.isRu ? "Интернет" : "Internet"; color: "#76767e"; font.pixelSize: 10 }
+                    Rectangle {
+                        height: 26; radius: 4
+                        color: !!app.blockInternet ? "#7a1515" : "#136734"
+                        border.color: !!app.blockInternet ? "#e01d1d" : "#1de966"
+                        implicitWidth: qBlkAppLbl.implicitWidth + 18
+                        Label {
+                            id: qBlkAppLbl; anchors.centerIn: parent
+                            text: !!app.blockInternet ? (pm.isRu ? "Заблокирован" : "Blocked") : (pm.isRu ? "Открыт" : "Allowed")
+                            color: "#ffffff"; font.pixelSize: 11; font.bold: true
+                        }
+                        MouseArea {
+                            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                            onClicked: if (app.key) pm.setAppSetting(app.key, "filter/blockInternet", !app.blockInternet)
+                        }
                     }
                 }
 
@@ -540,58 +593,185 @@ Item {
                 }
             }
 
-            // TAB 2: PER-APP SETTINGS
-            Rectangle {
-                radius: 6
-                color: "#1b1b1d"
-                border.color: "#26262a"
+            // TAB 2: PER-APP SETTINGS (Full parity with Global Settings)
+            ColumnLayout {
+                spacing: 10
 
-                ColumnLayout {
-                    anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
-                    anchors.margins: 20
-                    spacing: 18
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            Label { text: pm.isRu ? "Блокировать локальную сеть (LAN)" : "Block Local Network (LAN)"; color: "#ffffff"; font.pixelSize: 14; font.bold: true }
-                            Label { text: pm.isRu ? "Запрещает приложению обращаться к 192.168.x.x / 10.x.x.x и локальным устройствам." : "Prevent this app from reaching LAN / private subnets."; color: "#888890"; font.pixelSize: 12 }
-                        }
-                        PmSwitch {
-                            checked: !!app.blockLan
-                            onToggled: if (app.key) pm.setAppBlockLan(app.key, checked)
-                        }
-                    }
-
-                    Rectangle { Layout.fillWidth: true; height: 1; color: "#28282c" }
+                // Quick Per-App Network Scope Card + Global DNS Link
+                Rectangle {
+                    Layout.fillWidth: true
+                    implicitHeight: appQuickCol.implicitHeight + 20
+                    radius: 6
+                    color: !!app.blockInternet ? "#261618" : "#1b1b1d"
+                    border.color: !!app.blockInternet ? "#e01d1d" : "#26262a"
 
                     ColumnLayout {
-                        Layout.fillWidth: true
+                        id: appQuickCol
+                        anchors.fill: parent
+                        anchors.margins: 10
                         spacing: 8
-                        Label { text: pm.isRu ? "Персональные DNS-серверы (через запятую)" : "Custom DNS Servers (comma-separated)"; color: "#ffffff"; font.pixelSize: 14; font.bold: true }
-                        RowLayout {
+
+                        Flow {
                             Layout.fillWidth: true
-                            spacing: 10
-                            TextField {
-                                Layout.fillWidth: true
-                                text: root.customDnsDraft
-                                onTextChanged: root.customDnsDraft = text
-                                placeholderText: "https://cloudflare-dns.com/dns-query, 9.9.9.9"
-                                placeholderTextColor: "#66666e"
-                                color: "#ffffff"; font.pixelSize: 12; font.family: "monospace"
-                                background: Rectangle { color: "#121213"; radius: 4; border.color: "#2e2e32" }
+                            spacing: 14
+
+                            RowLayout {
+                                spacing: 7
+                                PmSwitch {
+                                    checked: !!app.blockInternet
+                                    onToggled: if (app.key) pm.setAppSetting(app.key, "filter/blockInternet", checked)
+                                }
+                                Label {
+                                    text: pm.isRu ? "Блокировать Интернет" : "Block Internet"
+                                    color: !!app.blockInternet ? "#ff8888" : "#ffffff"
+                                    font.pixelSize: 12; font.bold: true
+                                }
+                                Rectangle {
+                                    visible: !!app.overriddenInternet
+                                    width: 18; height: 18; radius: 3; color: "#1c2838"; border.color: "#4e97fa"
+                                    Label { anchors.centerIn: parent; text: "↺"; color: "#7bb5ff"; font.pixelSize: 11; font.bold: true }
+                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: if (app.key) pm.resetAppSetting(app.key, "filter/blockInternet") }
+                                }
                             }
-                            Rectangle {
-                                height: 32; radius: 4; color: "#4e97fa"
-                                implicitWidth: saveDnsLbl.implicitWidth + 24
-                                Label { id: saveDnsLbl; anchors.centerIn: parent; text: pm.isRu ? "Сохранить DNS" : "Save DNS"; color: "#ffffff"; font.pixelSize: 12; font.bold: true }
-                                MouseArea {
-                                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                    onClicked: if (app.key) pm.setAppCustomDns(app.key, root.customDnsDraft)
+
+                            RowLayout {
+                                spacing: 7
+                                PmSwitch {
+                                    checked: !!app.blockLan
+                                    onToggled: if (app.key) pm.setAppSetting(app.key, "filter/blockLAN", checked)
+                                }
+                                Label { text: pm.isRu ? "Блокировать LAN" : "Block LAN"; color: "#dcdce2"; font.pixelSize: 12 }
+                                Rectangle {
+                                    visible: !!app.overriddenLan
+                                    width: 18; height: 18; radius: 3; color: "#1c2838"; border.color: "#4e97fa"
+                                    Label { anchors.centerIn: parent; text: "↺"; color: "#7bb5ff"; font.pixelSize: 11; font.bold: true }
+                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: if (app.key) pm.resetAppSetting(app.key, "filter/blockLAN") }
+                                }
+                            }
+
+                            RowLayout {
+                                spacing: 7
+                                PmSwitch {
+                                    checked: !!app.blockP2p
+                                    onToggled: if (app.key) pm.setAppSetting(app.key, "filter/blockP2P", checked)
+                                }
+                                Label { text: pm.isRu ? "Блокировать P2P" : "Block P2P"; color: "#dcdce2"; font.pixelSize: 12 }
+                                Rectangle {
+                                    visible: !!app.overriddenP2p
+                                    width: 18; height: 18; radius: 3; color: "#1c2838"; border.color: "#4e97fa"
+                                    Label { anchors.centerIn: parent; text: "↺"; color: "#7bb5ff"; font.pixelSize: 11; font.bold: true }
+                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: if (app.key) pm.resetAppSetting(app.key, "filter/blockP2P") }
+                                }
+                            }
+
+                            RowLayout {
+                                spacing: 7
+                                PmSwitch {
+                                    checked: !!app.blockInbound
+                                    onToggled: if (app.key) pm.setAppSetting(app.key, "filter/blockInbound", checked)
+                                }
+                                Label { text: pm.isRu ? "Блокировать входящие" : "Block Inbound"; color: "#dcdce2"; font.pixelSize: 12 }
+                                Rectangle {
+                                    visible: !!app.overriddenInbound
+                                    width: 18; height: 18; radius: 3; color: "#1c2838"; border.color: "#4e97fa"
+                                    Label { anchors.centerIn: parent; text: "↺"; color: "#7bb5ff"; font.pixelSize: 11; font.bold: true }
+                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: if (app.key) pm.resetAppSetting(app.key, "filter/blockInbound") }
                                 }
                             }
                         }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+                            Label {
+                                text: (pm.isRu ? "Системный DNS (глобально для всех приложений): " : "Global System DNS: ") + (pm.dnsSummary || "-")
+                                color: "#8e8e98"; font.pixelSize: 11
+                                elide: Text.ElideRight; Layout.fillWidth: true
+                            }
+                            Rectangle {
+                                height: 22; radius: 4; color: dnsLnkMa.containsMouse ? "#28354d" : "#212632"; border.color: "#3b5680"
+                                implicitWidth: dnsLnkLbl.implicitWidth + 14
+                                Label { id: dnsLnkLbl; anchors.centerIn: parent; text: pm.isRu ? "Настроить сеть и DNS →" : "Open Network & DNS →"; color: "#89b7ff"; font.pixelSize: 10; font.bold: true }
+                                MouseArea { id: dnsLnkMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: root.openNetworkSettings() }
+                            }
+                        }
+                    }
+                }
+
+                // Search, Category Pills & Expertise Toolbar
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    TextField {
+                        Layout.fillWidth: true
+                        height: 30
+                        placeholderText: pm.isRu ? "Поиск настроек приложения..." : "Search per-app settings..."
+                        placeholderTextColor: "#66666e"
+                        color: "#ffffff"; font.pixelSize: 12
+                        onTextChanged: root.appSetSearch = text
+                        background: Rectangle { color: "#1b1b1d"; radius: 4; border.color: parent.activeFocus ? "#4e97fa" : "#2c2c30" }
+                    }
+
+                    Repeater {
+                        model: [
+                            { id: "all",     label: pm.isRu ? "Все" : "All" },
+                            { id: "custom",  label: (pm.isRu ? "Свои (" : "Custom (") + (app.customCount || 0) + ")" },
+                            { id: "filter",  label: pm.isRu ? "Сеть" : "Filter" },
+                            { id: "spn",     label: "Xray / Split" },
+                            { id: "history", label: pm.isRu ? "История" : "History" }
+                        ]
+                        delegate: Rectangle {
+                            height: 28; radius: 4
+                            color: root.appSetFilter === modelData.id ? "#1e2c42" : "#1c1c1e"
+                            border.color: root.appSetFilter === modelData.id ? "#4e97fa" : "#2a2a2e"
+                            implicitWidth: afLbl.implicitWidth + 14
+                            Label { id: afLbl; anchors.centerIn: parent; text: modelData.label; color: root.appSetFilter === modelData.id ? "#ffffff" : "#9e9ea6"; font.pixelSize: 10; font.bold: root.appSetFilter === modelData.id }
+                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.appSetFilter = modelData.id }
+                        }
+                    }
+
+                    Repeater {
+                        model: [
+                            { lvl: 0, label: pm.isRu ? "Простой" : "Simple" },
+                            { lvl: 1, label: pm.isRu ? "Продвин." : "Advanced" },
+                            { lvl: 2, label: pm.isRu ? "Разраб." : "Dev" }
+                        ]
+                        delegate: Rectangle {
+                            height: 28; radius: 4
+                            color: root.appMaxExpertise === modelData.lvl ? "#2c2f3a" : "#1c1c1e"
+                            border.color: root.appMaxExpertise === modelData.lvl ? "#4e97fa" : "#2a2a2e"
+                            implicitWidth: aeLbl.implicitWidth + 12
+                            Label { id: aeLbl; anchors.centerIn: parent; text: modelData.label; color: "#ffffff"; font.pixelSize: 10 }
+                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.appMaxExpertise = modelData.lvl }
+                        }
+                    }
+                }
+
+                // Full Per-App Setting Cards (mirrored 1:1 with Global Settings)
+                ListView {
+                    id: appSettingsList
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    clip: true
+                    spacing: 8
+                    model: root.filteredAppSettings()
+                    ScrollBar.vertical: PmScrollBar {}
+
+                    delegate: SettingCard {
+                        width: ListView.view.width - 10
+                        st: modelData
+                        isPerApp: true
+                        appKey: app.key || ""
+                    }
+
+                    Label {
+                        anchors.centerIn: parent
+                        visible: appSettingsList.count === 0
+                        text: root.appSetFilter === "custom"
+                              ? (pm.isRu ? "У этого приложения пока все настройки наследуются глобально." : "All settings currently inherit global defaults.")
+                              : (pm.isRu ? "Нет настроек под выбранный фильтр." : "No matching per-app settings.")
+                        color: "#76767e"; font.pixelSize: 12
                     }
                 }
             }

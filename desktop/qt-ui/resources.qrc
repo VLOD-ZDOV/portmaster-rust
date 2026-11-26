@@ -3,11 +3,17 @@
         <file alias="Main.qml">qml/Main.qml</file>
         <file alias="NavigationBar.qml">qml/NavigationBar.qml</file>
         <file alias="SideDash.qml">qml/SideDash.qml</file>
+        <file alias="DashboardView.qml">qml/DashboardView.qml</file>
         <file alias="AppsView.qml">qml/AppsView.qml</file>
         <file alias="AppDetailView.qml">qml/AppDetailView.qml</file>
         <file alias="MonitorView.qml">qml/MonitorView.qml</file>
         <file alias="XrayView.qml">qml/XrayView.qml</file>
         <file alias="SettingsView.qml">qml/SettingsView.qml</file>
+        <file alias="SettingCard.qml">qml/SettingCard.qml</file>
+        <file alias="FlagBadge.qml">qml/FlagBadge.qml</file>
+        <file alias="SecurityShield.qml">qml/SecurityShield.qml</file>
+        <file alias="ConnChartCanvas.qml">qml/ConnChartCanvas.qml</file>
+        <file alias="cfg_i18n.json">cfg_i18n.json</file>
         <file alias="PmSwitch.qml">qml/PmSwitch.qml</file>
         <file alias="PmCheckBox.qml">qml/PmCheckBox.qml</file>
         <file alias="PmScrollBar.qml">qml/PmScrollBar.qml</file>

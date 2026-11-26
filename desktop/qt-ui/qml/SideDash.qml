@@ -6,9 +6,11 @@ Rectangle {
     id: root
     color: "#121213"
 
+    signal openDashboard()
     signal openApp(string key)
     signal openMonitor()
     signal openXray()
+    signal openNetworkSettings()
 
     property string scoutSearch: ""
 
@@ -20,83 +22,195 @@ Rectangle {
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 12
-        spacing: 12
+        spacing: 10
 
-        // 1. Large Security Lock Concentric Shields
-        Rectangle {
+        // 1. 1:1 Angular Security Lock Shield & Clean Subtitle (Click opens Dashboard)
+        Item {
             Layout.fillWidth: true
-            height: 124
-            radius: 4
-            color: "#1b1b1b"
-            border.color: "#2c2c2c"
+            height: 112
 
             ColumnLayout {
                 anchors.centerIn: parent
-                spacing: 4
+                spacing: 0
 
-                Canvas {
-                    id: shieldCanvas
+                SecurityShield {
                     Layout.alignment: Qt.AlignHCenter
-                    width: 60; height: 60
-                    Connections {
-                        target: pm
-                        function onConnectionChanged() { shieldCanvas.requestPaint() }
-                        function onXrayChanged() { shieldCanvas.requestPaint() }
-                        function onNotificationsChanged() { shieldCanvas.requestPaint() }
-                    }
-                    onPaint: {
-                        var ctx = getContext("2d")
-                        ctx.clearRect(0, 0, width, height)
-                        var c1 = !pm.connected ? "#e01d1d" : (pm.paused ? "#e9d81d" : (pm.xrayStatus.connected ? "#4e97fa" : "#1de966"))
-                        var c2 = !pm.connected ? "#811818" : (pm.paused ? "#827918" : (pm.xrayStatus.connected ? "#1e4b8f" : "#18823d"))
-                        var c3 = !pm.connected ? "#3d1414" : (pm.paused ? "#3d3a14" : (pm.xrayStatus.connected ? "#16345c" : "#143d24"))
-
-                        function drawS(sc, fl) {
-                            ctx.save()
-                            ctx.translate(width / 2, height / 2)
-                            ctx.scale(sc, sc)
-                            ctx.beginPath()
-                            ctx.moveTo(0, -24); ctx.lineTo(20, -15)
-                            ctx.quadraticCurveTo(20, 9, 0, 24)
-                            ctx.quadraticCurveTo(-20, 9, -20, -15)
-                            ctx.closePath()
-                            ctx.fillStyle = fl; ctx.fill()
-                            ctx.restore()
-                        }
-                        drawS(1.1, c3); drawS(0.84, c2); drawS(0.62, c1)
-                        ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 2.6; ctx.lineCap = "round"; ctx.lineJoin = "round"
-                        ctx.beginPath(); ctx.moveTo(22, 31); ctx.lineTo(27.5, 36.5); ctx.lineTo(39, 24); ctx.stroke()
-                    }
+                    width: 88
+                    height: 88
+                    cutoutColor: "#121213"
                 }
 
                 Label {
                     Layout.alignment: Qt.AlignHCenter
-                    text: !pm.connected ? pm.t("dash.offline") : (pm.paused ? pm.t("dash.paused") : (pm.xrayStatus.connected ? "Xray VPN" : pm.t("dash.protected")))
-                    color: "#ffffff"
-                    font.pixelSize: 13
-                    font.bold: true
+                    text: !pm.connected ? pm.t("dash.offline") : (pm.paused ? pm.t("dash.paused") : pm.t("dash.protected"))
+                    color: "#e8e8ee"
+                    font.pixelSize: 14
+                    font.weight: Font.Light
                 }
+            }
+
+            MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.openDashboard()
             }
         }
 
-        // 2. Feature Scout Bar
+        // 2. Feature Scout Bar (History Book + Xray Mesh Icons + Node/Flag status like Angular!)
+        ColumnLayout {
+            Layout.fillWidth: true
+            spacing: 5
+
+            RowLayout {
+                Layout.alignment: Qt.AlignHCenter
+                spacing: 12
+
+                // History book icon
+                Item {
+                    width: 24; height: 22
+                    Canvas {
+                        id: histIconCvs
+                        anchors.centerIn: parent; width: 18; height: 18
+                        Connections { target: pm; function onSettingsChanged() { histIconCvs.requestPaint() } }
+                        onPaint: {
+                            var ctx = getContext("2d")
+                            ctx.clearRect(0, 0, width, height)
+                            ctx.strokeStyle = pm.historyEnabled ? "#e4e4ec" : "#585862"
+                            ctx.lineWidth = 1.4; ctx.lineCap = "round"; ctx.lineJoin = "round"
+                            ctx.beginPath()
+                            ctx.moveTo(9, 4.5); ctx.quadraticCurveTo(6, 2.5, 2.5, 3.2); ctx.lineTo(2.5, 13.8); ctx.quadraticCurveTo(6, 13.0, 9, 15.2)
+                            ctx.moveTo(9, 4.5); ctx.quadraticCurveTo(12, 2.5, 15.5, 3.2); ctx.lineTo(15.5, 13.8); ctx.quadraticCurveTo(12, 13.0, 9, 15.2)
+                            ctx.moveTo(9, 4.5); ctx.lineTo(9, 15.2)
+                            ctx.stroke()
+                        }
+                        Component.onCompleted: requestPaint()
+                    }
+                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.openMonitor() }
+                }
+
+                // Xray 3-node circle mesh icon
+                Item {
+                    width: 24; height: 22
+                    Canvas {
+                        id: xrayIconCvs
+                        anchors.centerIn: parent; width: 18; height: 18
+                        Connections { target: pm; function onXrayChanged() { xrayIconCvs.requestPaint() } }
+                        onPaint: {
+                            var ctx = getContext("2d")
+                            ctx.clearRect(0, 0, width, height)
+                            ctx.strokeStyle = pm.xrayStatus.connected ? "#1de966" : "#888894"
+                            ctx.lineWidth = 1.4; ctx.lineCap = "round"
+                            ctx.beginPath(); ctx.arc(9, 9.5, 6.2, 0.25, 1.75); ctx.stroke()
+                            ctx.beginPath(); ctx.arc(9, 9.5, 6.2, 2.25, 3.85); ctx.stroke()
+                            ctx.beginPath(); ctx.arc(9, 9.5, 6.2, 4.5, 5.95); ctx.stroke()
+                            ctx.fillStyle = pm.xrayStatus.connected ? "#1de966" : "#888894"
+                            ctx.beginPath(); ctx.arc(9, 3.2, 1.6, 0, Math.PI * 2); ctx.fill()
+                            ctx.beginPath(); ctx.arc(3.8, 12.6, 1.6, 0, Math.PI * 2); ctx.fill()
+                            ctx.beginPath(); ctx.arc(14.2, 12.6, 1.6, 0, Math.PI * 2); ctx.fill()
+                        }
+                        Component.onCompleted: requestPaint()
+                    }
+                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.openXray() }
+                }
+            }
+
+            // Xray ON/OFF + Exit Flag Pill
+            Item {
+                Layout.alignment: Qt.AlignHCenter
+                implicitWidth: xrayPillRow.implicitWidth + 8
+                implicitHeight: Math.max(20, xrayPillRow.implicitHeight)
+                RowLayout {
+                    id: xrayPillRow
+                    anchors.centerIn: parent
+                    spacing: 6
+                    Rectangle {
+                        width: 8; height: 8; radius: 4
+                        color: pm.xrayStatus.connected ? "#1de966" : "#6c6c76"
+                    }
+                    Label {
+                        text: pm.xrayStatus.connected ? ("Xray: ON") : "Xray: OFF"
+                        color: pm.xrayStatus.connected ? "#1de966" : "#9696a2"
+                        font.pixelSize: 11; font.bold: true
+                    }
+                    FlagBadge {
+                        visible: !!pm.xrayStatus.connected && (pm.xrayStatus.exitCountry || "") !== ""
+                        code: pm.xrayStatus.exitCountry || ""
+                        badgeWidth: 18; badgeHeight: 12
+                    }
+                    Label {
+                        visible: !!pm.xrayStatus.connected && (pm.xrayStatus.exitCountry || "") !== ""
+                        text: pm.xrayStatus.exitCountry || ""
+                        color: "#cacad4"; font.pixelSize: 11
+                    }
+                }
+                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.openXray() }
+            }
+        }
+
+        // 3. Live Green (Allowed) / Red (Blocked) Connections Sparkline Graph
+        Rectangle {
+            Layout.fillWidth: true
+            height: 68
+            radius: 5
+            color: "#18191d"
+            border.color: chartHoverMa.containsMouse ? "#3e4252" : "#262830"
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 6
+                spacing: 2
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 6
+                    Rectangle { width: 6; height: 6; radius: 3; color: "#1de966" }
+                    Label { text: pm.connAllowedTotal; color: "#1de966"; font.pixelSize: 10; font.bold: true }
+                    Rectangle { width: 6; height: 6; radius: 3; color: "#f03c3c" }
+                    Label { text: pm.connBlockedTotal; color: "#f03c3c"; font.pixelSize: 10; font.bold: true }
+                    Item { Layout.fillWidth: true }
+                    Label { text: pm.isRu ? "Трафик →" : "Monitor →"; color: "#767884"; font.pixelSize: 9 }
+                }
+
+                ConnChartCanvas {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    compact: true
+                    bins: pm.connChartBins
+                }
+            }
+
+            MouseArea {
+                id: chartHoverMa
+                anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                onClicked: root.openMonitor()
+            }
+        }
+
+        // Quick Network Kill-Switch & DNS Bar
         RowLayout {
             Layout.fillWidth: true
             spacing: 6
             Rectangle {
-                Layout.fillWidth: true; height: 28; radius: 4; color: "#1b1b1b"; border.color: "#2c2c2c"
-                Label { anchors.centerIn: parent; text: "History"; color: pm.historyEnabled ? "#4e97fa" : "#888888"; font.pixelSize: 10; font.bold: true }
-                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.openMonitor() }
-            }
-            Rectangle {
-                Layout.fillWidth: true; height: 28; radius: 4; color: "#1b1b1b"; border.color: pm.xrayStatus.connected ? "#4e97fa" : "#2c2c2c"
+                Layout.fillWidth: true; height: 26; radius: 4
+                color: pm.blockInternet ? "#3d1414" : "#1b1b1b"
+                border.color: pm.blockInternet ? "#e01d1d" : "#2c2c2c"
                 Label {
                     anchors.centerIn: parent
-                    text: pm.xrayStatus.connected ? ("Xray: " + (pm.xrayStatus.exitCountry || "ON")) : "Xray VPN"
-                    color: pm.xrayStatus.connected ? "#1de966" : "#888888"
+                    text: pm.blockInternet ? (pm.isRu ? "Инет: БЛОК" : "Net: BLOCK") : (pm.isRu ? "Инет: Вкл" : "Net: Open")
+                    color: pm.blockInternet ? "#ff8888" : "#1de966"
                     font.pixelSize: 10; font.bold: true
                 }
-                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.openXray() }
+                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: pm.updateSetting("filter/blockInternet", !pm.blockInternet) }
+            }
+            Rectangle {
+                Layout.fillWidth: true; height: 26; radius: 4; color: "#1b1b1b"; border.color: "#2c2c2c"
+                Label {
+                    anchors.fill: parent; anchors.leftMargin: 6; anchors.rightMargin: 6
+                    horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                    text: "DNS: " + pm.dnsSummary
+                    color: "#89b7ff"; font.pixelSize: 10; elide: Text.ElideRight
+                }
+                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.openNetworkSettings() }
             }
         }
 
@@ -187,6 +301,7 @@ Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
+            cacheBuffer: 600
             spacing: 4
             ScrollBar.vertical: PmScrollBar {}
             model: {
@@ -206,13 +321,26 @@ Rectangle {
                 RowLayout {
                     anchors.fill: parent; anchors.margins: 7; spacing: 8
                     Rectangle {
-                        width: 22; height: 22; radius: 4; color: "#2c2c2c"
-                        Label { anchors.centerIn: parent; text: modelData.initials; color: "#ffffff"; font.pixelSize: 9; font.bold: true }
+                        width: 24; height: 24; radius: 6
+                        property bool iconReady: scoutIconImg.status === Image.Ready && scoutIconImg.implicitWidth > 1
+                        color: iconReady ? "transparent" : (modelData.avatarColor || "#2c2c2c")
+                        Image {
+                            id: scoutIconImg
+                            anchors.fill: parent
+                            fillMode: Image.PreserveAspectFit
+                            smooth: true
+                            source: "image://appicon/" + modelData.iconKey + "?v=" + pm.iconVersion
+                            visible: parent.iconReady
+                        }
+                        Label {
+                            visible: !parent.iconReady
+                            anchors.centerIn: parent; text: modelData.initials; color: "#ffffff"; font.pixelSize: 9; font.bold: true
+                        }
                     }
                     ColumnLayout {
                         Layout.fillWidth: true; spacing: 0
-                        Label { text: modelData.name; color: "#cacaca"; font.pixelSize: 11; font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
-                        Label { text: modelData.effectiveVpn ? "Xray VPN" : (modelData.action === "block" ? "Blocked" : "Direct"); color: modelData.action === "block" ? "#e01d1d" : (modelData.effectiveVpn ? "#4e97fa" : "#1de966"); font.pixelSize: 9 }
+                        Label { text: modelData.name; color: "#f0f0f5"; font.pixelSize: 11; font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
+                        Label { text: modelData.effectiveVpn ? "Xray" : ((modelData.blockInternet || modelData.action === "block") ? (pm.isRu ? "Блок" : "Blocked") : (pm.isRu ? "Прямо" : "Direct")); color: (modelData.blockInternet || modelData.action === "block") ? "#e01d1d" : (modelData.effectiveVpn ? "#4e97fa" : "#1de966"); font.pixelSize: 9 }
                     }
                     Rectangle {
                         width: 24; height: 18; radius: 3; color: "#2c2c2c"

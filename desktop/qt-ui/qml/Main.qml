@@ -13,6 +13,7 @@ ApplicationWindow {
     color: "#121213"
 
     property string currentPage: "apps" // "apps" | "appDetail" | "monitor" | "xray" | "settings"
+    property string returnPage: "apps"
     property bool sideDashOpen: false
     property string toastBanner: ""
     property bool toastErr: false
@@ -67,18 +68,25 @@ ApplicationWindow {
             Layout.fillHeight: true
             Layout.preferredWidth: win.sideDashOpen ? 290 : 0
             visible: win.sideDashOpen
+            onOpenDashboard: {
+                pm.selectApp("")
+                win.currentPage = "dashboard"
+            }
             onOpenApp: function(key) {
+                win.returnPage = (win.currentPage !== "appDetail") ? win.currentPage : win.returnPage
                 pm.selectApp(key)
                 win.currentPage = "appDetail"
-                win.sideDashOpen = false
             }
             onOpenMonitor: {
                 win.currentPage = "monitor"
-                win.sideDashOpen = false
             }
             onOpenXray: {
                 win.currentPage = "xray"
-                win.sideDashOpen = false
+            }
+            onOpenNetworkSettings: {
+                pm.selectApp("")
+                settingsView.selectedSub = "network"
+                win.currentPage = "settings"
             }
         }
 
@@ -117,37 +125,82 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     currentIndex: {
-                        if (win.currentPage === "monitor") return 0
-                        if (win.currentPage === "apps") return 1
-                        if (win.currentPage === "appDetail") return 2
-                        if (win.currentPage === "xray") return 3
-                        return 4
+                        if (win.currentPage === "dashboard") return 0
+                        if (win.currentPage === "monitor") return 1
+                        if (win.currentPage === "apps") return 2
+                        if (win.currentPage === "appDetail") return 3
+                        if (win.currentPage === "xray") return 4
+                        return 5
+                    }
+
+                    DashboardView {
+                        onOpenMonitorPreset: function(internetOnly, verdict, query) {
+                            monitorView.scopeInternet = internetOnly
+                            monitorView.scopeLan = false
+                            monitorView.scopeLocal = false
+                            monitorView.dirFilter = "all"
+                            monitorView.verdictFilter = verdict
+                            monitorView.applySearch(query)
+                            win.currentPage = "monitor"
+                        }
+                        onOpenAppsActive: {
+                            appsView.routingFilter = "active"
+                            win.currentPage = "apps"
+                        }
+                        onOpenApp: function(key) {
+                            win.returnPage = "dashboard"
+                            pm.selectApp(key)
+                            win.currentPage = "appDetail"
+                        }
+                        onOpenXray: {
+                            pm.selectApp("")
+                            win.currentPage = "xray"
+                        }
+                        onOpenSettingSub: function(sub) {
+                            pm.selectApp("")
+                            settingsView.selectedSub = sub
+                            win.currentPage = "settings"
+                        }
                     }
 
                     MonitorView {
+                        id: monitorView
                         onOpenApp: function(key) {
+                            win.returnPage = "monitor"
                             pm.selectApp(key)
                             win.currentPage = "appDetail"
                         }
                     }
 
                     AppsView {
+                        id: appsView
                         onOpenApp: function(key) {
+                            win.returnPage = "apps"
                             pm.selectApp(key)
                             win.currentPage = "appDetail"
+                        }
+                        onOpenNetworkSettings: {
+                            pm.selectApp("")
+                            settingsView.selectedSub = "network"
+                            win.currentPage = "settings"
                         }
                     }
 
                     AppDetailView {
                         onGoBack: {
                             pm.selectApp("")
-                            win.currentPage = "apps"
+                            win.currentPage = win.returnPage
+                        }
+                        onOpenNetworkSettings: {
+                            pm.selectApp("")
+                            settingsView.selectedSub = "network"
+                            win.currentPage = "settings"
                         }
                     }
 
                     XrayView {}
 
-                    SettingsView {}
+                    SettingsView { id: settingsView }
                 }
             }
         }

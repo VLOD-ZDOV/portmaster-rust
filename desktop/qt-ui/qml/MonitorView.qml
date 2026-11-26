@@ -7,13 +7,23 @@ Item {
     signal openApp(string key)
 
     property string searchQuery: ""
-    property string scopeFilter: "all"   // "all" | "internet" | "lan" | "local" | "inbound"
+    property bool scopeInternet: false
+    property bool scopeLan: false
+    property bool scopeLocal: false
+    property string dirFilter: "all"     // "all" | "outbound" | "inbound"
     property string verdictFilter: "all" // "all" | "permit" | "xray" | "block"
     property string expandedId: ""
+    property var cachedFiltered: []
 
-    function filteredConnections() {
+    function applySearch(q) {
+        searchField.text = q || ""
+        searchQuery = q || ""
+    }
+
+    function recompute() {
         var list = pm.connections || []
         var q = searchQuery.toLowerCase().trim()
+        var anyScope = scopeInternet || scopeLan || scopeLocal
         var out = []
         for (var i = 0; i < list.length; i++) {
             var c = list[i]
@@ -21,14 +31,16 @@ Item {
                 var hay = ((c.target || "") + " " + (c.ip || "") + " " + (c.app || "") + " " + (c.country || "") + " " + (c.asOwner || "")).toLowerCase()
                 if (hay.indexOf(q) < 0) continue
             }
-            if (scopeFilter !== "all") {
+            if (dirFilter !== "all") {
+                var dir = (c.direction || "outbound").toLowerCase()
+                if (dir !== dirFilter) continue
+            }
+            if (anyScope) {
                 var sc = (c.scope || "").toLowerCase()
-                var dir = (c.direction || "").toLowerCase()
-                if (scopeFilter === "inbound") {
-                    if (dir !== "inbound") continue
-                } else if (sc.indexOf(scopeFilter) < 0) {
-                    continue
-                }
+                var hit = (scopeInternet && sc.indexOf("internet") >= 0) ||
+                          (scopeLan && sc.indexOf("lan") >= 0) ||
+                          (scopeLocal && sc.indexOf("local") >= 0)
+                if (!hit) continue
             }
             if (verdictFilter !== "all") {
                 var vd = (c.verdict || "").toLowerCase()
@@ -40,18 +52,30 @@ Item {
             }
             out.push(c)
         }
-        return out
+        cachedFiltered = out
+    }
+
+    onSearchQueryChanged: recompute()
+    onScopeInternetChanged: recompute()
+    onScopeLanChanged: recompute()
+    onScopeLocalChanged: recompute()
+    onDirFilterChanged: recompute()
+    onVerdictFilterChanged: recompute()
+    Component.onCompleted: recompute()
+    Connections {
+        target: pm
+        function onConnectionsChanged() { root.recompute() }
     }
 
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 24
-        spacing: 14
+        spacing: 12
 
-        // Top Filter Toolbar matching original Portmaster Monitor
+        // Top Toolbar: Title, Count, History Depth (500 / 2000 / 5000), Search, Refresh, Clear
         RowLayout {
             Layout.fillWidth: true
-            spacing: 12
+            spacing: 10
 
             Label {
                 text: pm.t("mon.title")
@@ -65,17 +89,48 @@ Item {
                 implicitWidth: cntLbl.implicitWidth + 16
                 Label {
                     id: cntLbl; anchors.centerIn: parent
-                    text: root.filteredConnections().length + " / " + (pm.connections || []).length
-                    color: "#9e9ea6"; font.pixelSize: 11
+                    text: root.cachedFiltered.length + " / " + (pm.connections || []).length + (pm.historyLoading ? " ↻" : "")
+                    color: pm.historyLoading ? "#89b7ff" : "#9e9ea6"; font.pixelSize: 11
                 }
+            }
+
+            // History Retention Depth Selector (Replaces fixed 250 cap!)
+            Row {
+                spacing: 3
+                Repeater {
+                    model: [ 500, 2000, 5000 ]
+                    delegate: Rectangle {
+                        height: 22; radius: 4
+                        implicitWidth: limLbl.implicitWidth + 12
+                        color: pm.historyLimit === modelData ? "#1c3354" : "#1c1c1e"
+                        border.color: pm.historyLimit === modelData ? "#4e97fa" : "#2a2a2e"
+                        Label {
+                            id: limLbl; anchors.centerIn: parent
+                            text: modelData
+                            color: pm.historyLimit === modelData ? "#ffffff" : "#888894"
+                            font.pixelSize: 10; font.bold: pm.historyLimit === modelData
+                        }
+                        MouseArea {
+                            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                            onClicked: pm.setHistoryLimit(modelData)
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                width: 24; height: 22; radius: 4; color: "#1c1d22"; border.color: "#2c2e38"
+                Label { anchors.centerIn: parent; text: "↻"; color: "#89b7ff"; font.pixelSize: 12; font.bold: true }
+                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: pm.refreshHistory() }
             }
 
             Item { Layout.fillWidth: true }
 
             TextField {
-                Layout.preferredWidth: 270
+                id: searchField
+                Layout.preferredWidth: 250
                 height: 30
-                placeholderText: pm.isRu ? "Фильтр по домену, IP, приложению, ASN..." : "Filter by domain, IP, app, ASN..."
+                placeholderText: pm.isRu ? "Фильтр по домену, IP, приложению, стране..." : "Filter by domain, IP, app, country..."
                 placeholderTextColor: "#66666e"
                 color: "#ffffff"
                 font.pixelSize: 12
@@ -99,36 +154,63 @@ Item {
             }
         }
 
-        // Scope & Verdict Chips Bar
-        RowLayout {
+        // Independent Multi-Select Scope + Direction + Verdict Chips Bar
+        Flow {
             Layout.fillWidth: true
-            spacing: 16
+            spacing: 12
+
+            Row {
+                spacing: 4
+                component ScopeChip: Rectangle {
+                    id: chip
+                    property string label: ""
+                    property bool act: false
+                    signal clicked()
+                    height: 24; radius: 12
+                    implicitWidth: scLbl.implicitWidth + 16
+                    color: chip.act ? "#1b3352" : "#1c1c1e"
+                    border.color: chip.act ? "#4e97fa" : "#2a2a2e"
+                    Label { id: scLbl; anchors.centerIn: parent; text: chip.label; color: chip.act ? "#ffffff" : "#8e8e94"; font.pixelSize: 11; font.bold: chip.act }
+                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: chip.clicked() }
+                }
+                ScopeChip {
+                    label: pm.t("mon.all")
+                    act: !root.scopeInternet && !root.scopeLan && !root.scopeLocal
+                    color: act ? "#2d2f38" : "#1c1c1e"
+                    onClicked: { root.scopeInternet = false; root.scopeLan = false; root.scopeLocal = false }
+                }
+                ScopeChip {
+                    label: pm.t("mon.internet")
+                    act: root.scopeInternet
+                    onClicked: root.scopeInternet = !root.scopeInternet
+                }
+                ScopeChip {
+                    label: pm.t("mon.lan")
+                    act: root.scopeLan
+                    onClicked: root.scopeLan = !root.scopeLan
+                }
+                ScopeChip {
+                    label: pm.t("mon.local")
+                    act: root.scopeLocal
+                    onClicked: root.scopeLocal = !root.scopeLocal
+                }
+            }
 
             Row {
                 spacing: 4
                 Repeater {
                     model: [
-                        { id: "all",      label: pm.t("mon.all") },
-                        { id: "internet", label: pm.t("mon.internet") },
-                        { id: "lan",      label: pm.t("mon.lan") },
-                        { id: "local",    label: pm.t("mon.local") },
-                        { id: "inbound",  label: pm.t("mon.inbound") }
+                        { id: "all",      label: pm.isRu ? "Все напр." : "Any Dir" },
+                        { id: "outbound", label: pm.isRu ? "↗ Исходящие" : "↗ Outbound" },
+                        { id: "inbound",  label: "↙ " + pm.t("mon.inbound") }
                     ]
                     delegate: Rectangle {
                         height: 24; radius: 12
-                        implicitWidth: scLbl.implicitWidth + 16
-                        color: root.scopeFilter === modelData.id ? "#2d2f38" : "#1c1c1e"
-                        border.color: root.scopeFilter === modelData.id ? "#4e97fa" : "#2a2a2e"
-                        Label {
-                            id: scLbl; anchors.centerIn: parent
-                            text: modelData.label
-                            color: root.scopeFilter === modelData.id ? "#ffffff" : "#8e8e94"
-                            font.pixelSize: 11; font.bold: root.scopeFilter === modelData.id
-                        }
-                        MouseArea {
-                            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                            onClicked: root.scopeFilter = modelData.id
-                        }
+                        implicitWidth: drLbl.implicitWidth + 16
+                        color: root.dirFilter === modelData.id ? "#2d2f38" : "#1c1c1e"
+                        border.color: root.dirFilter === modelData.id ? "#4e97fa" : "#2a2a2e"
+                        Label { id: drLbl; anchors.centerIn: parent; text: modelData.label; color: root.dirFilter === modelData.id ? "#ffffff" : "#8e8e94"; font.pixelSize: 11; font.bold: root.dirFilter === modelData.id }
+                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.dirFilter = modelData.id }
                     }
                 }
             }
@@ -162,7 +244,43 @@ Item {
             }
         }
 
-        // Borderless Portmaster Connection Feed
+        // Green (Allowed) / Red (Blocked) Live Connections Graph Strip
+        Rectangle {
+            Layout.fillWidth: true
+            height: 74
+            radius: 6
+            color: "#16171a"
+            border.color: "#24262e"
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 12; anchors.rightMargin: 12; anchors.topMargin: 6; anchors.bottomMargin: 6
+                spacing: 2
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 10
+                    Label {
+                        text: pm.isRu ? "График соединений (Зелёный = Разрешено • Красный = Блок)" : "Connections Graph (Green = Allowed • Red = Blocked)"
+                        color: "#7e8290"; font.pixelSize: 10; font.bold: true
+                    }
+                    Item { Layout.fillWidth: true }
+                    Rectangle { width: 7; height: 7; radius: 3.5; color: "#1de966" }
+                    Label { text: pm.connAllowedTotal; color: "#1de966"; font.pixelSize: 10; font.bold: true }
+                    Rectangle { width: 7; height: 7; radius: 3.5; color: "#f03c3c" }
+                    Label { text: pm.connBlockedTotal; color: "#f03c3c"; font.pixelSize: 10; font.bold: true }
+                }
+
+                ConnChartCanvas {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    compact: true
+                    bins: pm.connChartBins
+                }
+            }
+        }
+
+        // Strictly Aligned Portmaster Connection Table
         Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -174,22 +292,23 @@ Item {
                 anchors.fill: parent
                 spacing: 0
 
-                // Table Column Labels
+                // Rigid Locked Header Columns
                 Rectangle {
                     Layout.fillWidth: true
                     height: 30
                     color: "#1b1b1e"
                     RowLayout {
                         anchors.fill: parent
-                        anchors.leftMargin: 16; anchors.rightMargin: 16
+                        anchors.leftMargin: 14; anchors.rightMargin: 14
                         spacing: 10
-                        Label { text: ""; Layout.preferredWidth: 20 }
-                        Label { text: pm.isRu ? "Адрес / Домен" : "Target / Domain"; color: "#76767e"; font.pixelSize: 10; font.bold: true; Layout.fillWidth: true }
-                        Label { text: pm.isRu ? "Страна" : "Country"; color: "#76767e"; font.pixelSize: 10; font.bold: true; Layout.preferredWidth: 56 }
-                        Label { text: pm.isRu ? "Приложение" : "Application"; color: "#76767e"; font.pixelSize: 10; font.bold: true; Layout.preferredWidth: 165 }
-                        Label { text: pm.isRu ? "Порт" : "Port"; color: "#76767e"; font.pixelSize: 10; font.bold: true; Layout.preferredWidth: 94 }
-                        Label { text: pm.isRu ? "Маршрут / Вердикт" : "Route / Verdict"; color: "#76767e"; font.pixelSize: 10; font.bold: true; Layout.preferredWidth: 115 }
-                        Label { text: pm.isRu ? "Трафик" : "Traffic"; color: "#76767e"; font.pixelSize: 10; font.bold: true; Layout.preferredWidth: 74; horizontalAlignment: Text.AlignRight }
+                        Label { text: ""; Layout.preferredWidth: 26; Layout.minimumWidth: 26; Layout.maximumWidth: 26 }
+                        Label { text: pm.isRu ? "Адрес / Домен" : "Target / Domain"; color: "#76767e"; font.pixelSize: 10; font.bold: true; Layout.fillWidth: true; Layout.minimumWidth: 140 }
+                        Label { text: "IP"; color: "#76767e"; font.pixelSize: 10; font.bold: true; Layout.preferredWidth: 126; Layout.minimumWidth: 126; Layout.maximumWidth: 126 }
+                        Label { text: pm.isRu ? "Страна" : "Country"; color: "#76767e"; font.pixelSize: 10; font.bold: true; Layout.preferredWidth: 68; Layout.minimumWidth: 68; Layout.maximumWidth: 68 }
+                        Label { text: pm.isRu ? "Приложение" : "Application"; color: "#76767e"; font.pixelSize: 10; font.bold: true; Layout.preferredWidth: 170; Layout.minimumWidth: 170; Layout.maximumWidth: 170 }
+                        Label { text: pm.isRu ? "Порт" : "Port"; color: "#76767e"; font.pixelSize: 10; font.bold: true; Layout.preferredWidth: 92; Layout.minimumWidth: 92; Layout.maximumWidth: 92 }
+                        Label { text: pm.isRu ? "Вердикт" : "Verdict"; color: "#76767e"; font.pixelSize: 10; font.bold: true; Layout.preferredWidth: 112; Layout.minimumWidth: 112; Layout.maximumWidth: 112 }
+                        Label { text: pm.isRu ? "Трафик" : "Traffic"; color: "#76767e"; font.pixelSize: 10; font.bold: true; Layout.preferredWidth: 76; Layout.minimumWidth: 76; Layout.maximumWidth: 76; horizontalAlignment: Text.AlignRight }
                     }
                 }
 
@@ -197,8 +316,9 @@ Item {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     clip: true
+                    cacheBuffer: 1200
                     spacing: 1
-                    model: root.filteredConnections()
+                    model: root.cachedFiltered
                     ScrollBar.vertical: PmScrollBar {}
 
                     delegate: Rectangle {
@@ -208,7 +328,7 @@ Item {
                         property bool isBlock: modelData.verdict === "block" || modelData.verdict === "drop" || modelData.verdict === "failed"
                         property bool isAsk: modelData.verdict === "ask"
                         property bool isXray: !!modelData.tunneled || modelData.verdict === "tunneled"
-                        height: expanded ? 92 : 36
+                        height: expanded ? 92 : 34
                         color: expanded ? "#232328" : (rowMa.containsMouse ? "#202024" : (index % 2 === 0 ? "#18181b" : "#151517"))
 
                         MouseArea {
@@ -222,17 +342,18 @@ Item {
 
                         ColumnLayout {
                             anchors.fill: parent
-                            anchors.leftMargin: 16; anchors.rightMargin: 16
-                            anchors.topMargin: 6; anchors.bottomMargin: 6
+                            anchors.leftMargin: 14; anchors.rightMargin: 14
+                            anchors.topMargin: 5; anchors.bottomMargin: 5
                             spacing: 6
 
                             RowLayout {
                                 Layout.fillWidth: true
                                 spacing: 10
 
+                                // Fixed Col 1: Status + Direction (26px)
                                 Row {
-                                    Layout.preferredWidth: 20
-                                    spacing: 4
+                                    Layout.preferredWidth: 26; Layout.minimumWidth: 26; Layout.maximumWidth: 26
+                                    spacing: 5
                                     Rectangle {
                                         width: 8; height: 8; radius: 4; anchors.verticalCenter: parent.verticalCenter
                                         color: isBlock ? "#e01d1d" : (isAsk ? "#e9d81d" : (isXray ? "#4e97fa" : "#1de966"))
@@ -243,29 +364,44 @@ Item {
                                     }
                                 }
 
-                                RowLayout {
+                                // Flex Col 2: Domain / Target
+                                Label {
+                                    text: modelData.target || "-"
+                                    color: "#ffffff"; font.pixelSize: 12
+                                    elide: Text.ElideRight
                                     Layout.fillWidth: true
-                                    spacing: 8
-                                    Label {
-                                        text: modelData.target || "-"
-                                        color: "#ffffff"; font.pixelSize: 12
-                                        elide: Text.ElideRight; Layout.maximumWidth: 320
+                                    Layout.minimumWidth: 140
+                                }
+
+                                // Fixed Col 3: IP Address (126px)
+                                Label {
+                                    text: modelData.ip || "-"
+                                    color: "#80828c"; font.pixelSize: 11; font.family: "monospace"
+                                    elide: Text.ElideRight
+                                    Layout.preferredWidth: 126; Layout.minimumWidth: 126; Layout.maximumWidth: 126
+                                }
+
+                                // Fixed Col 4: Country Flag + ISO (68px)
+                                RowLayout {
+                                    Layout.preferredWidth: 68; Layout.minimumWidth: 68; Layout.maximumWidth: 68
+                                    spacing: 5
+                                    FlagBadge {
+                                        visible: (modelData.country || "") !== ""
+                                        code: modelData.country || ""
+                                        badgeWidth: 18; badgeHeight: 12
                                     }
                                     Label {
-                                        visible: modelData.domain !== "" && modelData.ip !== "" && modelData.domain !== modelData.ip
-                                        text: modelData.ip
-                                        color: "#6a6a72"; font.pixelSize: 11; font.family: "monospace"
+                                        text: modelData.country || "-"
+                                        color: "#cacaca"; font.pixelSize: 10; font.family: "monospace"
+                                        elide: Text.ElideRight
+                                        Layout.fillWidth: true
                                     }
                                 }
 
-                                Rectangle {
-                                    Layout.preferredWidth: 56; height: 18; radius: 3
-                                    color: modelData.country !== "" ? "#26262b" : "transparent"
-                                    Label { anchors.centerIn: parent; text: modelData.country || "-"; color: "#cacaca"; font.pixelSize: 10 }
-                                }
-
+                                // Fixed Col 5: Application Name (170px)
                                 Item {
-                                    Layout.preferredWidth: 165; height: 20
+                                    Layout.preferredWidth: 170; Layout.minimumWidth: 170; Layout.maximumWidth: 170
+                                    height: 20
                                     Label {
                                         anchors.fill: parent
                                         verticalAlignment: Text.AlignVCenter
@@ -283,14 +419,17 @@ Item {
                                     }
                                 }
 
+                                // Fixed Col 6: Proto:Port (92px)
                                 Label {
                                     text: (modelData.proto || "") + (modelData.port > 0 ? (":" + modelData.port) : "")
                                     color: "#8a8a94"; font.pixelSize: 11; font.family: "monospace"
-                                    Layout.preferredWidth: 94
+                                    elide: Text.ElideRight
+                                    Layout.preferredWidth: 92; Layout.minimumWidth: 92; Layout.maximumWidth: 92
                                 }
 
+                                // Fixed Col 7: Verdict / Route Badge (112px)
                                 Row {
-                                    Layout.preferredWidth: 115
+                                    Layout.preferredWidth: 112; Layout.minimumWidth: 112; Layout.maximumWidth: 112
                                     spacing: 4
                                     Rectangle {
                                         height: 18; radius: 3
@@ -310,10 +449,12 @@ Item {
                                     }
                                 }
 
+                                // Fixed Col 8: Traffic Bytes (76px)
                                 Label {
                                     text: modelData.bytes || "0 B"
                                     color: "#9e9ea6"; font.pixelSize: 11
-                                    Layout.preferredWidth: 74; horizontalAlignment: Text.AlignRight
+                                    Layout.preferredWidth: 76; Layout.minimumWidth: 76; Layout.maximumWidth: 76
+                                    horizontalAlignment: Text.AlignRight
                                 }
                             }
 
@@ -367,7 +508,7 @@ Item {
 
                     Label {
                         anchors.centerIn: parent
-                        visible: root.filteredConnections().length === 0
+                        visible: root.cachedFiltered.length === 0
                         text: pm.isRu ? "Сетевая активность по фильтру не найдена." : "No matching network connections."
                         color: "#76767e"; font.pixelSize: 13
                     }

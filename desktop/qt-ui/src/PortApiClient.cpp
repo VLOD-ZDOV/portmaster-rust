@@ -40,6 +40,27 @@ PortApiClient::PortApiClient(QObject* parent)
     connect(m_reconnectTimer, &QTimer::timeout, this, &PortApiClient::tryConnect);
 }
 
+PortApiClient::~PortApiClient() {
+    m_reconnectTimer->stop();
+    m_subs.clear();
+    if (m_localWs) {
+        m_localWs->blockSignals(true);
+        m_localWs->abort();
+    }
+    if (m_tcpWs) {
+        m_tcpWs->blockSignals(true);
+        m_tcpWs->abort();
+    }
+    for (auto* sock : findChildren<QLocalSocket*>()) {
+        sock->blockSignals(true);
+        sock->abort();
+    }
+    for (auto* reply : findChildren<QNetworkReply*>()) {
+        reply->blockSignals(true);
+        reply->abort();
+    }
+}
+
 QString PortApiClient::baseHttpUrl() const {
     QString url = qEnvironmentVariable("PORTMASTER_API_URL", QStringLiteral("http://127.0.0.1:817")).trimmed();
     while (url.endsWith('/')) url.chop(1);
@@ -455,12 +476,14 @@ void PortApiClient::httpOverUnixSocket(const QString& sockPath, const QString& m
 
     connect(sock, &QLocalSocket::readyRead, sock, [sock, buf, finished]() {
         if (*finished) return;
-        buf->append(sock->readAll());
+        if (sock->isOpen()) buf->append(sock->readAll());
     });
 
     connect(sock, &QLocalSocket::disconnected, sock, [sock, buf, finished, finish]() {
         if (*finished) return;
-        buf->append(sock->readAll());
+        if (sock->isOpen() && sock->bytesAvailable() > 0) {
+            buf->append(sock->readAll());
+        }
         int hdrEnd = buf->indexOf("\r\n\r\n");
         if (hdrEnd < 0) {
             finish(0, {}, QStringLiteral("Invalid HTTP response over Unix socket"));
