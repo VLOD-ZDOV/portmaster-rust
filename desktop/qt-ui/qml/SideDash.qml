@@ -188,6 +188,7 @@ Rectangle {
             Layout.fillHeight: true
             clip: true
             spacing: 4
+            ScrollBar.vertical: PmScrollBar {}
             model: {
                 var q = root.scoutSearch
                 var out = []

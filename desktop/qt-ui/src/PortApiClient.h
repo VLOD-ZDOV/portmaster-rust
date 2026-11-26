@@ -45,6 +45,7 @@ private slots:
     void onTcpWsConnected();
     void onTcpWsDisconnected();
     void onTcpWsTextReceived(const QString& msg);
+    void onTcpWsBinaryReceived(const QByteArray& msg);
 
 private:
     void httpRequest(const QString& method, const QString& path, const QByteArray& body, const QString& contentType, HttpCallback cb);
@@ -55,6 +56,7 @@ private:
     void processWsBytes();
     void sendMaskedUnixFrame(quint8 opcode, const QByteArray& payload);
     QString nextOpId(const QString& prefix);
+    QString baseHttpUrl() const;
 
     QNetworkAccessManager* m_nam = nullptr;
     QLocalSocket* m_localWs = nullptr;
@@ -65,6 +67,8 @@ private:
     bool m_usingUnixWs = false;
     bool m_localHttpDone = false;
     QByteArray m_localRxBuf;
+    QByteArray m_localFragBuf;
+    quint8 m_fragOpcode = 0;
     QString m_activeTransport;
 
     quint64 m_counter = 0;

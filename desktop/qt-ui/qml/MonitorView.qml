@@ -8,7 +8,7 @@ Item {
 
     property string searchQuery: ""
     property string scopeFilter: "all"   // "all" | "internet" | "lan" | "local" | "inbound"
-    property string verdictFilter: "all" // "all" | "permit" | "block"
+    property string verdictFilter: "all" // "all" | "permit" | "xray" | "block"
     property string expandedId: ""
 
     function filteredConnections() {
@@ -32,8 +32,10 @@ Item {
             }
             if (verdictFilter !== "all") {
                 var vd = (c.verdict || "").toLowerCase()
-                var isBlk = (vd === "block" || vd === "drop")
+                var isBlk = (vd === "block" || vd === "drop" || vd === "failed")
+                var isXray = !!c.tunneled || vd === "tunneled"
                 if (verdictFilter === "block" && !isBlk) continue
+                if (verdictFilter === "xray" && !isXray) continue
                 if (verdictFilter === "permit" && isBlk) continue
             }
             out.push(c)
@@ -63,7 +65,7 @@ Item {
                 implicitWidth: cntLbl.implicitWidth + 16
                 Label {
                     id: cntLbl; anchors.centerIn: parent
-                    text: root.filteredConnections().length + " / " + pm.connections.length
+                    text: root.filteredConnections().length + " / " + (pm.connections || []).length
                     color: "#9e9ea6"; font.pixelSize: 11
                 }
             }
@@ -71,7 +73,7 @@ Item {
             Item { Layout.fillWidth: true }
 
             TextField {
-                Layout.preferredWidth: 260
+                Layout.preferredWidth: 270
                 height: 30
                 placeholderText: pm.isRu ? "Фильтр по домену, IP, приложению, ASN..." : "Filter by domain, IP, app, ASN..."
                 placeholderTextColor: "#66666e"
@@ -137,6 +139,7 @@ Item {
                     model: [
                         { id: "all",    label: pm.t("mon.all"),       accent: "#4e97fa" },
                         { id: "permit", label: pm.t("mon.permitted"), accent: "#1de966" },
+                        { id: "xray",   label: "Xray VPN",            accent: "#4e97fa" },
                         { id: "block",  label: pm.t("mon.blocked"),   accent: "#e01d1d" }
                     ]
                     delegate: Rectangle {
@@ -180,12 +183,12 @@ Item {
                         anchors.fill: parent
                         anchors.leftMargin: 16; anchors.rightMargin: 16
                         spacing: 10
-                        Label { text: ""; Layout.preferredWidth: 12 }
+                        Label { text: ""; Layout.preferredWidth: 20 }
                         Label { text: pm.isRu ? "Адрес / Домен" : "Target / Domain"; color: "#76767e"; font.pixelSize: 10; font.bold: true; Layout.fillWidth: true }
-                        Label { text: pm.isRu ? "Страна" : "Country"; color: "#76767e"; font.pixelSize: 10; font.bold: true; Layout.preferredWidth: 64 }
+                        Label { text: pm.isRu ? "Страна" : "Country"; color: "#76767e"; font.pixelSize: 10; font.bold: true; Layout.preferredWidth: 56 }
                         Label { text: pm.isRu ? "Приложение" : "Application"; color: "#76767e"; font.pixelSize: 10; font.bold: true; Layout.preferredWidth: 165 }
-                        Label { text: pm.isRu ? "Порт" : "Port"; color: "#76767e"; font.pixelSize: 10; font.bold: true; Layout.preferredWidth: 90 }
-                        Label { text: pm.isRu ? "Вердикт" : "Verdict"; color: "#76767e"; font.pixelSize: 10; font.bold: true; Layout.preferredWidth: 85 }
+                        Label { text: pm.isRu ? "Порт" : "Port"; color: "#76767e"; font.pixelSize: 10; font.bold: true; Layout.preferredWidth: 94 }
+                        Label { text: pm.isRu ? "Маршрут / Вердикт" : "Route / Verdict"; color: "#76767e"; font.pixelSize: 10; font.bold: true; Layout.preferredWidth: 115 }
                         Label { text: pm.isRu ? "Трафик" : "Traffic"; color: "#76767e"; font.pixelSize: 10; font.bold: true; Layout.preferredWidth: 74; horizontalAlignment: Text.AlignRight }
                     }
                 }
@@ -196,15 +199,26 @@ Item {
                     clip: true
                     spacing: 1
                     model: root.filteredConnections()
+                    ScrollBar.vertical: PmScrollBar {}
 
                     delegate: Rectangle {
                         id: rowItem
                         width: ListView.view.width
                         property bool expanded: root.expandedId === modelData.id
-                        property bool isBlock: modelData.verdict === "block" || modelData.verdict === "drop"
+                        property bool isBlock: modelData.verdict === "block" || modelData.verdict === "drop" || modelData.verdict === "failed"
                         property bool isAsk: modelData.verdict === "ask"
-                        height: expanded ? 86 : 36
+                        property bool isXray: !!modelData.tunneled || modelData.verdict === "tunneled"
+                        height: expanded ? 92 : 36
                         color: expanded ? "#232328" : (rowMa.containsMouse ? "#202024" : (index % 2 === 0 ? "#18181b" : "#151517"))
+
+                        MouseArea {
+                            id: rowMa
+                            z: -1
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.expandedId = (root.expandedId === modelData.id) ? "" : modelData.id
+                        }
 
                         ColumnLayout {
                             anchors.fill: parent
@@ -216,10 +230,19 @@ Item {
                                 Layout.fillWidth: true
                                 spacing: 10
 
-                                Rectangle {
-                                    width: 8; height: 8; radius: 4
-                                    color: isBlock ? "#e01d1d" : (isAsk ? "#e9d81d" : "#1de966")
+                                Row {
+                                    Layout.preferredWidth: 20
+                                    spacing: 4
+                                    Rectangle {
+                                        width: 8; height: 8; radius: 4; anchors.verticalCenter: parent.verticalCenter
+                                        color: isBlock ? "#e01d1d" : (isAsk ? "#e9d81d" : (isXray ? "#4e97fa" : "#1de966"))
+                                    }
+                                    Label {
+                                        text: modelData.direction === "inbound" ? "↙" : "↗"
+                                        color: "#76767e"; font.pixelSize: 10
+                                    }
                                 }
+
                                 RowLayout {
                                     Layout.fillWidth: true
                                     spacing: 8
@@ -234,31 +257,59 @@ Item {
                                         color: "#6a6a72"; font.pixelSize: 11; font.family: "monospace"
                                     }
                                 }
+
                                 Rectangle {
-                                    Layout.preferredWidth: 64; height: 18; radius: 3
+                                    Layout.preferredWidth: 56; height: 18; radius: 3
                                     color: modelData.country !== "" ? "#26262b" : "transparent"
                                     Label { anchors.centerIn: parent; text: modelData.country || "-"; color: "#cacaca"; font.pixelSize: 10 }
                                 }
-                                Label {
-                                    text: modelData.app || "-"
-                                    color: "#cacaca"; font.pixelSize: 12; elide: Text.ElideRight
-                                    Layout.preferredWidth: 165
-                                }
-                                Label {
-                                    text: (modelData.proto || "") + ":" + (modelData.port || "")
-                                    color: "#8a8a94"; font.pixelSize: 11; font.family: "monospace"
-                                    Layout.preferredWidth: 90
-                                }
-                                Rectangle {
-                                    Layout.preferredWidth: 85; height: 18; radius: 3
-                                    color: isBlock ? "#3d1414" : (isAsk ? "#3b3612" : "#123821")
+
+                                Item {
+                                    Layout.preferredWidth: 165; height: 20
                                     Label {
-                                        anchors.centerIn: parent
-                                        text: (modelData.verdict || "accept").toUpperCase()
-                                        color: isBlock ? "#e01d1d" : (isAsk ? "#e9d81d" : "#1de966")
-                                        font.pixelSize: 9; font.bold: true
+                                        anchors.fill: parent
+                                        verticalAlignment: Text.AlignVCenter
+                                        text: modelData.app || "-"
+                                        color: appJumpMa.containsMouse && modelData.profileKey !== "" ? "#4e97fa" : "#cacaca"
+                                        font.pixelSize: 12; font.underline: appJumpMa.containsMouse && modelData.profileKey !== ""
+                                        elide: Text.ElideRight
+                                    }
+                                    MouseArea {
+                                        id: appJumpMa
+                                        anchors.fill: parent; hoverEnabled: true
+                                        enabled: (modelData.profileKey || "") !== ""
+                                        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                        onClicked: if (modelData.profileKey) root.openApp(modelData.profileKey)
                                     }
                                 }
+
+                                Label {
+                                    text: (modelData.proto || "") + (modelData.port > 0 ? (":" + modelData.port) : "")
+                                    color: "#8a8a94"; font.pixelSize: 11; font.family: "monospace"
+                                    Layout.preferredWidth: 94
+                                }
+
+                                Row {
+                                    Layout.preferredWidth: 115
+                                    spacing: 4
+                                    Rectangle {
+                                        height: 18; radius: 3
+                                        width: isXray ? 56 : 74
+                                        color: isBlock ? "#3d1414" : (isAsk ? "#3b3612" : (isXray ? "#173256" : "#123821"))
+                                        Label {
+                                            anchors.centerIn: parent
+                                            text: (isXray ? "XRAY" : (modelData.verdict || "accept")).toUpperCase()
+                                            color: isBlock ? "#e01d1d" : (isAsk ? "#e9d81d" : (isXray ? "#4e97fa" : "#1de966"))
+                                            font.pixelSize: 9; font.bold: true
+                                        }
+                                    }
+                                    Rectangle {
+                                        visible: isXray && isBlock
+                                        height: 18; width: 42; radius: 3; color: "#3d1414"
+                                        Label { anchors.centerIn: parent; text: "BLK"; color: "#e01d1d"; font.pixelSize: 9; font.bold: true }
+                                    }
+                                }
+
                                 Label {
                                     text: modelData.bytes || "0 B"
                                     color: "#9e9ea6"; font.pixelSize: 11
@@ -273,7 +324,9 @@ Item {
                                 spacing: 10
 
                                 Label {
-                                    text: (modelData.reason || "No reason") + (modelData.asOwner ? (" • " + modelData.asOwner) : "")
+                                    text: (modelData.reason || (pm.isRu ? "По умолчанию" : "Default policy"))
+                                          + (modelData.scope ? (" • " + modelData.scope) : "")
+                                          + (modelData.asOwner ? (" • " + modelData.asOwner) : "")
                                     color: "#8e8e98"; font.pixelSize: 11
                                     elide: Text.ElideRight; Layout.fillWidth: true
                                 }
@@ -309,15 +362,6 @@ Item {
                                     }
                                 }
                             }
-                        }
-
-                        MouseArea {
-                            id: rowMa
-                            anchors.fill: parent
-                            anchors.bottomMargin: rowItem.expanded ? 34 : 0
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: root.expandedId = (root.expandedId === modelData.id) ? "" : modelData.id
                         }
                     }
 

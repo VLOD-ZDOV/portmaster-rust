@@ -302,12 +302,13 @@ Item {
                 radius: 6
                 border.color: "#26262a"
 
-                ListView {
+                    ListView {
                     anchors.fill: parent
                     anchors.margins: 8
                     clip: true
                     spacing: 4
                     model: pm.selectedAppConnections
+                    ScrollBar.vertical: PmScrollBar {}
 
                     delegate: Rectangle {
                         width: ListView.view.width
@@ -322,8 +323,8 @@ Item {
 
                             Rectangle {
                                 width: 8; height: 8; radius: 4
-                                color: (modelData.verdict === "block" || modelData.verdict === "drop") ? "#e01d1d"
-                                     : (modelData.verdict === "ask" ? "#e9d81d" : "#1de966")
+                                color: (modelData.verdict === "block" || modelData.verdict === "drop" || modelData.verdict === "failed") ? "#e01d1d"
+                                     : (modelData.verdict === "ask" ? "#e9d81d" : (modelData.tunneled ? "#4e97fa" : "#1de966"))
                             }
                             Label {
                                 text: modelData.domain || modelData.ip || "-"
@@ -423,7 +424,14 @@ Item {
                                 placeholderTextColor: "#66666e"
                                 color: "#ffffff"; font.pixelSize: 12; font.family: "monospace"
                                 background: Rectangle { color: "#121213"; radius: 4; border.color: rulePatternInput.activeFocus ? "#4e97fa" : "#2e2e32" }
-                                onAccepted: addRuleBtnMa.clicked(null)
+                                function submitRule() {
+                                    var txt = rulePatternInput.text.trim()
+                                    if (txt === "" || !app.key) return
+                                    var rule = (txt.startsWith("+") || txt.startsWith("-")) ? txt : (root.ruleDir + " " + txt)
+                                    pm.addAppRule(app.key, rule)
+                                    rulePatternInput.text = ""
+                                }
+                                onAccepted: submitRule()
                             }
 
                             Rectangle {
@@ -433,13 +441,7 @@ Item {
                                 MouseArea {
                                     id: addRuleBtnMa
                                     anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                    onClicked: {
-                                        var txt = rulePatternInput.text.trim()
-                                        if (txt === "" || !app.key) return
-                                        var rule = (txt.startsWith("+") || txt.startsWith("-")) ? txt : (root.ruleDir + " " + txt)
-                                        pm.addAppRule(app.key, rule)
-                                        rulePatternInput.text = ""
-                                    }
+                                    onClicked: rulePatternInput.submitRule()
                                 }
                             }
                         }
@@ -556,7 +558,7 @@ Item {
                             Label { text: pm.isRu ? "Блокировать локальную сеть (LAN)" : "Block Local Network (LAN)"; color: "#ffffff"; font.pixelSize: 14; font.bold: true }
                             Label { text: pm.isRu ? "Запрещает приложению обращаться к 192.168.x.x / 10.x.x.x и локальным устройствам." : "Prevent this app from reaching LAN / private subnets."; color: "#888890"; font.pixelSize: 12 }
                         }
-                        Switch {
+                        PmSwitch {
                             checked: !!app.blockLan
                             onToggled: if (app.key) pm.setAppBlockLan(app.key, checked)
                         }

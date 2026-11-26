@@ -15,7 +15,7 @@ use crate::ui::{find_qt_binary, find_rust_ui_dir, ApiPortController};
 const ANGULAR_BENCHMARK_TAB_MB: f64 = 142.2;
 const ANGULAR_BENCHMARK_TAURI_MB: f64 = 603.2;
 const RUST_WASM_BENCHMARK_TAB_MB: f64 = 73.6;
-const QT_BENCHMARK_MB: f64 = 140.2;
+const QT_BENCHMARK_MB: f64 = 140.6;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

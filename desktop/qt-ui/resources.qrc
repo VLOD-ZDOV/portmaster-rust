@@ -8,5 +8,8 @@
         <file alias="MonitorView.qml">qml/MonitorView.qml</file>
         <file alias="XrayView.qml">qml/XrayView.qml</file>
         <file alias="SettingsView.qml">qml/SettingsView.qml</file>
+        <file alias="PmSwitch.qml">qml/PmSwitch.qml</file>
+        <file alias="PmCheckBox.qml">qml/PmCheckBox.qml</file>
+        <file alias="PmScrollBar.qml">qml/PmScrollBar.qml</file>
     </qresource>
 </RCC>

@@ -18,6 +18,11 @@ ApplicationWindow {
     property bool toastErr: false
 
     onClosing: function(close) {
+        if (!pm.hasTray) {
+            close.accepted = true
+            pm.quitApp()
+            return
+        }
         close.accepted = false
         win.hide()
     }

@@ -37,6 +37,8 @@ pub type ContextMenu = Menu<Wry>;
 
 static SPN_STATE: AtomicBool = AtomicBool::new(false);
 static SPN_USE_STATE: AtomicBool = AtomicBool::new(false);
+static ACTIVE_UI_IS_QT: AtomicBool = AtomicBool::new(false);
+static ACTIVE_UI_IS_RUST: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone)]
 enum IconColor {
@@ -364,6 +366,30 @@ fn build_tray_menu(
     Ok(menu)
 }
 
+fn spawn_qt_gui_no_tray() -> bool {
+    if let Some(qt_bin) = find_qt_binary() {
+        match std::process::Command::new(&qt_bin).arg("--no-tray").spawn() {
+            Ok(_) => return true,
+            Err(err) => {
+                error!("[tauri] failed to launch portmaster-qt ({}): {}", qt_bin.display(), err);
+            }
+        }
+    }
+    false
+}
+
+fn open_active_ui_flavor(app: &tauri::AppHandle) {
+    if ACTIVE_UI_IS_QT.load(Ordering::Acquire) && spawn_qt_gui_no_tray() {
+        return;
+    }
+    crate::portapi::client::lease_api_port_open();
+    if ACTIVE_UI_IS_RUST.load(Ordering::Acquire) {
+        let _ = open_window_target(app, "http://127.0.0.1:817/rust/");
+    } else {
+        let _ = open_window(app);
+    }
+}
+
 pub fn setup_tray_menu(
     app: &mut tauri::App,
 ) -> core::result::Result<AppIcon, Box<dyn std::error::Error>> {
@@ -376,7 +402,10 @@ pub fn setup_tray_menu(
             EXIT_UI_KEY => {
                 app.exit(0);
             }
-            OPEN_KEY | OPEN_ANGULAR_KEY => {
+            OPEN_KEY => {
+                open_active_ui_flavor(app);
+            }
+            OPEN_ANGULAR_KEY => {
                 crate::portapi::client::lease_api_port_open();
                 let _ = open_window_target(app, "http://127.0.0.1:817/ui/modules/portmaster/");
             }
@@ -385,11 +414,7 @@ pub fn setup_tray_menu(
                 let _ = open_window_target(app, "http://127.0.0.1:817/rust/");
             }
             OPEN_QT_KEY => {
-                if let Some(qt_bin) = find_qt_binary() {
-                    if let Err(err) = std::process::Command::new(&qt_bin).spawn() {
-                        error!("[tauri] failed to launch portmaster-qt ({}): {}", qt_bin.display(), err);
-                    }
-                }
+                let _ = spawn_qt_gui_no_tray();
             }
             OPEN_BROWSER_KEY => {
                 crate::portapi::client::lease_api_port_open();
@@ -471,10 +496,10 @@ pub fn setup_tray_menu(
                             let _ = win.destroy();
                             crate::portapi::client::release_api_port_lease();
                         } else {
-                            let _ = open_window(app);
+                            open_active_ui_flavor(app);
                         }
                     } else {
-                        let _ = open_window(app);
+                        open_active_ui_flavor(app);
                     }
                 }
             }
@@ -594,6 +619,13 @@ pub async fn tray_handler(cli: PortAPI, app: tauri::AppHandle) {
         }
     };
 
+    let mut ui_flavor_subscription = cli
+        .request(Request::QuerySubscribe(
+            "query config:core/uiFlavor".to_string(),
+        ))
+        .await
+        .ok();
+
     let mut portmaster_shutdown_event_subscription = match cli
         .request(Request::Subscribe(
             "query runtime:modules/core/event/shutdown".to_string(),
@@ -706,6 +738,22 @@ pub async fn tray_handler(cli: PortAPI, app: tauri::AppHandle) {
                 if let Some(use_all) = parse_bool_config_response(msg) {
                     SPN_USE_STATE.store(use_all, Ordering::Release);
                     update_icon(icon.clone(), system_status.clone(), spn_status.clone());
+                }
+            },
+            Some(msg) = async {
+                match ui_flavor_subscription.as_mut() {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                if let Response::Ok(_, p) | Response::New(_, p) | Response::Update(_, p) = msg {
+                    if let Ok(v) = p.parse::<serde_json::Value>() {
+                        let val = v.get("Value").and_then(|x| x.as_str())
+                            .or_else(|| v.get("DefaultValue").and_then(|x| x.as_str()))
+                            .unwrap_or("angular");
+                        ACTIVE_UI_IS_QT.store(val == "qt", Ordering::Release);
+                        ACTIVE_UI_IS_RUST.store(val == "rust-wasm", Ordering::Release);
+                    }
                 }
             },
             msg = portmaster_shutdown_event_subscription.recv() => {

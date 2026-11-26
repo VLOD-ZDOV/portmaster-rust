@@ -40,8 +40,17 @@ PortApiClient::PortApiClient(QObject* parent)
     connect(m_reconnectTimer, &QTimer::timeout, this, &PortApiClient::tryConnect);
 }
 
+QString PortApiClient::baseHttpUrl() const {
+    QString url = qEnvironmentVariable("PORTMASTER_API_URL", QStringLiteral("http://127.0.0.1:817")).trimmed();
+    while (url.endsWith('/')) url.chop(1);
+    return url.isEmpty() ? QStringLiteral("http://127.0.0.1:817") : url;
+}
+
 QString PortApiClient::discoveredSocketPath() const {
 #ifdef Q_OS_UNIX
+    if (qEnvironmentVariableIsSet("PORTMASTER_FORCE_TCP")) {
+        return {};
+    }
     const QString envSock = qEnvironmentVariable("PORTMASTER_API_SOCKET").trimmed();
     if (!envSock.isEmpty() && QFileInfo::exists(envSock)) {
         return envSock;
@@ -129,10 +138,15 @@ void PortApiClient::tryConnect() {
         connect(m_tcpWs, &QWebSocket::connected, this, &PortApiClient::onTcpWsConnected);
         connect(m_tcpWs, &QWebSocket::disconnected, this, &PortApiClient::onTcpWsDisconnected);
         connect(m_tcpWs, &QWebSocket::textMessageReceived, this, &PortApiClient::onTcpWsTextReceived);
+        connect(m_tcpWs, &QWebSocket::binaryMessageReceived, this, &PortApiClient::onTcpWsBinaryReceived);
     }
     m_usingUnixWs = false;
-    m_activeTransport = QStringLiteral("TCP 127.0.0.1:817");
-    m_tcpWs->open(QUrl(QStringLiteral("ws://127.0.0.1:817/api/database/v1")));
+    const QString httpBase = baseHttpUrl();
+    QString wsUrl = httpBase;
+    if (wsUrl.startsWith(QLatin1String("https://"))) wsUrl.replace(0, 8, QStringLiteral("wss://"));
+    else if (wsUrl.startsWith(QLatin1String("http://"))) wsUrl.replace(0, 7, QStringLiteral("ws://"));
+    m_activeTransport = QStringLiteral("TCP ") + QUrl(httpBase).authority();
+    m_tcpWs->open(QUrl(wsUrl + QStringLiteral("/api/database/v1")));
 }
 
 void PortApiClient::onLocalWsReadyRead() {
@@ -150,8 +164,8 @@ void PortApiClient::onLocalWsReadyRead() {
         }
         m_localHttpDone = true;
         m_wsConnected = true;
-        emit connectionChanged(true, m_activeTransport);
         replaySubscriptions();
+        emit connectionChanged(true, m_activeTransport);
     }
     processWsBytes();
 }
@@ -160,6 +174,7 @@ void PortApiClient::processWsBytes() {
     while (m_localRxBuf.size() >= 2) {
         const quint8 b0 = static_cast<quint8>(m_localRxBuf[0]);
         const quint8 b1 = static_cast<quint8>(m_localRxBuf[1]);
+        const bool fin = (b0 & 0x80) != 0;
         const quint8 opcode = b0 & 0x0f;
         const bool masked = (b1 & 0x80) != 0;
         quint64 payloadLen = b1 & 0x7f;
@@ -196,8 +211,23 @@ void PortApiClient::processWsBytes() {
         } else if (opcode == 0x9) {
             // Ping -> Pong
             sendMaskedUnixFrame(0xA, payload);
-        } else if (opcode == 0x1 || opcode == 0x0) {
-            handleWireMessage(QString::fromUtf8(payload));
+        } else if (opcode == 0xA) {
+            // Pong
+        } else if (opcode == 0x1 || opcode == 0x2 || opcode == 0x0) {
+            if (opcode != 0x0) {
+                m_fragOpcode = opcode;
+                m_localFragBuf = payload;
+            } else {
+                m_localFragBuf.append(payload);
+            }
+            if (fin && (m_fragOpcode == 0x1 || m_fragOpcode == 0x2)) {
+                handleWireMessage(QString::fromUtf8(m_localFragBuf));
+                m_localFragBuf.clear();
+                m_fragOpcode = 0;
+            } else if (fin) {
+                m_localFragBuf.clear();
+                m_fragOpcode = 0;
+            }
         }
     }
 }
@@ -240,6 +270,8 @@ void PortApiClient::onLocalWsDisconnected() {
     m_wsConnected = false;
     m_localHttpDone = false;
     m_localRxBuf.clear();
+    m_localFragBuf.clear();
+    m_fragOpcode = 0;
     if (was) {
         emit connectionChanged(false, m_activeTransport);
     }
@@ -247,8 +279,8 @@ void PortApiClient::onLocalWsDisconnected() {
 
 void PortApiClient::onTcpWsConnected() {
     m_wsConnected = true;
-    emit connectionChanged(true, m_activeTransport);
     replaySubscriptions();
+    emit connectionChanged(true, m_activeTransport);
 }
 
 void PortApiClient::onTcpWsDisconnected() {
@@ -261,6 +293,10 @@ void PortApiClient::onTcpWsDisconnected() {
 
 void PortApiClient::onTcpWsTextReceived(const QString& msg) {
     handleWireMessage(msg);
+}
+
+void PortApiClient::onTcpWsBinaryReceived(const QByteArray& msg) {
+    handleWireMessage(QString::fromUtf8(msg));
 }
 
 void PortApiClient::sendRawWsText(const QString& text) {
@@ -280,7 +316,8 @@ void PortApiClient::replaySubscriptions() {
 
 QString PortApiClient::qsub(const QString& query, SubCallback cb) {
     const QString opId = nextOpId(QStringLiteral("qsub"));
-    const QString wire = QStringLiteral("%1|qsub|%2").arg(opId, query);
+    const QString cleanQ = query.startsWith(QLatin1String("query ")) ? query : (QStringLiteral("query ") + query);
+    const QString wire = QStringLiteral("%1|qsub|%2").arg(opId, cleanQ);
     m_subs.insert(opId, SubEntry{wire, std::move(cb)});
     if (m_wsConnected) {
         sendRawWsText(wire);
@@ -298,8 +335,12 @@ void PortApiClient::sendPutFrame(const QString& msgType, const QString& key, con
     } else {
         dataBytes = "{}";
     }
-    const QString wire = QStringLiteral("%1|%2|%3|%4")
-                             .arg(opId, msgType, key, QString::fromUtf8(dataBytes));
+    // PortAPI create/update records require DSD format byte 'J' before JSON payload.
+    const QString payloadPrefix = (msgType == QLatin1String("create") || msgType == QLatin1String("update"))
+                                      ? QStringLiteral("J")
+                                      : QString();
+    const QString wire = QStringLiteral("%1|%2|%3|%4%5")
+                             .arg(opId, msgType, key, payloadPrefix, QString::fromUtf8(dataBytes));
     sendRawWsText(wire);
 }
 
@@ -322,7 +363,10 @@ void PortApiClient::handleWireMessage(const QString& line) {
     const QString key = p3 >= 0 ? line.mid(p2 + 1, p3 - p2 - 1) : line.mid(p2 + 1);
     QJsonValue val;
     if (p3 >= 0) {
-        const QByteArray jsonRaw = line.mid(p3 + 1).toUtf8();
+        QByteArray jsonRaw = line.mid(p3 + 1).toUtf8();
+        if (jsonRaw.startsWith('J')) {
+            jsonRaw.remove(0, 1);
+        }
         const QJsonDocument doc = QJsonDocument::fromJson(jsonRaw);
         if (doc.isObject()) val = doc.object();
         else if (doc.isArray()) val = doc.array();
@@ -357,7 +401,7 @@ void PortApiClient::httpRequest(const QString& method, const QString& path, cons
         return;
     }
 
-    QUrl url(QStringLiteral("http://127.0.0.1:817") + path);
+    QUrl url(baseHttpUrl() + path);
     QNetworkRequest req(url);
     if (!contentType.isEmpty()) {
         req.setHeader(QNetworkRequest::ContentTypeHeader, contentType);

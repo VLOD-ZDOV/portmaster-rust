@@ -7,6 +7,20 @@ Item {
 
     property bool showSubDrawer: false
     property bool showLinkDrawer: false
+    property string nodeSearch: ""
+
+    function filteredNodes() {
+        var src = pm.xrayNodes || []
+        var q = nodeSearch.toLowerCase().trim()
+        if (q === "") return src
+        var out = []
+        for (var i = 0; i < src.length; i++) {
+            var n = src[i]
+            var hay = ((n.name || "") + " " + (n.country || "") + " " + (n.address || "") + " " + (n.protocol || "")).toLowerCase()
+            if (hay.indexOf(q) >= 0) out.push(n)
+        }
+        return out
+    }
 
     Connections {
         target: pm
@@ -18,6 +32,7 @@ Item {
         anchors.fill: parent
         contentWidth: availableWidth
         clip: true
+        ScrollBar.vertical: PmScrollBar {}
 
         ColumnLayout {
             width: parent.width - 48
@@ -27,7 +42,7 @@ Item {
             // Gateway Hero Card (matching xray-page.html)
             Rectangle {
                 Layout.fillWidth: true
-                height: 84
+                height: 86
                 radius: 6
                 color: "#1b1b1d"
                 border.color: pm.xrayStatus.connected ? "#195a33" : "#2a2a2e"
@@ -44,9 +59,9 @@ Item {
 
                     ColumnLayout {
                         Layout.fillWidth: true
-                        spacing: 3
+                        spacing: 4
                         RowLayout {
-                            spacing: 10
+                            spacing: 8
                             Label {
                                 text: pm.t("xray.title")
                                 color: "#ffffff"; font.pixelSize: 18; font.bold: true
@@ -62,13 +77,27 @@ Item {
                                     font.pixelSize: 10; font.bold: true
                                 }
                             }
+                            Rectangle {
+                                height: 20; radius: 4
+                                color: (pm.xrayStatus.geoipAvailable && pm.xrayStatus.geositeAvailable) ? "#13293e" : "#3a2c12"
+                                implicitWidth: geoBadge.implicitWidth + 12
+                                Label {
+                                    id: geoBadge; anchors.centerIn: parent
+                                    text: (pm.xrayStatus.geoipAvailable && pm.xrayStatus.geositeAvailable)
+                                          ? "GeoIP + GeoSite"
+                                          : (pm.isRu ? "Нет баз Geo" : "Geo Missing")
+                                    color: (pm.xrayStatus.geoipAvailable && pm.xrayStatus.geositeAvailable) ? "#89b7ff" : "#e9d81d"
+                                    font.pixelSize: 9; font.bold: true
+                                }
+                            }
                         }
                         Label {
                             text: {
-                                var node = pm.xrayStatus.nodeName || (pm.isRu ? "Узел не выбран" : "No node selected")
+                                var node = pm.xrayStatus.nodeName || pm.xrayStatus.node_name || (pm.isRu ? "Узел не выбран" : "No node selected")
                                 var exitIp = pm.xrayStatus.exitIp || ""
                                 var cc = pm.xrayStatus.exitCountry || pm.xrayStatus.country || ""
-                                var bin = pm.xrayStatus.binary_available ? "xray-rust: OK" : "xray-rust: missing"
+                                var inb = pm.xrayStatus.inboundAddress || pm.xrayStatus.inbound_address || ""
+                                var bin = pm.xrayStatus.binary_available ? ("xray-rust (" + (inb || "OK") + ")") : "xray-rust: missing"
                                 return node + (exitIp !== "" ? ("  •  Exit IP: " + exitIp + (cc !== "" ? " (" + cc + ")" : "")) : "") + "  •  " + bin
                             }
                             color: "#9e9ea6"; font.pixelSize: 12
@@ -118,13 +147,13 @@ Item {
 
                     RowLayout {
                         spacing: 8
-                        Switch { checked: pm.globalVpn; onToggled: pm.toggleGlobalVpn() }
+                        PmSwitch { checked: pm.globalVpn; onToggled: pm.toggleGlobalVpn() }
                         Label { text: pm.t("xray.defaultVpn"); color: "#cacaca"; font.pixelSize: 12 }
                     }
 
                     RowLayout {
                         spacing: 8
-                        Switch { checked: pm.autoConnectXray; onToggled: pm.updateSetting("xray/autoConnect", checked) }
+                        PmSwitch { checked: pm.autoConnectXray; onToggled: pm.updateSetting("xray/autoConnect", checked) }
                         Label { text: pm.t("xray.autoConnect"); color: "#cacaca"; font.pixelSize: 12 }
                     }
 
@@ -228,7 +257,7 @@ Item {
             // Interactive TopoJSON World Map
             Rectangle {
                 Layout.fillWidth: true
-                height: 245
+                height: 255
                 radius: 6
                 color: "#141519"
                 border.color: "#24252b"
@@ -279,10 +308,19 @@ Item {
                     delegate: Item {
                         x: modelData.nx * worldCanvas.width - width / 2
                         y: modelData.ny * worldCanvas.height - height / 2
-                        width: 34; height: 22
+                        width: 40; height: 26
 
                         Rectangle {
-                            anchors.fill: parent
+                            anchors.centerIn: parent
+                            visible: !!modelData.active
+                            width: 48; height: 34; radius: 17
+                            color: "#221de966"
+                            border.color: "#661de966"
+                        }
+
+                        Rectangle {
+                            anchors.centerIn: parent
+                            width: 36; height: 22
                             radius: 11
                             color: modelData.active ? "#166838" : (pinMa.containsMouse ? "#25589e" : "#1c3354")
                             border.color: modelData.active ? "#1de966" : "#4e97fa"
@@ -305,7 +343,7 @@ Item {
                 Label {
                     anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.margins: 10
                     text: pm.worldPolygons.length > 0
-                          ? (pm.isRu ? "Клик по метке страны подключает сервер" : "Click a country marker to connect")
+                          ? (pm.isRu ? "Клик по метке на карте подключает сервер" : "Click a country marker to connect")
                           : (pm.isRu ? "Загрузка карты мира..." : "Loading world map...")
                     color: "#6a6b75"; font.pixelSize: 10
                 }
@@ -313,14 +351,14 @@ Item {
 
             // Active Subscriptions Bar
             RowLayout {
-                visible: pm.xraySubs.length > 0
+                visible: (pm.xraySubs || []).length > 0
                 Layout.fillWidth: true
                 spacing: 8
                 Repeater {
                     model: pm.xraySubs || []
                     delegate: Rectangle {
                         height: 36; radius: 5; color: "#1c1d22"; border.color: "#2c2e38"
-                        implicitWidth: subRow.implicitWidth + 20
+                        implicitWidth: subRow.implicitWidth + 22
                         RowLayout {
                             id: subRow; anchors.centerIn: parent; spacing: 8
                             Label { text: (modelData.name || "Sub") + " (" + (modelData.node_count || 0) + ")"; color: "#cacaca"; font.pixelSize: 11; font.bold: true }
@@ -337,6 +375,24 @@ Item {
                 }
             }
 
+            // Server Filter Bar
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 10
+                Label {
+                    text: (pm.isRu ? "Доступные серверы" : "Available Servers") + " (" + root.filteredNodes().length + ")"
+                    color: "#9e9ea6"; font.pixelSize: 12; font.bold: true
+                }
+                Item { Layout.fillWidth: true }
+                TextField {
+                    Layout.preferredWidth: 220; height: 28
+                    placeholderText: pm.isRu ? "Поиск сервера..." : "Search servers..."
+                    placeholderTextColor: "#66666e"; color: "#ffffff"; font.pixelSize: 11
+                    onTextChanged: root.nodeSearch = text
+                    background: Rectangle { color: "#1b1b1d"; radius: 4; border.color: parent.activeFocus ? "#4e97fa" : "#2c2c30" }
+                }
+            }
+
             // Server Cards 2-Column Grid
             GridLayout {
                 Layout.fillWidth: true
@@ -345,9 +401,9 @@ Item {
                 rowSpacing: 10
 
                 Repeater {
-                    model: pm.xrayNodes || []
+                    model: root.filteredNodes()
                     delegate: Rectangle {
-                        property bool isActiveNode: pm.xrayStatus.connected && pm.xrayStatus.nodeId === modelData.id
+                        property bool isActiveNode: !!pm.xrayStatus.connected && pm.xrayStatus.nodeId === modelData.id
                         Layout.fillWidth: true
                         height: 62
                         radius: 5

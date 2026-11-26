@@ -611,10 +611,10 @@ impl AppState {
             notif_prompts.set(count);
         });
 
-        // 7. Subscribe to real-time connection events via netquery/data/
+        // 7. Subscribe to real-time connection events via runtime:netquery/data/
         let live_set_conns = set_connections;
         let live_set_profiles = set_profiles;
-        client.qsub("netquery/data/", move |frame| {
+        client.qsub("runtime:netquery/data/", move |frame| {
             if let Ok(mut conn) = frame.parse_data::<ConnectionRecord>() {
                 if conn.time_ago.is_empty() {
                     conn.time_ago = relative_time(&conn.started);

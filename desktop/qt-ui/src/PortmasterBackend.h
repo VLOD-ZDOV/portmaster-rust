@@ -15,6 +15,7 @@ class PortmasterBackend : public QObject {
     Q_OBJECT
 
     Q_PROPERTY(bool connected READ connected NOTIFY connectionChanged)
+    Q_PROPERTY(bool hasTray READ hasTray CONSTANT)
     Q_PROPERTY(QString transport READ transport NOTIFY connectionChanged)
     Q_PROPERTY(QString lang READ lang NOTIFY langChanged)
     Q_PROPERTY(bool isRu READ isRu NOTIFY langChanged)
@@ -48,9 +49,10 @@ class PortmasterBackend : public QObject {
     Q_PROPERTY(QString modalBody READ modalBody NOTIFY modalChanged)
 
 public:
-    explicit PortmasterBackend(bool startBackground = false, QObject* parent = nullptr);
+    explicit PortmasterBackend(bool startBackground = false, bool withTray = true, QObject* parent = nullptr);
 
     bool connected() const { return m_api->isConnected(); }
+    bool hasTray() const { return m_withTray && QSystemTrayIcon::isSystemTrayAvailable(); }
     QString transport() const { return m_api->transportLabel(); }
     QString lang() const { return m_ru ? QStringLiteral("ru") : QStringLiteral("en"); }
     bool isRu() const { return m_ru; }
@@ -159,6 +161,9 @@ private slots:
 private:
     void startSubscriptions();
     void fetchWorldMap();
+    void scheduleAppsRebuild();
+    void scheduleSettingsRebuild();
+    void scheduleConnsRebuild();
     void rebuildAppsCache();
     void rebuildSelectedAppCache();
     void rebuildConnectionsCache();
@@ -173,6 +178,10 @@ private:
 
     PortApiClient* m_api = nullptr;
     QSystemTrayIcon* m_tray = nullptr;
+    QTimer* m_appsTimer = nullptr;
+    QTimer* m_settingsTimer = nullptr;
+    QTimer* m_connsTimer = nullptr;
+    bool m_withTray = true;
     bool m_ru = true;
     bool m_subscribed = false;
     bool m_worldLoaded = false;
