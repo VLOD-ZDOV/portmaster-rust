@@ -243,22 +243,22 @@
         <div class="grid grid-cols-2 gap-4 text-primary text-xxs">
           <div class="flex flex-col justify-center p-4 bg-gray-200 rounded">
             <p class="space-x-2">
-              <label class="text-secondary">{{ 'common.nameColon' | t: undefined : ('' | i18nVersion) }}</label>
+              <span class="text-secondary">{{ 'common.nameColon' | t: undefined : ('' | i18nVersion) }}</span>
               <span>{{appProfile!.Name}}</span>
             </p>
             <p class="space-x-2">
-              <label class="text-secondary">{{ 'common.pathColon' | t: undefined : ('' | i18nVersion) }}</label>
+              <span class="text-secondary">{{ 'common.pathColon' | t: undefined : ('' | i18nVersion) }}</span>
               <span>{{appProfile!.PresentationPath}}</span>
             </p>
           </div>
 
           <div class="flex flex-col justify-center p-4 bg-gray-200 rounded">
             <p class="space-x-2">
-              <label class="text-secondary">{{ 'app.created' | t: undefined : ('' | i18nVersion) }}</label>
+              <span class="text-secondary">{{ 'app.created' | t: undefined : ('' | i18nVersion) }}</span>
               <span>{{appProfile!.Created * 1000 | date:'medium'}}</span>
             </p>
             <p class="space-x-2">
-              <label class="text-secondary">{{ 'app.lastEdited' | t: undefined : ('' | i18nVersion) }}</label>
+              <span class="text-secondary">{{ 'app.lastEdited' | t: undefined : ('' | i18nVersion) }}</span>
               <span *ngIf="!!appProfile.LastEdited">{{appProfile!.LastEdited * 1000 | date:'medium'}}</span>
               <span *ngIf="!appProfile.LastEdited">{{ 'common.na' | t: undefined : ('' | i18nVersion) }}</span>
             </p>
@@ -267,26 +267,26 @@
           <ng-container *appExpertiseLevel="'developer'">
             <div class="flex flex-col justify-center p-4 bg-gray-200 rounded">
               <p class="space-x-2">
-                <label class="text-secondary">{{ 'app.internal' | t: undefined : ('' | i18nVersion) }}</label>
+                <span class="text-secondary">{{ 'app.internal' | t: undefined : ('' | i18nVersion) }}</span>
                 <span>{{!!appProfile!.Internal ? ('common.yes' | t: undefined : ('' | i18nVersion)) : ('common.no' | t: undefined : ('' | i18nVersion)) }}</span>
               </p>
               <p class="space-x-2">
-                <label class="text-secondary">{{ 'app.source' | t: undefined : ('' | i18nVersion) }}</label>
+                <span class="text-secondary">{{ 'app.source' | t: undefined : ('' | i18nVersion) }}</span>
                 <span>{{appProfile!.Source}}</span>
               </p>
               <p class="space-x-2">
-                <label class="text-secondary">{{ 'spn.pd.id' | t: undefined : ('' | i18nVersion) }}</label>
+                <span class="text-secondary">{{ 'spn.pd.id' | t: undefined : ('' | i18nVersion) }}</span>
                 <span>{{appProfile!.ID}}</span>
               </p>
             </div>
 
             <div class="flex flex-col justify-center p-4 bg-gray-200 rounded">
               <p class="space-x-2">
-                <label class="text-secondary">{{ 'app.revision' | t: undefined : ('' | i18nVersion) }}</label>
+                <span class="text-secondary">{{ 'app.revision' | t: undefined : ('' | i18nVersion) }}</span>
                 <span>{{layeredProfile?.RevisionCounter}}</span>
               </p>
               <p class="space-x-2">
-                <label class="text-secondary">{{ 'app.layers' | t: undefined : ('' | i18nVersion) }}</label>
+                <span class="text-secondary">{{ 'app.layers' | t: undefined : ('' | i18nVersion) }}</span>
                 <span>
                   <ol class="inline-block">
                     <li *ngFor="let layer of layeredProfile?.LayerIDs"

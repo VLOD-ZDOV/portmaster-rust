@@ -16,7 +16,7 @@ export class QuickSettingUseSPNButtonComponent implements OnInit, OnChanges {
   private destroyRef = inject(DestroyRef);
 
   @Input()
-  canUse: boolean = true;
+  canUse = true;
 
   @Input()
   settings: Setting[] = [];
@@ -45,7 +45,7 @@ export class QuickSettingUseSPNButtonComponent implements OnInit, OnChanges {
       this.mode = 'default';
 
       const useSpnSetting = this.settings.find(s => s.Key === 'spn/use') as (BoolSetting | undefined);
-      if (!!useSpnSetting) {
+      if (useSpnSetting) {
         this.defaultValue = !!useSpnSetting.DefaultValue;
         this.currentValue = getActualValue(useSpnSetting);
         if (useSpnSetting.Value !== undefined && useSpnSetting.Value !== null) {
