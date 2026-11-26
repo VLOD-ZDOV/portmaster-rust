@@ -1,0 +1,12 @@
+<RCC>
+    <qresource prefix="/qt/qml/Portmaster">
+        <file alias="Main.qml">qml/Main.qml</file>
+        <file alias="NavigationBar.qml">qml/NavigationBar.qml</file>
+        <file alias="SideDash.qml">qml/SideDash.qml</file>
+        <file alias="AppsView.qml">qml/AppsView.qml</file>
+        <file alias="AppDetailView.qml">qml/AppDetailView.qml</file>
+        <file alias="MonitorView.qml">qml/MonitorView.qml</file>
+        <file alias="XrayView.qml">qml/XrayView.qml</file>
+        <file alias="SettingsView.qml">qml/SettingsView.qml</file>
+    </qresource>
+</RCC>

@@ -5,6 +5,7 @@ use leptos::prelude::*;
 mod app;
 mod client;
 mod components;
+mod i18n;
 mod state;
 
 use app::App;

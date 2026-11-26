@@ -4,10 +4,12 @@ use leptos::prelude::*;
 use pm_models::connection::ConnectionRecord;
 use pm_models::profile::AppProfile;
 use pm_models::settings::{ExpertiseLevel, Setting};
-use pm_models::xray::{ProcessState, XrayNode, XrayStatus};
+use pm_models::xray::{ProcessState, XrayNode, XrayStatus, XraySubscription};
+use serde::{Deserialize, Serialize};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::client::PortApiClient;
+use crate::i18n::Lang;
 
 /// Helper to determine the API base URL from window location or default to 127.0.0.1:817.
 /// Accepts any port on loopback hosts (the core may listen on a custom port);
@@ -92,11 +94,70 @@ pub struct AppNotification {
     pub expires_at: Option<i64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct UiFlavorInfo {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub installed: bool,
+    pub running: bool,
+    pub active: bool,
+    #[serde(default)]
+    pub live_ram_mb: Option<f64>,
+    #[serde(default)]
+    pub live_rss_mb: Option<f64>,
+    #[serde(default)]
+    pub benchmark_ram_mb: f64,
+    #[serde(default)]
+    pub browser_tab_ram_mb: Option<f64>,
+    #[serde(default)]
+    pub process_count: usize,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub binary_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessMemoryInfo {
+    #[serde(default)]
+    pub live_rss_mb: Option<f64>,
+    #[serde(default)]
+    pub live_pss_mb: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct UiFlavorsReport {
+    pub active_flavor: String,
+    pub keep_api_port_open: bool,
+    pub api_port_listening: bool,
+    pub api_port_address: String,
+    #[serde(default)]
+    pub unix_socket_path: Option<String>,
+    #[serde(default)]
+    pub flavors: Vec<UiFlavorInfo>,
+    #[serde(default)]
+    pub core_memory: ProcessMemoryInfo,
+    #[serde(default)]
+    pub xray_memory: ProcessMemoryInfo,
+}
+
 /// Global context holding UI signals and PortAPI interaction logic.
 #[derive(Clone)]
 #[allow(dead_code)]
 pub struct AppState {
     pub client: PortApiClient,
+    pub lang: ReadSignal<Lang>,
+    pub set_lang: WriteSignal<Lang>,
+    pub ui_report: ReadSignal<Option<UiFlavorsReport>>,
+    pub set_ui_report: WriteSignal<Option<UiFlavorsReport>>,
+    pub xray_subscriptions: ReadSignal<Vec<XraySubscription>>,
+    pub set_xray_subscriptions: WriteSignal<Vec<XraySubscription>>,
+    pub sync_modal_text: ReadSignal<Option<(String, String)>>,
+    pub set_sync_modal_text: WriteSignal<Option<(String, String)>>,
     pub current_page: ReadSignal<Page>,
     pub set_current_page: WriteSignal<Page>,
     pub active_view: ReadSignal<ViewTab>,
@@ -141,6 +202,10 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(client: PortApiClient) -> Self {
+        let (lang, set_lang) = signal(Lang::load());
+        let (ui_report, set_ui_report) = signal(None);
+        let (xray_subscriptions, set_xray_subscriptions) = signal(Vec::<XraySubscription>::new());
+        let (sync_modal_text, set_sync_modal_text) = signal(None);
         let (current_page, set_current_page) = signal(Page::Apps);
         let (active_view, set_active_view) = signal(ViewTab::Apps);
         let (selected_app, set_selected_app) = signal(None);
@@ -165,6 +230,14 @@ impl AppState {
 
         let state = Self {
             client,
+            lang,
+            set_lang,
+            ui_report,
+            set_ui_report,
+            xray_subscriptions,
+            set_xray_subscriptions,
+            sync_modal_text,
+            set_sync_modal_text,
             current_page,
             set_current_page,
             active_view,
@@ -224,12 +297,30 @@ impl AppState {
 
         let base_url = api_base_url();
 
-        // 1. Fetch real Xray Nodes from /api/v1/xray/nodes
+        // 1. Fetch real Xray Nodes, Subscriptions & UI flavors report
         let nodes_url = format!("{}/api/v1/xray/nodes", base_url);
         spawn_local(async move {
             if let Ok(resp) = gloo_net::http::Request::get(&nodes_url).send().await {
                 if let Ok(nodes) = resp.json::<Vec<XrayNode>>().await {
                     set_xray_nodes.set(nodes);
+                }
+            }
+        });
+        let subs_url = format!("{}/api/v1/xray/subscriptions", base_url);
+        let set_subs_init = self.set_xray_subscriptions;
+        spawn_local(async move {
+            if let Ok(resp) = gloo_net::http::Request::get(&subs_url).send().await {
+                if let Ok(subs) = resp.json::<Vec<XraySubscription>>().await {
+                    set_subs_init.set(subs);
+                }
+            }
+        });
+        let ui_url = format!("{}/api/v1/ui/flavors", base_url);
+        let set_ui_init = self.set_ui_report;
+        spawn_local(async move {
+            if let Ok(resp) = gloo_net::http::Request::get(&ui_url).send().await {
+                if let Ok(report) = resp.json::<UiFlavorsReport>().await {
+                    set_ui_init.set(Some(report));
                 }
             }
         });
@@ -1418,9 +1509,10 @@ impl AppState {
         });
     }
 
-    /// Adds a subscription URL and refreshes nodes on success.
+    /// Adds a subscription URL and refreshes nodes and subscriptions on success.
     pub fn add_xray_subscription(&self, url: String) {
         let set_xray_nodes = self.set_xray_nodes;
+        let set_subs = self.set_xray_subscriptions;
         let base_url = api_base_url();
         let sub_url = format!("{}/api/v1/xray/subscriptions", base_url);
         let nodes_url = format!("{}/api/v1/xray/nodes", base_url);
@@ -1433,6 +1525,11 @@ impl AppState {
                 if let Ok(resp) = req.send().await {
                     if resp.ok() {
                         ok = true;
+                        if let Ok(s_resp) = gloo_net::http::Request::get(&sub_url).send().await {
+                            if let Ok(subs) = s_resp.json::<Vec<XraySubscription>>().await {
+                                set_subs.set(subs);
+                            }
+                        }
                         if let Ok(nodes_resp) = gloo_net::http::Request::get(&nodes_url).send().await {
                             if let Ok(nodes) = nodes_resp.json::<Vec<XrayNode>>().await {
                                 set_xray_nodes.set(nodes);
@@ -1448,6 +1545,346 @@ impl AppState {
                     "error",
                 );
             }
+        });
+    }
+
+    pub fn set_language(&self, lang: Lang) {
+        lang.save();
+        self.set_lang.set(lang);
+    }
+
+    pub fn fetch_ui_report(&self) {
+        let set_ui = self.set_ui_report;
+        let url = format!("{}/api/v1/ui/flavors", api_base_url());
+        spawn_local(async move {
+            if let Ok(resp) = gloo_net::http::Request::get(&url).send().await {
+                if let Ok(report) = resp.json::<UiFlavorsReport>().await {
+                    set_ui.set(Some(report));
+                }
+            }
+        });
+    }
+
+    pub fn switch_ui_flavor(&self, flavor: String) {
+        let set_ui = self.set_ui_report;
+        let url = format!("{}/api/v1/ui/flavor", api_base_url());
+        let state = self.clone();
+        spawn_local(async move {
+            if let Ok(req) = gloo_net::http::Request::post(&url).json(&serde_json::json!({ "flavor": flavor })) {
+                if let Ok(resp) = req.send().await {
+                    if resp.ok() {
+                        if let Ok(report) = resp.json::<UiFlavorsReport>().await {
+                            set_ui.set(Some(report));
+                            return;
+                        }
+                    }
+                }
+            }
+            state.notify_local("UI", "Failed to switch UI flavor.", "error");
+        });
+    }
+
+    pub fn toggle_keep_api_port(&self, keep_open: bool) {
+        let url = format!("{}/api/v1/core/api-port", api_base_url());
+        let state = self.clone();
+        spawn_local(async move {
+            if let Ok(req) = gloo_net::http::Request::post(&url).json(&serde_json::json!({ "keepOpen": keep_open })) {
+                if let Ok(resp) = req.send().await {
+                    if resp.ok() {
+                        state.fetch_ui_report();
+                        return;
+                    }
+                }
+            }
+            state.notify_local("API Port", "Failed to update keepApiPortOpen setting.", "error");
+        });
+    }
+
+    pub fn add_xray_manual_nodes(&self, links: String) {
+        let set_nodes = self.set_xray_nodes;
+        let base = api_base_url();
+        let url = format!("{}/api/v1/xray/nodes/manual", base);
+        let nodes_url = format!("{}/api/v1/xray/nodes", base);
+        let state = self.clone();
+        spawn_local(async move {
+            if let Ok(req) = gloo_net::http::Request::post(&url).json(&serde_json::json!({ "links": links })) {
+                if let Ok(resp) = req.send().await {
+                    if resp.ok() {
+                        if let Ok(nr) = gloo_net::http::Request::get(&nodes_url).send().await {
+                            if let Ok(nodes) = nr.json::<Vec<XrayNode>>().await {
+                                set_nodes.set(nodes);
+                            }
+                        }
+                        state.notify_local("Xray", "Added direct node link(s).", "info");
+                        return;
+                    }
+                }
+            }
+            state.notify_local("Xray", "Failed to parse manual node link.", "error");
+        });
+    }
+
+    pub fn refresh_xray_subscription(&self, id: String) {
+        let set_nodes = self.set_xray_nodes;
+        let set_subs = self.set_xray_subscriptions;
+        let base = api_base_url();
+        let sub_url = format!("{}/api/v1/xray/subscriptions", base);
+        let nodes_url = format!("{}/api/v1/xray/nodes", base);
+        spawn_local(async move {
+            if let Ok(req) = gloo_net::http::Request::put(&sub_url).json(&serde_json::json!({ "id": id })) {
+                let _ = req.send().await;
+            }
+            if let Ok(sr) = gloo_net::http::Request::get(&sub_url).send().await {
+                if let Ok(subs) = sr.json::<Vec<XraySubscription>>().await {
+                    set_subs.set(subs);
+                }
+            }
+            if let Ok(nr) = gloo_net::http::Request::get(&nodes_url).send().await {
+                if let Ok(nodes) = nr.json::<Vec<XrayNode>>().await {
+                    set_nodes.set(nodes);
+                }
+            }
+        });
+    }
+
+    pub fn delete_xray_subscription(&self, id: String) {
+        let set_nodes = self.set_xray_nodes;
+        let set_subs = self.set_xray_subscriptions;
+        let base = api_base_url();
+        let del_url = format!("{}/api/v1/xray/subscriptions/{}", base, id);
+        let sub_url = format!("{}/api/v1/xray/subscriptions", base);
+        let nodes_url = format!("{}/api/v1/xray/nodes", base);
+        spawn_local(async move {
+            let _ = gloo_net::http::Request::delete(&del_url).send().await;
+            if let Ok(sr) = gloo_net::http::Request::get(&sub_url).send().await {
+                if let Ok(subs) = sr.json::<Vec<XraySubscription>>().await {
+                    set_subs.set(subs);
+                }
+            }
+            if let Ok(nr) = gloo_net::http::Request::get(&nodes_url).send().await {
+                if let Ok(nodes) = nr.json::<Vec<XrayNode>>().await {
+                    set_nodes.set(nodes);
+                }
+            }
+        });
+    }
+
+    pub fn download_xray_binary(&self) {
+        let set_busy = self.set_busy;
+        let set_status = self.set_xray_status;
+        let base = api_base_url();
+        let state = self.clone();
+        set_busy.set(true);
+        spawn_local(async move {
+            let url = format!("{}/api/v1/xray/download-binary", base);
+            let status_url = format!("{}/api/v1/xray/status", base);
+            if let Ok(req) = gloo_net::http::Request::post(&url).json(&serde_json::json!({})) {
+                match req.send().await {
+                    Ok(resp) if resp.ok() => {
+                        if let Ok(sr) = gloo_net::http::Request::get(&status_url).send().await {
+                            if let Ok(st) = sr.json::<XrayStatus>().await {
+                                set_status.set(st);
+                            }
+                        }
+                        state.notify_local("Xray", "xray-rust binary downloaded/updated.", "info");
+                    }
+                    _ => state.notify_local("Xray", "Failed to download xray-rust binary.", "error"),
+                }
+            }
+            set_busy.set(false);
+        });
+    }
+
+    pub fn download_xray_geodata(&self) {
+        let set_busy = self.set_busy;
+        let base = api_base_url();
+        let state = self.clone();
+        set_busy.set(true);
+        spawn_local(async move {
+            let url = format!("{}/api/v1/xray/download-geodata", base);
+            if let Ok(req) = gloo_net::http::Request::post(&url).json(&serde_json::json!({})) {
+                match req.send().await {
+                    Ok(resp) if resp.ok() => {
+                        state.notify_local("GeoIP & GeoSite", "geoip.dat & geosite.dat updated successfully.", "info");
+                    }
+                    _ => state.notify_local("GeoIP & GeoSite", "Failed to download GeoIP/GeoSite files.", "error"),
+                }
+            }
+            set_busy.set(false);
+        });
+    }
+
+    /// Creates a new custom application profile.
+    pub fn create_profile(&self, name: String, exec_path: String) {
+        let trimmed_name = name.trim().to_string();
+        let trimmed_path = exec_path.trim().to_string();
+        if trimmed_name.is_empty() {
+            return;
+        }
+        let slug: String = trimmed_name
+            .to_lowercase()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
+        let id = format!("{}-{}", slug.trim_matches('-'), (js_sys::Date::now() as u64) % 100000);
+        let mut p = AppProfile::new(id, &trimmed_name);
+        p.source = "local".to_string();
+        p.presentation_path = trimmed_path.clone();
+        if !trimmed_path.is_empty() {
+            p.linked_path = trimmed_path.clone();
+            p.fingerprints.push(pm_models::profile::ProfileFingerprint {
+                fp_type: pm_models::profile::FingerprintType::Path,
+                key: String::new(),
+                operation: pm_models::profile::FingerprintOperation::Equal,
+                value: trimmed_path,
+            });
+        }
+        let key = p.database_key();
+        let val = serde_json::to_value(&p).unwrap_or_default();
+        self.set_profiles.update(|list| list.push(p));
+        let client = self.client.clone();
+        let state = self.clone();
+        let id_nav = key.rsplit('/').next().unwrap_or("").to_string();
+        spawn_local(async move {
+            if let Err(err) = client.put("create", &key, val).await {
+                state.notify_local("Profile", &format!("Failed to create profile: {err}"), "error");
+            } else {
+                state.select_app(Some(id_nav));
+            }
+        });
+    }
+
+    pub fn delete_profile(&self, profile_id: String) {
+        let db_key = self
+            .profiles
+            .get_untracked()
+            .into_iter()
+            .find(|p| p.id == profile_id || p.database_key() == profile_id)
+            .map(|p| p.database_key())
+            .unwrap_or_else(|| format!("core:profiles/local/{profile_id}"));
+        self.set_profiles
+            .update(|list| list.retain(|p| p.id != profile_id && p.database_key() != db_key));
+        self.select_app(None);
+        let client = self.client.clone();
+        let state = self.clone();
+        spawn_local(async move {
+            if let Err(err) = client.delete(&db_key).await {
+                state.notify_local("Profile", &format!("Failed to delete profile: {err}"), "error");
+            }
+        });
+    }
+
+    /// Promotes an application rule (e.g. from filter/endpoints) to global setting (#1960).
+    pub fn promote_rule_to_global(&self, cfg_key: String, rule: String) {
+        let mut current: Vec<String> = self
+            .settings
+            .get_untracked()
+            .into_iter()
+            .find(|s| s.key == cfg_key)
+            .and_then(|s| s.effective_value().as_array().cloned())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        if !current.contains(&rule) {
+            current.push(rule.clone());
+            self.update_setting(&cfg_key, serde_json::json!(current));
+            self.notify_local("Rule Promoted", &format!("Added '{rule}' to global {cfg_key}."), "info");
+        }
+    }
+
+    /// Resolves a prompt notification by allow/block action, or batch-resolves all prompts (#2083).
+    pub fn resolve_prompt_id(&self, prompt_id: String, allow: bool) {
+        let client = self.client.clone();
+        let key = format!("notifications:all/{prompt_id}");
+        let action = if allow { "allow-domain-all" } else { "block-domain-all" };
+        let payload = serde_json::json!({
+            "EventID": prompt_id,
+            "SelectedActionID": action,
+        });
+        spawn_local(async move {
+            let _ = client.put("update", &key, payload).await;
+        });
+    }
+
+    pub fn resolve_all_prompts(&self, allow: bool) {
+        let prompts: Vec<String> = self
+            .notifications
+            .get_untracked()
+            .into_iter()
+            .filter(|n| n.is_prompt)
+            .map(|n| n.id)
+            .collect();
+        for id in prompts {
+            self.resolve_prompt_id(id, allow);
+        }
+    }
+
+    pub fn export_settings_sync(&self) {
+        let url = format!("{}/api/v1/sync/settings/export?from=core:config/global", api_base_url());
+        let set_modal = self.set_sync_modal_text;
+        let state = self.clone();
+        spawn_local(async move {
+            if let Ok(resp) = gloo_net::http::Request::get(&url).send().await {
+                if resp.ok() {
+                    if let Ok(txt) = resp.text().await {
+                        set_modal.set(Some(("Export Global Settings".to_string(), txt)));
+                        return;
+                    }
+                }
+            }
+            state.notify_local("Sync", "Failed to export global settings.", "error");
+        });
+    }
+
+    pub fn import_settings_sync(&self, payload: String) {
+        let url = format!("{}/api/v1/sync/settings/import?to=core:config/global", api_base_url());
+        let state = self.clone();
+        let set_modal = self.set_sync_modal_text;
+        spawn_local(async move {
+            if let Ok(req) = gloo_net::http::Request::post(&url).body(payload) {
+                if let Ok(resp) = req.send().await {
+                    if resp.ok() {
+                        set_modal.set(None);
+                        state.notify_local("Sync", "Imported settings successfully.", "info");
+                        return;
+                    }
+                }
+            }
+            state.notify_local("Sync", "Failed to import settings. Check format.", "error");
+        });
+    }
+
+    pub fn export_profile_sync(&self, scoped_id: String) {
+        let url = format!("{}/api/v1/sync/profile/export?id={}", api_base_url(), scoped_id);
+        let set_modal = self.set_sync_modal_text;
+        let state = self.clone();
+        spawn_local(async move {
+            if let Ok(resp) = gloo_net::http::Request::get(&url).send().await {
+                if resp.ok() {
+                    if let Ok(txt) = resp.text().await {
+                        set_modal.set(Some((format!("Export Profile: {scoped_id}"), txt)));
+                        return;
+                    }
+                }
+            }
+            state.notify_local("Sync", "Failed to export application profile.", "error");
+        });
+    }
+
+    pub fn import_profile_sync(&self, payload: String) {
+        let url = format!("{}/api/v1/sync/profile/import?allowReplace=true", api_base_url());
+        let state = self.clone();
+        let set_modal = self.set_sync_modal_text;
+        spawn_local(async move {
+            if let Ok(req) = gloo_net::http::Request::post(&url).body(payload) {
+                if let Ok(resp) = req.send().await {
+                    if resp.ok() {
+                        set_modal.set(None);
+                        state.notify_local("Sync", "Imported application profile.", "info");
+                        return;
+                    }
+                }
+            }
+            state.notify_local("Sync", "Failed to import profile. Check format.", "error");
         });
     }
 }

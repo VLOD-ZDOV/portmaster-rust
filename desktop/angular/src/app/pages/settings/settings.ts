@@ -1,12 +1,37 @@
-import { Component, OnDestroy, OnInit } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
+import { Component, Inject, OnDestroy, OnInit } from '@angular/core';
 import { ActivatedRoute } from '@angular/router';
-import { ConfigService, Setting } from '@safing/portmaster-api';
+import { ConfigService, PORTMASTER_HTTP_API_ENDPOINT, Setting } from '@safing/portmaster-api';
 import { Subscription } from 'rxjs';
 import { StatusService, VersionStatus } from 'src/app/services';
 import { ActionIndicatorService } from 'src/app/shared/action-indicator';
 import { fadeInAnimation } from 'src/app/shared/animations';
 import { SaveSettingEvent } from 'src/app/shared/config/generic-setting/generic-setting';
 import { I18nService, Language } from 'src/i18n';
+
+export interface UiFlavorInfo {
+  id: string;
+  name: string;
+  kind: string;
+  installed: boolean;
+  running: boolean;
+  active: boolean;
+  liveRamMb?: number | null;
+  liveRssMb?: number | null;
+  benchmarkRamMb: number;
+  browserTabRamMb?: number | null;
+  processCount: number;
+  url?: string;
+}
+
+export interface UiFlavorsReport {
+  activeFlavor: string;
+  keepApiPortOpen: boolean;
+  apiPortListening: boolean;
+  apiPortAddress: string;
+  unixSocketPath?: string;
+  flavors: UiFlavorInfo[];
+}
 
 @Component({
   templateUrl: './settings.html',
@@ -32,6 +57,10 @@ export class SettingsComponent implements OnInit, OnDestroy {
    */
   highlightSettingKey: string | null = null;
 
+  /** @private UI flavor & live RAM telemetry */
+  uiReport: UiFlavorsReport | null = null;
+  uiBusy = false;
+
   /** Subscription to watch all available settings. */
   private subscription = Subscription.EMPTY;
 
@@ -41,6 +70,8 @@ export class SettingsComponent implements OnInit, OnDestroy {
     private actionIndicator: ActionIndicatorService,
     private route: ActivatedRoute,
     private i18n: I18nService,
+    private http: HttpClient,
+    @Inject(PORTMASTER_HTTP_API_ENDPOINT) private httpAPI: string,
   ) { }
 
   /** @private Currently selected interface language. */
@@ -57,6 +88,7 @@ export class SettingsComponent implements OnInit, OnDestroy {
     this.subscription = new Subscription();
 
     this.loadSettings();
+    this.refreshUiReport();
 
     // Request the current resource versions once. We add
     // it to the subscription to prevent a memory leak in
@@ -131,6 +163,9 @@ export class SettingsComponent implements OnInit, OnDestroy {
           if (setting.Key === 'core/releaseLevel') {
             this.loadSettings();
           }
+          if (setting.Key === 'core/uiFlavor' || setting.Key === 'core/keepApiPortOpen') {
+            this.refreshUiReport();
+          }
         },
         error: err => {
           if (!!event.rejected) {
@@ -141,5 +176,57 @@ export class SettingsComponent implements OnInit, OnDestroy {
           console.error(err);
         }
       })
+  }
+
+  refreshUiReport(): void {
+    const sub = this.http
+      .get<UiFlavorsReport>(`${this.httpAPI}/v1/ui/flavors`)
+      .subscribe({
+        next: report => (this.uiReport = report),
+        error: () => { /* older core without /ui/flavors */ },
+      });
+    this.subscription.add(sub);
+  }
+
+  selectUiFlavor(flavorId: string): void {
+    this.uiBusy = true;
+    const sub = this.http
+      .post<UiFlavorsReport>(`${this.httpAPI}/v1/ui/flavor`, { flavor: flavorId })
+      .subscribe({
+        next: report => {
+          this.uiReport = report;
+          this.uiBusy = false;
+        },
+        error: err => {
+          this.uiBusy = false;
+          this.actionIndicator.error('Failed to switch UI flavor', err);
+        },
+      });
+    this.subscription.add(sub);
+  }
+
+  toggleKeepApiPortOpen(): void {
+    if (!this.uiReport) return;
+    const next = !this.uiReport.keepApiPortOpen;
+    this.uiBusy = true;
+    const sub = this.http
+      .post(`${this.httpAPI}/v1/core/api-port`, { keepOpen: next })
+      .subscribe({
+        next: () => {
+          this.uiBusy = false;
+          this.refreshUiReport();
+        },
+        error: err => {
+          this.uiBusy = false;
+          this.actionIndicator.error('Failed to update API port setting', err);
+        },
+      });
+    this.subscription.add(sub);
+  }
+
+  openWebFlavor(flavor: UiFlavorInfo): void {
+    if (flavor.url) {
+      window.location.href = flavor.url;
+    }
   }
 }

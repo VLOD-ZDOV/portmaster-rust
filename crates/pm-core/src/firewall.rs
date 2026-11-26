@@ -685,6 +685,12 @@ impl FirewallEnv for CoreFirewallEnv {
     }
 
     fn report_secure_dns_bypass(&self, process: Option<&Process>) {
+        if !self
+            .config
+            .get_as_bool(crate::service::CFG_NOTIFY_BLOCKED_BYPASS, true)()
+        {
+            return;
+        }
         let Some(process) = process else {
             return;
         };

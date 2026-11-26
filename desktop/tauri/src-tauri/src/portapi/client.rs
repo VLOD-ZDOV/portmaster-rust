@@ -34,11 +34,95 @@ pub struct PortAPI {
 /// The map type used to store message subscribers.
 type SubscriberMap = RwLock<HashMap<usize, Sender<Response>>>;
 
-/// Connect to PortAPI at the specified URI.
-///
-/// This method will launch a new async thread on the `tauri::async_runtime`
-/// that will handle message to transmit and also multiplex server responses
-/// to the appropriate subscriber.
+/// Locate Portmaster's local Unix Domain Socket (`api.sock`), if present.
+#[cfg(unix)]
+pub fn find_api_socket() -> Option<std::path::PathBuf> {
+    if let Ok(custom) = std::env::var("PORTMASTER_API_SOCKET") {
+        let trimmed = custom.trim();
+        if !trimmed.is_empty() {
+            let p = std::path::PathBuf::from(trimmed);
+            if p.exists() {
+                return Some(p);
+            }
+        }
+    }
+    let candidates = [
+        "/run/portmaster/api.sock",
+        "/var/lib/portmaster/api.sock",
+        "/opt/safing/portmaster/api.sock",
+    ];
+    for c in candidates {
+        let p = std::path::PathBuf::from(c);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+#[cfg(unix)]
+fn post_api_port_lease(lease: &str) {
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+
+    let Some(sock) = find_api_socket() else {
+        return;
+    };
+    let Ok(mut stream) = UnixStream::connect(&sock) else {
+        return;
+    };
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(600)));
+    let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(600)));
+    let body = format!(r#"{{"lease":"{lease}"}}"#);
+    let req = format!(
+        "POST /api/v1/core/api-port HTTP/1.1\r\nHost: 127.0.0.1:817\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    let _ = stream.write_all(req.as_bytes());
+    let mut buf = [0u8; 512];
+    let _ = stream.read(&mut buf);
+}
+
+/// Ensures TCP `127.0.0.1:817` is leased open when opening a WebView/Browser UI.
+pub fn lease_api_port_open() {
+    #[cfg(unix)]
+    {
+        if std::net::TcpStream::connect_timeout(
+            &std::net::SocketAddr::from(([127, 0, 0, 1], 817)),
+            std::time::Duration::from_millis(80),
+        )
+        .is_ok()
+        {
+            return;
+        }
+        post_api_port_lease("open");
+        for _ in 0..15 {
+            if std::net::TcpStream::connect_timeout(
+                &std::net::SocketAddr::from(([127, 0, 0, 1], 817)),
+                std::time::Duration::from_millis(50),
+            )
+            .is_ok()
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+    }
+}
+
+/// Releases the temporary WebView/Browser lease on TCP `:817` (closes `:817`
+/// automatically if `core/keepApiPortOpen` is `false`).
+pub fn release_api_port_lease() {
+    #[cfg(unix)]
+    {
+        std::thread::spawn(|| {
+            post_api_port_lease("close");
+        });
+    }
+}
+
+/// Connect to PortAPI at the specified URI, falling back to the local Unix
+/// Domain Socket on Linux/Unix when TCP `:817` is kept closed (`core/keepApiPortOpen=false`).
 pub async fn connect(uri: &str) -> Result<PortAPI, Error> {
     let parsed = match uri.parse::<Uri>() {
         Ok(u) => u,
@@ -47,7 +131,27 @@ pub async fn connect(uri: &str) -> Result<PortAPI, Error> {
         }
     };
 
-    let (mut client, _) = ClientBuilder::from_uri(parsed).connect().await?;
+    match ClientBuilder::from_uri(parsed.clone()).connect().await {
+        Ok((client, _)) => Ok(spawn_ws_loop(client)),
+        Err(tcp_err) => {
+            #[cfg(unix)]
+            if let Some(sock_path) = find_api_socket() {
+                if let Ok(unix_stream) = tokio::net::UnixStream::connect(&sock_path).await {
+                    let (client, _) = ClientBuilder::from_uri(parsed)
+                        .connect_on(unix_stream)
+                        .await?;
+                    return Ok(spawn_ws_loop(client));
+                }
+            }
+            Err(tcp_err)
+        }
+    }
+}
+
+fn spawn_ws_loop<S>(mut client: tokio_websockets::WebSocketStream<S>) -> PortAPI
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
     let (tx, mut dispatch) = channel::<Command>(64);
 
     tauri::async_runtime::spawn(async move {
@@ -191,7 +295,7 @@ pub async fn connect(uri: &str) -> Result<PortAPI, Error> {
         }
     });
 
-    Ok(PortAPI { dispatch: tx })
+    PortAPI { dispatch: tx }
 }
 
 impl PortAPI {

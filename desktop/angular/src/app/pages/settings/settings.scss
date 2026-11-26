@@ -104,3 +104,112 @@ div.tableFixHead {
     display: inline-block;
   }
 }
+
+.ui-switcher-card {
+  margin: 0 1.25rem 0.75rem 3rem;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.ui-switcher-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.65rem;
+}
+
+.ui-switcher-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+  margin-right: 0.6rem;
+}
+
+.ui-port-badge {
+  font-size: 0.72rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 9999px;
+  &.port-open {
+    background: rgba(29, 233, 102, 0.14);
+    color: #4ade80;
+  }
+  &.port-closed {
+    background: rgba(59, 130, 246, 0.18);
+    color: #60a5fa;
+  }
+}
+
+.ui-port-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.ui-flavors-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.6rem;
+}
+
+.ui-flavor-item {
+  padding: 0.6rem 0.75rem;
+  border-radius: 0.4rem;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  &.is-active {
+    border-color: #3b82f6;
+  }
+}
+
+.ui-flavor-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+}
+
+.ui-ram-pill {
+  font-size: 0.7rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 9999px;
+  background: rgba(59, 130, 246, 0.2);
+  color: #93c5fd;
+  white-space: nowrap;
+  &.bench {
+    background: rgba(255, 255, 255, 0.08);
+    color: #cbd5e1;
+  }
+}
+
+.ui-flavor-kind {
+  font-size: 0.7rem;
+  opacity: 0.72;
+  margin: 0.25rem 0 0.5rem;
+}
+
+.ui-flavor-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.ui-btn {
+  padding: 0.22rem 0.6rem;
+  border-radius: 0.3rem;
+  font-size: 0.72rem;
+  background: #2563eb;
+  color: #fff;
+  cursor: pointer;
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  &.secondary {
+    background: rgba(255, 255, 255, 0.1);
+  }
+}

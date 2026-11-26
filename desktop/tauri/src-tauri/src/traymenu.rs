@@ -51,6 +51,7 @@ pub static USER_THEME: RwLock<dark_light::Mode> = RwLock::new(dark_light::Mode::
 const OPEN_KEY: &str = "open";
 const OPEN_ANGULAR_KEY: &str = "open_angular";
 const OPEN_RUST_KEY: &str = "open_rust";
+const OPEN_QT_KEY: &str = "open_qt";
 const OPEN_BROWSER_KEY: &str = "open_browser";
 const EXIT_UI_KEY: &str = "exit_ui";
 const SPN_STATUS_KEY: &str = "spn_status";
@@ -148,6 +149,36 @@ fn get_icon(icon: IconColor) -> &'static [u8] {
     }
 }
 
+fn find_qt_binary() -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    let name = "portmaster-qt.exe";
+    #[cfg(not(windows))]
+    let name = "portmaster-qt";
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(p) = exe.parent().map(|d| d.join(name)) {
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        for p in [
+            "/usr/lib/portmaster/portmaster-qt",
+            "/opt/safing/portmaster/portmaster-qt",
+            "/usr/local/bin/portmaster-qt",
+            "/usr/bin/portmaster-qt",
+        ] {
+            let pb = std::path::PathBuf::from(p);
+            if pb.is_file() {
+                return Some(pb);
+            }
+        }
+    }
+    None
+}
+
 fn build_tray_menu(
     app: &tauri::AppHandle,
     status: &str,
@@ -157,7 +188,11 @@ fn build_tray_menu(
     load_theme(app);
 
     let open_angular_btn = MenuItemBuilder::with_id(OPEN_ANGULAR_KEY, "Open Angular UI").build(app)?;
-    let open_rust_btn = MenuItemBuilder::with_id(OPEN_RUST_KEY, "Open Rust Pilot UI (WASM)").build(app)?;
+    let open_rust_btn = MenuItemBuilder::with_id(OPEN_RUST_KEY, "Open Rust WASM UI").build(app)?;
+    let qt_available = find_qt_binary().is_some();
+    let open_qt_btn = MenuItemBuilder::with_id(OPEN_QT_KEY, "Open Qt 6 Native GUI")
+        .enabled(qt_available)
+        .build(app)?;
     let open_browser_btn = MenuItemBuilder::with_id(OPEN_BROWSER_KEY, "Open in Web Browser").build(app)?;
     let exit_ui_btn = MenuItemBuilder::with_id(EXIT_UI_KEY, "Exit UI").build(app)?;
     let shutdown_btn = MenuItemBuilder::with_id(SHUTDOWN_KEY, "Shut Down Portmaster").build(app)?;
@@ -312,6 +347,9 @@ fn build_tray_menu(
     
     items.push(&open_angular_btn);
     items.push(&open_rust_btn);
+    if qt_available {
+        items.push(&open_qt_btn);
+    }
     items.push(&open_browser_btn);
     items.push(&s);
 
@@ -339,12 +377,22 @@ pub fn setup_tray_menu(
                 app.exit(0);
             }
             OPEN_KEY | OPEN_ANGULAR_KEY => {
-                let _ = open_window_target(app, "http://127.0.0.1:817");
+                crate::portapi::client::lease_api_port_open();
+                let _ = open_window_target(app, "http://127.0.0.1:817/ui/modules/portmaster/");
             }
             OPEN_RUST_KEY => {
-                let _ = open_window_target(app, "http://127.0.0.1:817/pilot");
+                crate::portapi::client::lease_api_port_open();
+                let _ = open_window_target(app, "http://127.0.0.1:817/rust/");
+            }
+            OPEN_QT_KEY => {
+                if let Some(qt_bin) = find_qt_binary() {
+                    if let Err(err) = std::process::Command::new(&qt_bin).spawn() {
+                        error!("[tauri] failed to launch portmaster-qt ({}): {}", qt_bin.display(), err);
+                    }
+                }
             }
             OPEN_BROWSER_KEY => {
+                crate::portapi::client::lease_api_port_open();
                 let _ = open::that_detached("http://127.0.0.1:817");
             }
             RELOAD_KEY => {
@@ -421,6 +469,7 @@ pub fn setup_tray_menu(
                         } else if win.is_visible().unwrap_or(false) {
                             let _ = app.save_window_state(crate::WINDOW_STATE_FLAGS_TO_SAVE);
                             let _ = win.destroy();
+                            crate::portapi::client::release_api_port_lease();
                         } else {
                             let _ = open_window(app);
                         }

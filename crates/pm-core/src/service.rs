@@ -16,7 +16,7 @@ use crate::api_auth::{ApiAuthenticator, SystemLookup};
 use crate::cli::Options;
 
 /// Current Portmaster release version.
-pub const PORTMASTER_VERSION: &str = "2.2.35";
+pub const PORTMASTER_VERSION: &str = "2.2.36";
 /// GitHub repository for update checks.
 pub const CFG_GITHUB_RELEASE_REPO: &str = "core/updates/githubRepo";
 
@@ -30,6 +30,13 @@ pub const CFG_DEV_MODE: &str = "core/devMode";
 pub const CFG_LOG_LEVEL: &str = "core/log/level";
 pub const CFG_LISTEN_ADDRESS: &str = "core/listenAddress";
 pub const CFG_API_KEYS: &str = "core/apiKeys";
+/// Whether HTTP/WS TCP port `:817` stays continuously bound. When `false`, the
+/// local Unix domain socket stays active and TCP `:817` only opens on demand.
+pub const CFG_KEEP_API_PORT_OPEN: &str = "core/keepApiPortOpen";
+/// Preferred desktop/web interface flavor (`angular`, `rust-wasm`, or `qt`).
+pub const CFG_UI_FLAVOR: &str = "core/uiFlavor";
+/// Whether Secure DNS bypass attempts emit desktop notifications.
+pub const CFG_NOTIFY_BLOCKED_BYPASS: &str = "core/notifyBlockedBypass";
 
 /// A running core service.
 pub struct Service {
@@ -107,8 +114,11 @@ pub struct Service {
     /// Subscribed in `new` so changes before `run` are not missed.
     profile_changes: Mutex<Option<tokio::sync::broadcast::Receiver<()>>>,
     listener: Mutex<Option<TcpListener>>,
+    port_controller: Arc<crate::ui::ApiPortController>,
+    unix_socket_path: Option<PathBuf>,
     local_addr: std::net::SocketAddr,
     data_dir: PathBuf,
+    bin_dir: PathBuf,
 }
 
 impl Service {
@@ -472,34 +482,51 @@ impl Service {
             api.ui_archives(),
         )?;
 
-        let listener = {
-            let addr: std::net::SocketAddr = listen_address
-                .parse()
-                .map_err(|error| anyhow::anyhow!("invalid listen address {listen_address}: {error}"))?;
-            let domain = match addr {
-                std::net::SocketAddr::V4(_) => socket2::Domain::IPV4,
-                std::net::SocketAddr::V6(_) => socket2::Domain::IPV6,
+        let parsed_addr: std::net::SocketAddr = listen_address
+            .parse()
+            .map_err(|error| anyhow::anyhow!("invalid listen address {listen_address}: {error}"))?;
+        let keep_api_port_open = config.get_as_bool(CFG_KEEP_API_PORT_OPEN, true)();
+        let (initial_listener, local_addr) = if keep_api_port_open {
+            let listener = crate::ui::bind_tcp_listener(parsed_addr).map_err(|error| {
+                anyhow::anyhow!("failed to bind api socket on {listen_address}: {error}")
+            })?;
+            let bound = listener.local_addr()?;
+            tracing::info!(address = %bound, "api: listening");
+            (Some(listener), bound)
+        } else {
+            let resolved_addr = if parsed_addr.port() == 0 {
+                let probe = crate::ui::bind_tcp_listener(parsed_addr).map_err(|error| {
+                    anyhow::anyhow!("failed to reserve ephemeral api address {listen_address}: {error}")
+                })?;
+                probe.local_addr()?
+            } else {
+                parsed_addr
             };
-            let socket = socket2::Socket::new(domain, socket2::Type::STREAM, None)
-                .map_err(|error| anyhow::anyhow!("failed to create api socket: {error}"))?;
-            socket.set_nonblocking(true)
-                .map_err(|error| anyhow::anyhow!("failed to set nonblocking on api socket: {error}"))?;
-            let _ = socket.set_reuse_address(true);
-            #[cfg(all(unix, not(target_os = "solaris"), not(target_os = "illumos")))]
-            let _ = socket.set_reuse_port(true);
-            if addr.is_ipv6() {
-                let _ = socket.set_only_v6(true);
-            }
-            let sock_addr = socket2::SockAddr::from(addr);
-            socket.bind(&sock_addr)
-                .map_err(|error| anyhow::anyhow!("failed to bind api socket on {listen_address}: {error}"))?;
-            socket.listen(1024)
-                .map_err(|error| anyhow::anyhow!("failed to listen on api socket {listen_address}: {error}"))?;
-            let std_listener: std::net::TcpListener = socket.into();
-            TcpListener::from_std(std_listener)
-                .map_err(|error| anyhow::anyhow!("failed to convert api socket to tokio listener: {error}"))?
+            tracing::info!(
+                address = %resolved_addr,
+                "api: TCP port kept closed at startup (core/keepApiPortOpen = false)"
+            );
+            (None, resolved_addr)
         };
-        tracing::info!(address = %listener.local_addr()?, "api: listening");
+
+        let port_controller = Arc::new(crate::ui::ApiPortController::new(
+            local_addr,
+            keep_api_port_open,
+        ));
+        #[cfg(unix)]
+        let unix_socket_path = Some(crate::ui::default_unix_socket_path(&data_dir));
+        #[cfg(not(unix))]
+        let unix_socket_path: Option<PathBuf> = None;
+
+        crate::ui_metrics::register_ui_control_api(
+            &api,
+            Arc::clone(&config),
+            data_dir.clone(),
+            options.bin_dir.clone(),
+            Arc::clone(&port_controller),
+            unix_socket_path.clone(),
+        )
+        .map_err(|error| anyhow::anyhow!("register ui control api: {error}"))?;
 
         // Authenticate local clients by their process; the server address is
         // the bound one, so a port of 0 works.
@@ -508,7 +535,7 @@ impl Service {
             Arc::new(SystemLookup::new()),
             options.bin_dir.clone(),
             allowed_clients,
-            listener.local_addr()?,
+            local_addr,
         )));
 
         // A nameserver that cannot listen is reported by a notification only.
@@ -639,7 +666,7 @@ impl Service {
                 runtime: &runtime,
                 data_dir: data_dir.clone(),
                 bin_dir: options.bin_dir.clone(),
-                local_addr: listener.local_addr()?,
+                local_addr,
                 custom_lists: Arc::clone(&custom_lists),
                 filter_lists: Arc::clone(&filter_lists),
                 geoip: Arc::clone(&geoip),
@@ -1004,15 +1031,28 @@ impl Service {
             xray,
             os_integration: Mutex::new(crate::win_integration::initialize(&data_dir)),
             profile_changes: Mutex::new(Some(profile_changes)),
-            local_addr: listener.local_addr()?,
-            listener: Mutex::new(Some(listener)),
+            local_addr,
+            listener: Mutex::new(initial_listener),
+            port_controller,
+            unix_socket_path,
             data_dir,
+            bin_dir: options.bin_dir.clone(),
         })
     }
 
     /// Returns the bound API address.
     pub fn local_addr(&self) -> std::net::SocketAddr {
         self.local_addr
+    }
+
+    /// Returns the Unix domain socket path for passwordless/portless IPC, if configured.
+    pub fn unix_socket_path(&self) -> Option<&PathBuf> {
+        self.unix_socket_path.as_ref()
+    }
+
+    /// Returns the dynamic TCP API port controller.
+    pub fn port_controller(&self) -> &Arc<crate::ui::ApiPortController> {
+        &self.port_controller
     }
 
     /// Returns whether the service was asked to restart rather than shut down.
@@ -1036,17 +1076,43 @@ impl Service {
 
     /// Serves the API until the process is asked to stop.
     pub async fn run(self: Arc<Self>) -> anyhow::Result<()> {
-        let api = Arc::clone(&self.api);
         let api_for_keys = Arc::clone(&self.api);
         let databases = Arc::clone(&self.databases);
-        let listener = self
+        let initial_listener = self
             .listener
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .take()
-            .ok_or_else(|| anyhow::anyhow!("service is already running"))?;
+            .take();
 
-        let server = crate::ui::serve(api, listener, self.data_dir());
+        let app = crate::ui::build_router(
+            Arc::clone(&self.api),
+            Arc::clone(&self.config),
+            self.data_dir(),
+            &self.bin_dir,
+        );
+        let tcp_ctrl = Arc::clone(&self.port_controller);
+        let tcp_app = app.clone();
+        let tcp_stop = self.stop_token.clone();
+        let tcp_server = tokio::spawn(async move {
+            if let Err(error) = tcp_ctrl
+                .serve_tcp_controlled(tcp_app, initial_listener, tcp_stop)
+                .await
+            {
+                tracing::error!(%error, "api: tcp server exited with error");
+            }
+        });
+        #[cfg(unix)]
+        let unix_server = self.unix_socket_path.clone().map(|sock_path| {
+            let unix_app = app.clone();
+            let unix_stop = self.stop_token.clone();
+            tokio::spawn(async move {
+                if let Err(error) =
+                    crate::ui::serve_unix_socket(unix_app, sock_path, unix_stop).await
+                {
+                    tracing::warn!(%error, "api: unix socket server failed");
+                }
+            })
+        });
 
         // Keep the parsed global rules and the custom filter list in sync with
         // config changes.
@@ -1055,6 +1121,7 @@ impl Service {
         let binary_updater = Arc::clone(&self.binary_updater);
         let intel_updater = Arc::clone(&self.intel_updater);
         let config = Arc::clone(&self.config);
+        let port_ctrl_refresh = Arc::clone(&self.port_controller);
         let firewall_env = Arc::clone(&self.firewall.env);
         let firewall_profiles = Arc::clone(&self.firewall.profiles);
         let compat_refresh = Arc::clone(&self.compat);
@@ -1085,6 +1152,7 @@ impl Service {
                 // reparse core/apiKeys on every config change so keys added or
                 // removed via the settings UI take effect without a restart.
                 api_for_keys.update_api_keys(&config.get_as_string_array(CFG_API_KEYS, &[])());
+                port_ctrl_refresh.set_keep_open(config.get_as_bool(CFG_KEEP_API_PORT_OPEN, true)());
                 firewall_env.refresh_options(&config);
                 if let Err(error) = firewall_profiles.refresh() {
                     tracing::warn!(%error, "profile: failed to reload local profiles");
@@ -1499,7 +1567,6 @@ impl Service {
         });
 
         let outcome: anyhow::Result<()> = tokio::select! {
-            result = server => result.map_err(anyhow::Error::from),
             _ = shutdown_signal() => {
                 tracing::info!("shutting down");
                 Ok(())
@@ -1509,6 +1576,14 @@ impl Service {
                 Ok(())
             }
         };
+
+        // Ensure API listeners shut down cleanly (and unlink Unix socket).
+        self.stop_token.cancel();
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(400), tcp_server).await;
+        #[cfg(unix)]
+        if let Some(unix_task) = unix_server {
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(400), unix_task).await;
+        }
 
         // Terminate all background workers
         refresher.abort();
@@ -1895,6 +1970,66 @@ fn register_options(config: &Config, options: &Options) -> anyhow::Result<()> {
         .with_expertise_level(pm_config::EXPERTISE_LEVEL_DEVELOPER)
         .with_annotation(pm_config::DISPLAY_ORDER_ANNOTATION, json!(514))
         .with_annotation(pm_config::CATEGORY_ANNOTATION, json!("Development")),
+    )?;
+
+    config.register(
+        ConfigOption::new(
+            "Keep Web API Port Open",
+            CFG_KEEP_API_PORT_OPEN,
+            "Keep HTTP/WebSocket TCP port 817 continuously open. When disabled, Portmaster uses its local Unix IPC socket and opens port 817 only when a browser or WebView UI is launched.",
+            pm_config::OPT_TYPE_BOOL,
+            Value::Bool(true),
+        )
+        .with_expertise_level(pm_config::EXPERTISE_LEVEL_EXPERT)
+        .with_annotation(pm_config::DISPLAY_ORDER_ANNOTATION, json!(515))
+        .with_annotation(pm_config::CATEGORY_ANNOTATION, json!("Development")),
+    )?;
+
+    config.register(
+        ConfigOption::new(
+            "User Interface",
+            CFG_UI_FLAVOR,
+            "Select which graphical interface Portmaster uses: angular (Classic Web), rust-wasm (Lightweight Rust WASM), or qt (Native C++/Qt Desktop).",
+            pm_config::OPT_TYPE_STRING,
+            Value::String("angular".to_string()),
+        )
+        .with_expertise_level(pm_config::EXPERTISE_LEVEL_USER)
+        .with_annotation(pm_config::DISPLAY_ORDER_ANNOTATION, json!(516))
+        .with_annotation(
+            pm_config::DISPLAY_HINT_ANNOTATION,
+            json!(pm_config::DISPLAY_HINT_ONE_OF),
+        )
+        .with_annotation(pm_config::CATEGORY_ANNOTATION, json!("User Interface"))
+        .with_possible_values(vec![
+            PossibleValue {
+                name: "Angular Web UI (~142-707 MB RAM)".to_string(),
+                description: "Standard Chromium/WebKit Web UI".to_string(),
+                value: Value::String("angular".to_string()),
+            },
+            PossibleValue {
+                name: "Rust WASM / Leptos (~74 MB tab RAM)".to_string(),
+                description: "Lighter WebAssembly UI served over /rust/".to_string(),
+                value: Value::String("rust-wasm".to_string()),
+            },
+            PossibleValue {
+                name: "Qt 6 Native Desktop (~47 MB RAM)".to_string(),
+                description: "Browserless native desktop client using local IPC".to_string(),
+                value: Value::String("qt".to_string()),
+            },
+        ]),
+    )?;
+
+    config.register(
+        ConfigOption::new(
+            "Notify on Blocked Bypass Attempts",
+            CFG_NOTIFY_BLOCKED_BYPASS,
+            "Show a desktop notification whenever Portmaster blocks an application's attempt to bypass Secure DNS or firewall protections.",
+            pm_config::OPT_TYPE_BOOL,
+            Value::Bool(true),
+        )
+        .with_expertise_level(pm_config::EXPERTISE_LEVEL_USER)
+        .with_annotation(pm_config::DISPLAY_ORDER_ANNOTATION, json!(517))
+        .with_annotation(pm_config::CATEGORY_ANNOTATION, json!("User Interface")),
     )?;
 
     Ok(())

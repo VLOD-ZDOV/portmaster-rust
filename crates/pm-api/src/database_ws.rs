@@ -401,8 +401,14 @@ fn handshake_request(parts: &http::request::Parts) -> crate::Request {
         .to_string();
     request.remote_addr = parts
         .extensions
-        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-        .map(|info| info.0.to_string())
+        .get::<crate::PeerAddress>()
+        .map(|info| info.0.clone())
+        .or_else(|| {
+            parts
+                .extensions
+                .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+                .map(|info| info.0.to_string())
+        })
         .unwrap_or_default();
     request.header = parts.headers.clone();
     request.read_method = true;

@@ -348,6 +348,7 @@ fn main() {
                         // Save window state and destroy window on close to completely unload WebKit/WebView and free RAM.
                         let _ = handle.save_window_state(WINDOW_STATE_FLAGS_TO_SAVE);
                         let _ = window.destroy();
+                        portapi::client::release_api_port_lease();
                     } else {
                         error!("window was None");
                     }

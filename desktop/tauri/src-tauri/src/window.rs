@@ -223,6 +223,7 @@ pub fn open_window(app: &AppHandle) -> Result<WebviewWindow> {
     }
 
     if app.portmaster().is_reachable() {
+        crate::portapi::client::lease_api_port_open();
         app.portmaster().show_window();
         let win = create_main_window(app)?;
         let _ = win.show();

@@ -21,6 +21,7 @@ pub mod apprise;
 pub mod control;
 
 pub mod ui;
+pub mod ui_metrics;
 
 pub mod broadcasts;
 pub mod interop;

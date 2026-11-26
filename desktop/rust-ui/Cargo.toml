@@ -24,6 +24,8 @@ web-sys = { version = "0.3.107", features = [
     "ErrorEvent",
     "Window",
     "Location",
+    "Storage",
+    "Navigator",
     "Performance",
     "console",
 ] }

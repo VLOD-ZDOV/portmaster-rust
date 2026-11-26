@@ -961,3 +961,149 @@ async fn legacy_splittun_xray_coupling_cleaned_on_startup() {
     assert!(service_ext.config.get_as_bool("splittun/enable", false)());
     let _ = std::fs::remove_dir_all(&data_dir_ext);
 }
+
+#[cfg(unix)]
+async fn unix_request(path: &std::path::Path, method: &str, uri: &str, body: &str) -> String {
+    let mut stream = tokio::net::UnixStream::connect(path).await.unwrap();
+    let msg = if body.is_empty() {
+        format!("{method} {uri} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+    } else {
+        format!(
+            "{method} {uri} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+    };
+    stream.write_all(msg.as_bytes()).await.unwrap();
+    let mut resp = Vec::new();
+    stream.read_to_end(&mut resp).await.unwrap();
+    String::from_utf8_lossy(&resp).into_owned()
+}
+
+#[tokio::test]
+async fn ui_flavors_dynamic_port_and_unix_socket() {
+    let data_dir = temp_dir("ui-flavors-port");
+    // Provision minimal rust-ui dist bundle inside data_dir to verify dynamic routing.
+    let rust_dir = data_dir.join("rust-ui");
+    std::fs::create_dir_all(&rust_dir).unwrap();
+    std::fs::write(rust_dir.join("index.html"), "<html>rust-wasm-ui</html>").unwrap();
+
+    let options = test_options(&data_dir);
+    let service = Arc::new(Service::start(&options).await.unwrap());
+    let address = service.local_addr();
+    #[cfg(unix)]
+    let sock_path = service.unix_socket_path().cloned().unwrap();
+
+    let server = tokio::spawn(Arc::clone(&service).run());
+
+    // Wait briefly until Unix socket and TCP are both ready.
+    #[cfg(unix)]
+    {
+        let mut ready = false;
+        for _ in 0..40 {
+            if sock_path.exists() {
+                ready = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        assert!(ready, "unix socket did not appear at {}", sock_path.display());
+    }
+
+    // 1. Flavors inventory endpoint returns angular, rust-wasm, and qt + RAM metrics.
+    let resp = http_get(address, "/api/v1/ui/flavors", "").await;
+    assert!(resp.starts_with("HTTP/1.1 200"), "{resp}");
+    let body = resp.split("\r\n\r\n").nth(1).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(body).unwrap();
+    assert_eq!(parsed["activeFlavor"], "angular");
+    assert_eq!(parsed["keepApiPortOpen"], true);
+    assert_eq!(parsed["apiPortListening"], true);
+    let flavors = parsed["flavors"].as_array().unwrap();
+    assert_eq!(flavors.len(), 3);
+    assert!(flavors.iter().any(|f| f["id"] == "rust-wasm" && f["installed"] == true));
+
+    // 2. Switching uiFlavor to rust-wasm dynamically changes `/` from 307 redirect to rust-ui HTML.
+    let root_before = http_get(address, "/", "").await;
+    assert!(root_before.starts_with("HTTP/1.1 307"), "{root_before}");
+
+    let switch_resp = http_post(address, "/api/v1/ui/flavor", r#"{"flavor":"rust-wasm"}"#).await;
+    assert!(switch_resp.starts_with("HTTP/1.1 200"), "{switch_resp}");
+    let root_after = http_get(address, "/", "").await;
+    assert!(root_after.starts_with("HTTP/1.1 200"), "{root_after}");
+    assert!(root_after.contains("rust-wasm-ui"), "{root_after}");
+
+    // Invalid flavor is rejected cleanly with 400.
+    let bad_resp = http_post(address, "/api/v1/ui/flavor", r#"{"flavor":"invalid"}"#).await;
+    assert!(bad_resp.starts_with("HTTP/1.1 400"), "{bad_resp}");
+
+    // 3. Disabling keepOpen closes TCP listener while Unix socket continues answering requests.
+    #[cfg(unix)]
+    {
+        let close_resp = http_post(address, "/api/v1/core/api-port", r#"{"keepOpen":false}"#).await;
+        assert!(close_resp.starts_with("HTTP/1.1 200"), "{close_resp}");
+
+        let mut closed = false;
+        for _ in 0..40 {
+            if tokio::net::TcpStream::connect(address).await.is_err() {
+                closed = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        }
+        assert!(closed, "TCP API listener did not close after keepOpen=false");
+
+        // Unix socket stays alive and authenticated even with TCP closed!
+        let uds_resp = unix_request(&sock_path, "GET", "/api/v1/ui/flavors", "").await;
+        assert!(uds_resp.starts_with("HTTP/1.1 200"), "{uds_resp}");
+        let uds_json: serde_json::Value =
+            serde_json::from_str(uds_resp.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(uds_json["apiPortListening"], false);
+        assert_eq!(uds_json["keepApiPortOpen"], false);
+
+        // Leasing TCP port open via Unix socket restores TCP reachability.
+        let lease_resp =
+            unix_request(&sock_path, "POST", "/api/v1/core/api-port", r#"{"lease":"open"}"#).await;
+        assert!(lease_resp.starts_with("HTTP/1.1 200"), "{lease_resp}");
+
+        let mut reopened = false;
+        for _ in 0..40 {
+            if tokio::net::TcpStream::connect(address).await.is_ok() {
+                reopened = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        }
+        assert!(reopened, "TCP API listener did not reopen after lease=open");
+
+        let tcp_ready = http_get(address, "/api/v1/ready", "").await;
+        assert!(tcp_ready.starts_with("HTTP/1.1 200"), "{tcp_ready}");
+    }
+
+    server.abort();
+    service.tunnel_proxies.stop();
+    let _ = std::fs::remove_dir_all(&data_dir);
+}
+
+#[tokio::test]
+#[ignore = "manual sandbox runner for Qt / WASM UI live testing"]
+async fn ui_dev_sandbox_server() {
+    let dir = std::env::var("PM_DEV_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| temp_dir("dev-sandbox"));
+    let stop_file = dir.join("stop");
+    let _ = std::fs::remove_file(&stop_file);
+
+    let mut options = test_options(&dir);
+    options.api_address = std::env::var("PM_DEV_ADDR").unwrap_or_else(|_| "127.0.0.1:18817".into());
+    let service = Arc::new(Service::start(&options).await.unwrap());
+    let server = tokio::spawn(Arc::clone(&service).run());
+
+    for _ in 0..300 {
+        if stop_file.exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    server.abort();
+    service.tunnel_proxies.stop();
+}

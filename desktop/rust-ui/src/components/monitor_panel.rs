@@ -9,6 +9,7 @@
 
 use leptos::prelude::*;
 
+use crate::i18n::t;
 use crate::state::AppState;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -31,6 +32,7 @@ enum VerdictFilter {
 pub fn MonitorPanel() -> impl IntoView {
     let state = expect_context::<AppState>();
     let connections = state.connections;
+    let lang = state.lang;
 
     let (search_query, set_search_query) = signal(String::new());
     let (selected_scope, set_selected_scope) = signal(ScopeFilter::All);
@@ -373,9 +375,17 @@ pub fn MonitorPanel() -> impl IntoView {
                                                 if is_expanded() {
                                                     let s1 = state_act.clone();
                                                     let s2 = state_act.clone();
+                                                    let s_prom = state_act.clone();
                                                     let id_a = c_id_allow.clone();
                                                     let id_b = c_id_block.clone();
                                                     let is_ip_only = c.domain.as_deref().unwrap_or("").is_empty();
+                                                    let prom_target = if is_ip_only {
+                                                        c.remote_ip.clone()
+                                                    } else {
+                                                        format!(".{}", c.domain.clone().unwrap_or_default().trim_end_matches('.'))
+                                                    };
+                                                    let prom_allow = format!("+ {prom_target}");
+                                                    let prom_block = format!("- {prom_target}");
 
                                                     view! {
                                                         <tr class="bg-[#121213] border-y border-[#2c2c2c]">
@@ -395,7 +405,7 @@ pub fn MonitorPanel() -> impl IntoView {
                                                                     </div>
                                                                 </div>
 
-                                                                <div class="flex items-center space-x-2 pt-2 border-t border-[#2c2c2c]">
+                                                                <div class="flex flex-wrap items-center gap-2 pt-2 border-t border-[#2c2c2c]">
                                                                     <button
                                                                         on:click=move |ev| {
                                                                             ev.stop_propagation();
@@ -403,7 +413,7 @@ pub fn MonitorPanel() -> impl IntoView {
                                                                         }
                                                                         class="btn-pm !bg-[#143d24] text-[#1de966] hover:!bg-[#18823d] border border-[#1de966]/30"
                                                                     >
-                                                                        {if is_ip_only { "Always Permit this IP" } else { "Always Permit this Domain" }}
+                                                                        {if is_ip_only { "Permit IP (App)" } else { "Permit Domain (App)" }}
                                                                     </button>
                                                                     <button
                                                                         on:click=move |ev| {
@@ -412,7 +422,29 @@ pub fn MonitorPanel() -> impl IntoView {
                                                                         }
                                                                         class="btn-pm !bg-[#3d1414] text-[#e01d1d] hover:!bg-[#811818] border border-[#e01d1d]/30"
                                                                     >
-                                                                        {if is_ip_only { "Block this IP" } else { "Block this Domain" }}
+                                                                        {if is_ip_only { "Block IP (App)" } else { "Block Domain (App)" }}
+                                                                    </button>
+                                                                    <button
+                                                                        on:click={
+                                                                            let sp = s_prom.clone();
+                                                                            let rule = prom_allow.clone();
+                                                                            move |ev| {
+                                                                                ev.stop_propagation();
+                                                                                sp.promote_rule_to_global("filter/endpoints".to_string(), rule.clone());
+                                                                            }
+                                                                        }
+                                                                        class="btn-pm !bg-[#222222] text-[#4e97fa] border border-[#2c2c2c] hover:text-white"
+                                                                    >
+                                                                        {format!("{}: {}", t(lang.get(), "app.promote_global"), prom_allow)}
+                                                                    </button>
+                                                                    <button
+                                                                        on:click=move |ev| {
+                                                                            ev.stop_propagation();
+                                                                            s_prom.promote_rule_to_global("filter/endpoints".to_string(), prom_block.clone());
+                                                                        }
+                                                                        class="btn-pm !bg-[#222222] text-[#e9b84a] border border-[#2c2c2c] hover:text-white"
+                                                                    >
+                                                                        {format!("{}: {}", t(lang.get(), "app.promote_global"), prom_block)}
                                                                     </button>
                                                                 </div>
                                                             </td>

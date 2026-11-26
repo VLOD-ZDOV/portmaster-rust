@@ -8,7 +8,9 @@
 
 use leptos::prelude::*;
 use pm_models::connection::ConnectionRecord;
+use pm_models::profile::{FingerprintOperation, FingerprintType};
 
+use crate::i18n::t;
 use crate::state::AppState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,9 +28,12 @@ pub fn AppDetailView(app_id: String) -> impl IntoView {
     let connections = state.connections;
     let (active_tab, set_active_tab) = signal(AppTab::Connections);
 
-    // Endpoint rules list local state
+    // Endpoint rules list local state & path tester (#2166)
     let (new_rule, set_new_rule) = signal(String::new());
     let (new_rule_action, set_new_rule_action) = signal("block".to_string());
+    let (test_path, set_test_path) = signal(String::new());
+    let (confirm_delete, set_confirm_delete) = signal(false);
+    let lang = state.lang;
 
     let state_back = state.clone();
     let on_back = move |_| {
@@ -47,14 +52,14 @@ pub fn AppDetailView(app_id: String) -> impl IntoView {
 
     view! {
         <div class="space-y-4">
-            // Breadcrumbs Header
-            <div class="flex items-center justify-between pb-2 border-b border-[#2c2c2c] text-xs">
+            // Breadcrumbs Header + Export/Delete Profile (#388)
+            <div class="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-[#2c2c2c] text-xs">
                 <div class="flex items-center space-x-1.5 text-[#888888]">
                     <button
                         on:click=on_back
                         class="hover:text-white cursor-pointer transition-colors flex items-center space-x-1 font-medium"
                     >
-                        <span>"Applications"</span>
+                        <span>{move || t(lang.get(), "app.back")}</span>
                     </button>
                     <span>"/"</span>
                     <span class="text-white font-medium">
@@ -62,8 +67,40 @@ pub fn AppDetailView(app_id: String) -> impl IntoView {
                     </span>
                 </div>
 
-                <div class="text-[11px] text-[#888888]">
-                    "App Profile Configuration"
+                <div class="flex items-center gap-2">
+                    {move || {
+                        let s_exp = expect_context::<AppState>();
+                        let s_del = expect_context::<AppState>();
+                        let cur = profile.get();
+                        cur.map(|p| {
+                            let scoped = p.database_key().trim_start_matches("core:profiles/").to_string();
+                            let pid_del = p.id.clone();
+                            view! {
+                                <button
+                                    on:click=move |_| s_exp.export_profile_sync(scoped.clone())
+                                    class="btn-pm !bg-[#222222] text-[#4e97fa] border border-[#2c2c2c] text-[11px]"
+                                >
+                                    {t(lang.get(), "app.export")}
+                                </button>
+                                <button
+                                    on:click=move |_| {
+                                        if confirm_delete.get() {
+                                            s_del.delete_profile(pid_del.clone());
+                                        } else {
+                                            set_confirm_delete.set(true);
+                                        }
+                                    }
+                                    class=move || if confirm_delete.get() {
+                                        "btn-pm !bg-[#811818] text-white border border-[#e01d1d] text-[11px]"
+                                    } else {
+                                        "btn-pm !bg-[#3d1414] text-[#e01d1d] border border-[#e01d1d]/30 text-[11px]"
+                                    }
+                                >
+                                    {move || if confirm_delete.get() { "Confirm Delete" } else { t(lang.get(), "app.delete_profile") }}
+                                </button>
+                            }
+                        })
+                    }}
                 </div>
             </div>
 
@@ -616,13 +653,23 @@ pub fn AppDetailView(app_id: String) -> impl IntoView {
                                                                 let action_label = if is_permit { "Permit" } else { "Block" };
                                                                 let action_class = if is_permit { "py-2.5 px-3 text-[#1de966] font-semibold" } else { "py-2.5 px-3 text-[#e01d1d] font-semibold" };
                                                                 let to_remove = rule_entry.clone();
+                                                                let to_promote = rule_entry.clone();
+                                                                let s_prom = state.clone();
 
                                                                 view! {
                                                                     <tr class="hover:bg-[#222222] transition-colors">
                                                                         <td class="py-2.5 px-3 font-mono text-white">{pattern}</td>
                                                                         <td class=action_class>{action_label}</td>
                                                                         <td class="py-2.5 px-3 text-[#888888]">"Any"</td>
-                                                                        <td class="py-2.5 px-3 text-right">
+                                                                        <td class="py-2.5 px-3 text-right space-x-2">
+                                                                            <button
+                                                                                on:click=move |_| {
+                                                                                    s_prom.promote_rule_to_global("filter/endpoints".to_string(), to_promote.clone());
+                                                                                }
+                                                                                class="text-[11px] text-[#4e97fa] hover:underline cursor-pointer"
+                                                                            >
+                                                                                {t(lang.get(), "app.promote_global")}
+                                                                            </button>
                                                                             <button
                                                                                 on:click={
                                                                                     let s_del = s.clone();
@@ -748,43 +795,107 @@ pub fn AppDetailView(app_id: String) -> impl IntoView {
                                     }.into_any()
                                 }
 
-                                // 4. Details Tab
+                                // 4. Details + Path Rule Match Tester (#2166) Tab
                                 AppTab::Details => {
                                     let id_d = detail_id.clone();
                                     let src_d = detail_source.clone();
                                     let path_d = detail_path.clone();
+                                    let fps_for_test = p.fingerprints.clone();
+                                    let linked_for_test = p.linked_path.clone();
+                                    let pres_for_test = p.presentation_path.clone();
+
                                     view! {
-                                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-                                            <div class="p-4 bg-[#1b1b1b] border border-[#2c2c2c] rounded space-y-2">
-                                                <div class="text-[11px] text-[#888888] font-medium uppercase">"Profile Identity"</div>
-                                                <div>
-                                                    <span class="text-[#888888] mr-2">"App ID:"</span>
-                                                    <span class="font-mono text-white">{id_d}</span>
+                                        <div class="space-y-4 text-xs">
+                                            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                <div class="p-4 bg-[#1b1b1b] border border-[#2c2c2c] rounded space-y-2">
+                                                    <div class="text-[11px] text-[#888888] font-medium uppercase">"Profile Identity"</div>
+                                                    <div>
+                                                        <span class="text-[#888888] mr-2">"App ID:"</span>
+                                                        <span class="font-mono text-white">{id_d}</span>
+                                                    </div>
+                                                    <div>
+                                                        <span class="text-[#888888] mr-2">"Source:"</span>
+                                                        <span class="font-mono text-white">{src_d}</span>
+                                                    </div>
+                                                    <div>
+                                                        <span class="text-[#888888] mr-2">"Binary Path:"</span>
+                                                        <span class="font-mono text-[#ababab] break-all">{path_d}</span>
+                                                    </div>
                                                 </div>
-                                                <div>
-                                                    <span class="text-[#888888] mr-2">"Source:"</span>
-                                                    <span class="font-mono text-white">{src_d}</span>
-                                                </div>
-                                                <div>
-                                                    <span class="text-[#888888] mr-2">"Binary Path:"</span>
-                                                    <span class="font-mono text-[#ababab] break-all">{path_d}</span>
+
+                                                <div class="p-4 bg-[#1b1b1b] border border-[#2c2c2c] rounded space-y-2">
+                                                    <div class="text-[11px] text-[#888888] font-medium uppercase">"Fingerprints & Status"</div>
+                                                    <div>
+                                                        <span class="text-[#888888] mr-2">"Fingerprints:"</span>
+                                                        <span class="text-white">{detail_fp_count}</span>
+                                                    </div>
+                                                    <div>
+                                                        <span class="text-[#888888] mr-2">"Config Overrides:"</span>
+                                                        <span class="text-white">{if detail_is_custom { "Customized" } else { "Global Defaults" }}</span>
+                                                    </div>
+                                                    <div>
+                                                        <span class="text-[#888888] mr-2">"VPN Tunneling:"</span>
+                                                        <span class="text-white">{if is_vpn { "Enabled (Routed)" } else { "Disabled (Direct)" }}</span>
+                                                    </div>
                                                 </div>
                                             </div>
 
-                                            <div class="p-4 bg-[#1b1b1b] border border-[#2c2c2c] rounded space-y-2">
-                                                <div class="text-[11px] text-[#888888] font-medium uppercase">"Fingerprints & Status"</div>
-                                                <div>
-                                                    <span class="text-[#888888] mr-2">"Fingerprints:"</span>
-                                                    <span class="text-white">{detail_fp_count}</span>
-                                                </div>
-                                                <div>
-                                                    <span class="text-[#888888] mr-2">"Config Overrides:"</span>
-                                                    <span class="text-white">{if detail_is_custom { "Customized" } else { "Global Defaults" }}</span>
-                                                </div>
-                                                <div>
-                                                    <span class="text-[#888888] mr-2">"VPN Tunneling:"</span>
-                                                    <span class="text-white">{if is_vpn { "Enabled (Routed)" } else { "Disabled (Direct)" }}</span>
-                                                </div>
+                                            // Path Fingerprint Rule Match Tester (#2166)
+                                            <div class="p-4 bg-[#1b1b1b] border border-[#2c2c2c] rounded space-y-2.5">
+                                                <div class="text-xs font-semibold text-white">{t(lang.get(), "app.path_tester")}</div>
+                                                <p class="text-[11px] text-[#888888]">{t(lang.get(), "app.path_tester_hint")}</p>
+                                                <input
+                                                    type="text"
+                                                    placeholder=r"/usr/bin/firefox or C:\Program Files\..."
+                                                    prop:value=move || test_path.get()
+                                                    on:input=move |ev| set_test_path.set(event_target_value(&ev))
+                                                    class="input-pm text-xs max-w-xl"
+                                                />
+                                                {move || {
+                                                    let input = test_path.get();
+                                                    let trimmed = input.trim();
+                                                    if trimmed.is_empty() {
+                                                        return view! { <div class="text-[11px] text-[#666666]">"Enter a binary path to test."</div> }.into_any();
+                                                    }
+                                                    let norm = trimmed.replace('\\', "/").to_lowercase();
+                                                    let linked_norm = linked_for_test.replace('\\', "/").to_lowercase();
+                                                    let pres_norm = pres_for_test.replace('\\', "/").to_lowercase();
+                                                    let mut matched_reason: Option<String> = None;
+                                                    if !linked_norm.is_empty() && linked_norm == norm {
+                                                        matched_reason = Some(format!("Exact LinkedPath: {}", linked_for_test));
+                                                    } else if !pres_norm.is_empty() && pres_norm == norm {
+                                                        matched_reason = Some(format!("Exact PresentationPath: {}", pres_for_test));
+                                                    } else {
+                                                        for fp in &fps_for_test {
+                                                            if fp.fp_type == FingerprintType::Path {
+                                                                let v = fp.value.replace('\\', "/").to_lowercase();
+                                                                let hit = match fp.operation {
+                                                                    FingerprintOperation::Equal => norm == v,
+                                                                    FingerprintOperation::Prefix => norm.starts_with(&v),
+                                                                    FingerprintOperation::Regex => !v.is_empty() && norm.contains(v.trim_matches(['^', '$', '*'])),
+                                                                    FingerprintOperation::Unknown => norm == v,
+                                                                };
+                                                                if hit {
+                                                                    matched_reason = Some(format!("Matched Fingerprint ({:?}): {}", fp.operation, fp.value));
+                                                                    break;
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    if let Some(reason) = matched_reason {
+                                                        view! {
+                                                            <div class="p-2 rounded bg-[#143d24] border border-[#1de966]/40 text-[#1de966] font-mono text-[11px]">
+                                                                {format!("✓ MATCH — {}", reason)}
+                                                            </div>
+                                                        }.into_any()
+                                                    } else {
+                                                        view! {
+                                                            <div class="p-2 rounded bg-[#3d1414] border border-[#e01d1d]/30 text-[#e01d1d] font-mono text-[11px]">
+                                                                "✗ NO MATCH — Does not match this profile's path/fingerprints."
+                                                            </div>
+                                                        }.into_any()
+                                                    }
+                                                }}
                                             </div>
                                         </div>
                                     }.into_any()

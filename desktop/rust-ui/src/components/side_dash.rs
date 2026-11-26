@@ -8,6 +8,7 @@
 
 use leptos::prelude::*;
 
+use crate::i18n::t;
 use crate::state::AppState;
 
 #[component]
@@ -412,10 +413,80 @@ pub fn SideDash() -> impl IntoView {
                 </div>
             </div>
 
-            // 4. NOTIFICATIONS DRAWER
+            // 4. INTERACTIVE PROMPTS (#2083 Allow All / Block All) & NOTIFICATIONS DRAWER
             <div class="space-y-2 border-t border-[#2c2c2c] pt-2">
+                {
+                    let s_all_ok = state.clone();
+                    let s_all_no = state.clone();
+                    let s_prompts = state.clone();
+                    let lang = state.lang;
+                    move || {
+                        let prompts: Vec<_> = notifications.get().into_iter().filter(|n| n.is_prompt).collect();
+                        let l = lang.get();
+                        if prompts.is_empty() {
+                            return view! { <span/> }.into_any();
+                        }
+                        let s1 = s_all_ok.clone();
+                        let s2 = s_all_no.clone();
+                        let s_item = s_prompts.clone();
+                        view! {
+                            <div class="p-2 rounded bg-[#222222] border border-[#e9d31d]/40 space-y-2">
+                                <div class="flex items-center justify-between gap-1">
+                                    <span class="text-[10px] font-semibold uppercase text-[#e9d31d]">
+                                        {format!("Prompts ({})", prompts.len())}
+                                    </span>
+                                    <div class="flex items-center gap-1">
+                                        <button
+                                            on:click=move |_| s1.resolve_all_prompts(true)
+                                            class="px-1.5 py-0.5 rounded bg-[#143d24] text-[#1de966] text-[10px] font-semibold hover:bg-[#18823d] cursor-pointer"
+                                        >
+                                            {t(l, "dash.allow_all")}
+                                        </button>
+                                        <button
+                                            on:click=move |_| s2.resolve_all_prompts(false)
+                                            class="px-1.5 py-0.5 rounded bg-[#3d1414] text-[#e01d1d] text-[10px] font-semibold hover:bg-[#811818] cursor-pointer"
+                                        >
+                                            {t(l, "dash.block_all")}
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="space-y-1 max-h-36 overflow-y-auto">
+                                    {prompts.into_iter().map(|p| {
+                                        let id_ok = p.id.clone();
+                                        let id_no = p.id.clone();
+                                        let so = s_item.clone();
+                                        let sn = s_item.clone();
+                                        view! {
+                                            <div class="p-1.5 rounded bg-[#1b1b1b] border border-[#2c2c2c] space-y-1">
+                                                <div class="text-[11px] font-semibold text-white truncate">{p.title}</div>
+                                                <div class="text-[10px] text-[#ababab] truncate">{p.message}</div>
+                                                <div class="flex items-center gap-1.5">
+                                                    <button
+                                                        on:click=move |_| so.resolve_prompt_id(id_ok.clone(), true)
+                                                        class="px-2 py-0.5 rounded bg-[#143d24] text-[#1de966] text-[10px] cursor-pointer"
+                                                    >
+                                                        {t(l, "dash.allow")}
+                                                    </button>
+                                                    <button
+                                                        on:click=move |_| sn.resolve_prompt_id(id_no.clone(), false)
+                                                        class="px-2 py-0.5 rounded bg-[#3d1414] text-[#e01d1d] text-[10px] cursor-pointer"
+                                                    >
+                                                        {t(l, "dash.block")}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        }
+                                    }).collect_view()}
+                                </div>
+                            </div>
+                        }.into_any()
+                    }
+                }
+
                 <div class="flex items-center justify-between text-[11px] text-[#888888] px-0.5">
-                    <span class="font-medium uppercase tracking-wider text-[10px]">"Live Alerts"</span>
+                    <span class="font-medium uppercase tracking-wider text-[10px]">
+                        {let lang = state.lang; move || t(lang.get(), "dash.alerts")}
+                    </span>
                     <button
                         on:click={
                             let s_clear = state.clone();
@@ -423,17 +494,18 @@ pub fn SideDash() -> impl IntoView {
                         }
                         class="text-[10px] text-[#888888] hover:text-white transition-colors"
                     >
-                        "Clear"
+                        {let lang = state.lang; move || t(lang.get(), "dash.clear")}
                     </button>
                 </div>
 
                 <div class="space-y-1.5 max-h-36 overflow-y-auto">
                     {move || {
-                        let items = notifications.get();
+                        let items: Vec<_> = notifications.get().into_iter().filter(|n| !n.is_prompt).collect();
+                        let l = state.lang.get();
                         if items.is_empty() {
                             return view! {
                                 <div class="text-[11px] text-[#888888] p-2 text-center">
-                                    "No new notifications."
+                                    {t(l, "dash.no_alerts")}
                                 </div>
                             }.into_any();
                         }

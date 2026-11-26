@@ -31,6 +31,51 @@
   </button>
 </div>
 
+<div class="ui-switcher-card" *ngIf="uiReport as report">
+  <div class="ui-switcher-header">
+    <div>
+      <span class="ui-switcher-title">{{ 'ui.switcher.title' | t: undefined : ('' | i18nVersion) }}</span>
+      <span class="ui-port-badge" [class.port-open]="report.apiPortListening" [class.port-closed]="!report.apiPortListening">
+        <ng-container *ngIf="report.apiPortListening">
+          {{ 'ui.switcher.portListening' | t: undefined : ('' | i18nVersion) }} {{ report.apiPortAddress }}
+        </ng-container>
+        <ng-container *ngIf="!report.apiPortListening">
+          {{ 'ui.switcher.portClosed' | t: undefined : ('' | i18nVersion) }}
+        </ng-container>
+      </span>
+    </div>
+    <label class="ui-port-toggle">
+      <input type="checkbox" [checked]="report.keepApiPortOpen" [disabled]="uiBusy" (change)="toggleKeepApiPortOpen()">
+      <span>{{ 'ui.switcher.portOpen' | t: undefined : ('' | i18nVersion) }}</span>
+    </label>
+  </div>
+
+  <div class="ui-flavors-grid">
+    <div class="ui-flavor-item" *ngFor="let f of report.flavors" [class.is-active]="f.active">
+      <div class="ui-flavor-top">
+        <strong>{{ f.name }}</strong>
+        <span class="ui-ram-pill" *ngIf="f.liveRamMb !== undefined && f.liveRamMb !== null">
+          {{ 'ui.switcher.liveRam' | t: undefined : ('' | i18nVersion) }}: {{ f.liveRamMb }} MB
+        </span>
+        <span class="ui-ram-pill bench" *ngIf="f.liveRamMb === undefined || f.liveRamMb === null">
+          ~{{ f.benchmarkRamMb }} MB RAM
+        </span>
+      </div>
+      <div class="ui-flavor-kind">{{ f.kind }}</div>
+      <div class="ui-flavor-actions">
+        <button type="button" class="ui-btn" [disabled]="uiBusy || !f.installed || f.active" (click)="selectUiFlavor(f.id)">
+          <ng-container *ngIf="f.active">{{ 'ui.switcher.active' | t: undefined : ('' | i18nVersion) }}</ng-container>
+          <ng-container *ngIf="!f.active && f.installed">{{ 'ui.switcher.activate' | t: undefined : ('' | i18nVersion) }}</ng-container>
+          <ng-container *ngIf="!f.installed">{{ 'ui.switcher.notInstalled' | t: undefined : ('' | i18nVersion) }}</ng-container>
+        </button>
+        <button type="button" class="ui-btn secondary" *ngIf="f.url && f.installed" (click)="openWebFlavor(f)">
+          {{ 'ui.switcher.openWeb' | t: undefined : ('' | i18nVersion) }}
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <app-settings-view [searchTerm]="searchTerm" [highlightKey]="highlightSettingKey" [availableSettings]="settings"
   (save)="saveSetting($event)">
 </app-settings-view>

@@ -219,6 +219,64 @@ impl ApiAuthenticator {
 
 impl Authenticator for ApiAuthenticator {
     fn authenticate(&self, request: &Request) -> Result<Option<AuthToken>, AuthError> {
+        // Local Unix Domain Socket peer authentication (Linux):
+        // browsers cannot connect to unix:// sockets, so peer_cred PID/UID gives
+        // strong OS-verified local attribution without needing an open TCP port.
+        #[cfg(unix)]
+        if let Some(rest) = request.remote_addr.strip_prefix("unix:") {
+            if let Some(origin) = request.header("origin") {
+                if !pm_api::origin_allowed(origin, &request.host, false) {
+                    return Err(AuthError::Denied("Cross-Origin Request Denied.".to_string()));
+                }
+            }
+            let mut uid: Option<u32> = None;
+            let mut pid: Option<i32> = None;
+            for part in rest.split(':') {
+                if let Some(v) = part.strip_prefix("uid=") {
+                    uid = v.parse::<u32>().ok();
+                } else if let Some(v) = part.strip_prefix("pid=") {
+                    pid = v.parse::<i32>().ok();
+                }
+            }
+            let euid = nix::unistd::Uid::current().as_raw();
+            let auth_proc = pid.and_then(|p| {
+                self.lookup.process(p).map(|info| AuthProcess {
+                    pid: info.pid,
+                    path: info.path,
+                })
+            });
+            if let Some(ref proc_info) = auth_proc {
+                if let Ok(real_root) = std::fs::canonicalize(&self.bin_dir) {
+                    if let Ok(real_path) = std::fs::canonicalize(&proc_info.path) {
+                        let trusted_bin = real_path.starts_with(&real_root)
+                            || self.allowed_clients.iter().any(|c| {
+                                std::fs::canonicalize(c)
+                                    .map(|allowed| allowed == real_path)
+                                    .unwrap_or(false)
+                            })
+                            || real_path
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .is_some_and(|n| n == "portmaster-qt" || n == "portmaster");
+                        if trusted_bin {
+                            return Ok(Some(
+                                AuthToken::new(PERMIT_SELF, PERMIT_SELF)
+                                    .with_process(proc_info.clone()),
+                            ));
+                        }
+                    }
+                }
+            }
+            if uid == Some(euid) || (euid == 0 && uid.is_some()) {
+                let mut token = AuthToken::new(PERMIT_SELF, PERMIT_SELF);
+                if let Some(proc_info) = auth_proc {
+                    token = token.with_process(proc_info);
+                }
+                return Ok(Some(token));
+            }
+            return Err(AuthError::Denied("Unauthorized Unix socket peer.".to_string()));
+        }
+
         let client: SocketAddr = request
             .remote_addr
             .parse()

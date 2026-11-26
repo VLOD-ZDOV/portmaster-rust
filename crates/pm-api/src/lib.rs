@@ -87,6 +87,11 @@ pub type Result<T> = std::result::Result<T, ApiError>;
 const API_V1_PATH: &str = "/api/v1/";
 const AUTH_REQUIRED_HEADER: &str = "Bearer realm=\"Portmaster API\" domain=\"/\"";
 
+/// Request extension inserted by trusted non-TCP transports (such as Unix
+/// domain sockets) so API handlers and WebSocket upgrades see peer identity.
+#[derive(Clone, Debug)]
+pub struct PeerAddress(pub String);
+
 /// An API request, including the values filled in by the router.
 #[derive(Debug)]
 pub struct Request {

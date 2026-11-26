@@ -83,6 +83,10 @@ if [[ "${ACTION}" == "restore" ]]; then
     cp -af "${LATEST_BACKUP}/portmaster" "${INSTALL_DIR}/portmaster"
     chmod 755 "${INSTALL_DIR}/portmaster"
   fi
+  if [[ -f "${LATEST_BACKUP}/portmaster-qt" ]]; then
+    cp -af "${LATEST_BACKUP}/portmaster-qt" "${INSTALL_DIR}/portmaster-qt"
+    chmod 755 "${INSTALL_DIR}/portmaster-qt"
+  fi
   if [[ -f "${LATEST_BACKUP}/portmaster.zip" ]]; then
     cp -af "${LATEST_BACKUP}/portmaster.zip" "${INSTALL_DIR}/portmaster.zip"
     cp -af "${LATEST_BACKUP}/portmaster.zip" "${DATA_DIR}/portmaster.zip"
@@ -136,6 +140,8 @@ DOWNLOAD_APP_URL="${BASE_URL}/${APP_NAME}"
 DOWNLOAD_UI_URL="${BASE_URL}/portmaster.zip"
 DOWNLOAD_ASSETS_URL="${BASE_URL}/assets.zip"
 DOWNLOAD_PILOT_URL="${BASE_URL}/pilot-web.zip"
+DOWNLOAD_RUST_UI_URL="${BASE_URL}/rust-ui.zip"
+DOWNLOAD_QT_URL="${BASE_URL}/portmaster-qt-linux-amd64"
 
 TMP_DIR=$(mktemp -d /tmp/pm-patch.XXXXXX)
 trap 'rm -rf "${TMP_DIR}"' EXIT
@@ -165,10 +171,22 @@ download_file "${DOWNLOAD_ASSETS_URL}" "${TMP_DIR}/assets.zip" || {
   echo "[*] Notice: assets.zip not found in release ${TAG}, keeping existing if any."
 }
 
+echo "[*] Downloading Rust WASM UI bundle (rust-ui.zip)..."
+download_file "${DOWNLOAD_RUST_UI_URL}" "${TMP_DIR}/rust-ui.zip" || {
+  echo "[*] Notice: rust-ui.zip not found in release ${TAG}, continuing."
+}
+
 echo "[*] Downloading Rust Pilot UI bundle (pilot-web.zip)..."
 download_file "${DOWNLOAD_PILOT_URL}" "${TMP_DIR}/pilot-web.zip" || {
   echo "[*] Notice: pilot-web.zip download failed or not found, continuing."
 }
+
+echo "[*] Downloading Qt 6 Native UI binary (portmaster-qt-linux-amd64)..."
+if download_file "${DOWNLOAD_QT_URL}" "${TMP_DIR}/portmaster-qt-linux-amd64"; then
+  chmod +x "${TMP_DIR}/portmaster-qt-linux-amd64"
+else
+  echo "[*] Notice: portmaster-qt-linux-amd64 not found in release ${TAG}, continuing."
+fi
 
 # Capture any running tray UI processes (exe + desktop session env) before stopping them
 TRAY_PID_LIST=()
@@ -182,7 +200,7 @@ for exe_link in /proc/[0-9]*/exe; do
   exe_target=$(readlink -f "${exe_link}" 2>/dev/null || true)
   exe_target="${exe_target% (deleted)}"
   exe_base=$(basename "${exe_target}")
-  if [[ "${exe_base}" == "portmaster" || "${exe_base}" == "portmaster-app" ]]; then
+  if [[ "${exe_base}" == "portmaster" || "${exe_base}" == "portmaster-app" || "${exe_base}" == "portmaster-qt" ]]; then
     pid="${exe_link#/proc/}"
     pid="${pid%/exe}"
     TRAY_PID_LIST+=("${pid}")
@@ -235,7 +253,7 @@ STAMP=$(date +%Y%m%d-%H%M%S)
 CURRENT_BACKUP="${BACKUP_DIR}/${STAMP}"
 mkdir -p "${CURRENT_BACKUP}"
 
-for target_file in portmaster-core portmaster-core-rs portmaster-core-go portmaster portmaster.zip; do
+for target_file in portmaster-core portmaster-core-rs portmaster-core-go portmaster portmaster-qt portmaster.zip; do
   if [[ -f "${INSTALL_DIR}/${target_file}" ]]; then
     cp -af "${INSTALL_DIR}/${target_file}" "${CURRENT_BACKUP}/"
   fi
@@ -403,6 +421,28 @@ if command -v unzip >/dev/null 2>&1; then
   if [[ -d "${UPDATES_UI}" ]]; then
     cp -af "${TMP_DIR}/portmaster.zip" "${UPDATES_UI}/portmaster.zip"
     unzip -q -o "${TMP_DIR}/portmaster.zip" -d "${UPDATES_UI}" || true
+  fi
+fi
+
+# Install Qt 6 Native UI if present
+if [[ -f "${TMP_DIR}/portmaster-qt-linux-amd64" ]]; then
+  echo "[*] Installing Qt 6 Native UI (portmaster-qt)..."
+  cp -af "${TMP_DIR}/portmaster-qt-linux-amd64" "${INSTALL_DIR}/portmaster-qt"
+  chmod 755 "${INSTALL_DIR}/portmaster-qt"
+  ln -sf "${INSTALL_DIR}/portmaster-qt" "/usr/bin/portmaster-qt" || true
+  if command -v ldd >/dev/null 2>&1 && ldd "${INSTALL_DIR}/portmaster-qt" 2>/dev/null | grep -q "not found"; then
+    echo "[!] Notice: portmaster-qt needs Qt 6 runtime libraries (qt6-declarative, qt6-websockets / qml6-module-qtquick-controls)."
+  fi
+fi
+
+# Unpack Rust WASM UI bundle if present
+if [[ -f "${TMP_DIR}/rust-ui.zip" ]] && command -v unzip >/dev/null 2>&1; then
+  echo "[*] Updating Rust WASM UI..."
+  RUST_UI_DEST="${DATA_DIR}/rust-ui"
+  rm -rf "${RUST_UI_DEST}"
+  mkdir -p "${RUST_UI_DEST}"
+  if ! unzip -q -o "${TMP_DIR}/rust-ui.zip" -d "${RUST_UI_DEST}"; then
+    echo "[!] Warning: failed to unpack rust-ui.zip to ${RUST_UI_DEST}" >&2
   fi
 fi
 

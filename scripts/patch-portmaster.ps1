@@ -202,6 +202,7 @@ function Invoke-PortmasterPatch {
     $binUrl = "$BaseUrl/$binName"
     $uiUrl = "$BaseUrl/portmaster.zip"
     $assetsUrl = "$BaseUrl/assets.zip"
+    $rustUiUrl = "$BaseUrl/rust-ui.zip"
     $pilotUrl = "$BaseUrl/pilot-web.zip"
     $appUrl = "$BaseUrl/portmaster-app-windows-amd64.exe"
 
@@ -258,6 +259,9 @@ function Invoke-PortmasterPatch {
 
         $tempAssetsZip = Join-Path $tempDir "assets.zip"
         $hasAssets = Invoke-DownloadWithRetry -Uri $assetsUrl -OutFile $tempAssetsZip -Label "assets.zip" -Required $false
+
+        $tempRustUiZip = Join-Path $tempDir "rust-ui.zip"
+        $hasRustUi = Invoke-DownloadWithRetry -Uri $rustUiUrl -OutFile $tempRustUiZip -Label "rust-ui.zip" -Required $false
 
         $tempPilotZip = Join-Path $tempDir "pilot-web.zip"
         $hasPilot = Invoke-DownloadWithRetry -Uri $pilotUrl -OutFile $tempPilotZip -Label "pilot-web.zip" -Required $false
@@ -376,6 +380,17 @@ function Invoke-PortmasterPatch {
             if ($hasAssets -and (Test-Path $tempAssetsZip)) {
                 Copy-Item -Path $tempAssetsZip -Destination (Join-Path $InstallDir "assets.zip") -Force
                 Copy-Item -Path $tempAssetsZip -Destination (Join-Path $DataDir "assets.zip") -Force
+            }
+
+            # 1a. Rust WASM UI directory for Rust core: <DataDir>\rust-ui
+            if ($hasRustUi -and (Test-Path $tempRustUiZip)) {
+                $rustUiDest = Join-Path $DataDir "rust-ui"
+                if (Test-Path $rustUiDest) {
+                    Remove-Item -Path $rustUiDest -Recurse -Force -ErrorAction SilentlyContinue
+                }
+                New-Item -ItemType Directory -Path $rustUiDest -Force | Out-Null
+                Expand-Archive -Path $tempRustUiZip -DestinationPath $rustUiDest -Force
+                Write-Host "[*] Extracted Rust WASM UI bundle to: $rustUiDest" -ForegroundColor Gray
             }
 
             # 1. Pilot UI directory for Rust core: <DataDir>\pilot-web

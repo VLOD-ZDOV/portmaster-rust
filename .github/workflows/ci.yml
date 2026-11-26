@@ -238,10 +238,96 @@ jobs:
           name: portmaster-app-windows-amd64
           path: dist/portmaster-app-windows-amd64.exe
 
+  rust-wasm-ui:
+    name: Rust WASM UI Bundle (Leptos)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop/rust-ui
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain & wasm32 target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install Trunk
+        uses: taiki-e/install-action@v2
+        with:
+          tool: trunk
+
+      - name: Install Tailwind CSS v4 CLI
+        shell: bash
+        run: |
+          mkdir -p "${HOME}/.local/bin"
+          if ! curl -fsSL https://github.com/tailwindlabs/tailwindcss/releases/latest/download/tailwindcss-linux-x64 -o "${HOME}/.local/bin/tailwindcss"; then
+            npm install -g @tailwindcss/cli
+          else
+            chmod +x "${HOME}/.local/bin/tailwindcss"
+          fi
+          echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/rust-ui
+
+      - name: Build Rust WASM UI (release)
+        run: trunk build --release --dist dist
+
+      - name: Package rust-ui.zip
+        run: |
+          cd dist
+          zip -r ../../../rust-ui.zip .
+
+      - name: Upload Rust WASM UI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-ui
+          path: rust-ui.zip
+
+  qt-ui-linux:
+    name: Qt 6 Native UI (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Qt 6 & CMake dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            ninja-build \
+            build-essential \
+            qt6-base-dev \
+            qt6-declarative-dev \
+            qt6-websockets-dev \
+            libgl1-mesa-dev
+
+      - name: Configure and build Qt 6 QML UI
+        run: |
+          cmake -B build-qt -S desktop/qt-ui -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-qt -j$(nproc)
+
+      - name: Package Linux Qt binary
+        run: |
+          mkdir -p dist
+          cp build-qt/portmaster-qt dist/portmaster-qt-linux-amd64
+          chmod +x dist/portmaster-qt-linux-amd64
+
+      - name: Upload Linux Qt artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: portmaster-qt-linux-amd64
+          path: dist/portmaster-qt-linux-amd64
+
   release:
     name: Publish Release Assets
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
-    needs: [rust-core-linux, rust-core-windows, go-core, angular-ui, tauri-ui-linux, tauri-ui-windows]
+    needs: [rust-core-linux, rust-core-windows, go-core, angular-ui, rust-wasm-ui, qt-ui-linux, tauri-ui-linux, tauri-ui-windows]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -265,7 +351,10 @@ jobs:
           cp release-artifacts/portmaster-app-linux-amd64 dist/portmaster-app-linux-amd64
           chmod +x dist/portmaster-app-linux-amd64
           cp release-artifacts/portmaster-app-windows-amd64.exe dist/portmaster-app-windows-amd64.exe
+          cp release-artifacts/portmaster-qt-linux-amd64 dist/portmaster-qt-linux-amd64
+          chmod +x dist/portmaster-qt-linux-amd64
           cp release-artifacts/portmaster.zip dist/portmaster.zip
+          cp release-artifacts/rust-ui.zip dist/rust-ui.zip
           (cd assets/data && zip -r ../../dist/assets.zip .)
           (cd pilot/leptos/web && zip -r ../../../dist/pilot-web.zip .)
           cp scripts/patch-portmaster.sh dist/patch-portmaster.sh
