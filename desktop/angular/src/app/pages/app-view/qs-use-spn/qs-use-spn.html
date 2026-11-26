@@ -6,9 +6,23 @@
     {{ 'app.useVPN' | t: undefined : ('' | i18nVersion) }}
   </span>
 
-  <sfng-toggle
-    [ngModel]="currentValue" (ngModelChange)="updateUseSpn($event)">
-  </sfng-toggle>
+  <div class="inline-flex overflow-hidden border border-gray-500 rounded bg-gray-200 text-xxs">
+    <button type="button" (click)="setMode('default')"
+      class="px-2 py-0.5 transition-colors cursor-pointer"
+      [ngClass]="mode === 'default' ? 'bg-blue text-white font-medium' : 'text-secondary hover:text-primary'">
+      {{ 'app.routingDefault' | t: undefined : ('' | i18nVersion) }} ({{ (defaultValue ? 'app.routingVpn' : 'app.routingDirect') | t: undefined : ('' | i18nVersion) }})
+    </button>
+    <button type="button" (click)="setMode('vpn')"
+      class="px-2 py-0.5 transition-colors cursor-pointer border-l border-gray-500"
+      [ngClass]="mode === 'vpn' ? 'bg-blue text-white font-medium' : 'text-secondary hover:text-primary'">
+      {{ 'app.routingVpn' | t: undefined : ('' | i18nVersion) }}
+    </button>
+    <button type="button" (click)="setMode('direct')"
+      class="px-2 py-0.5 transition-colors cursor-pointer border-l border-gray-500"
+      [ngClass]="mode === 'direct' ? 'bg-gray-500 text-primary font-medium' : 'text-secondary hover:text-primary'">
+      {{ 'app.routingDirect' | t: undefined : ('' | i18nVersion) }}
+    </button>
+  </div>
 
   <span class="text-xs text-tertiary" *ngIf="spnDisabled"
     [sfng-tooltip]="'app.enableSPNUse' | t: undefined : ('' | i18nVersion)">

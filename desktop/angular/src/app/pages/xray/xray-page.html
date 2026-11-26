@@ -46,24 +46,46 @@
     </div>
   </div>
 
-  <!-- Default routing toggle and quick settings -->
+  <!-- Default routing toggle, auto-connect, and quick settings -->
   <div class="flex flex-row flex-wrap items-center justify-between gap-4 p-2.5 rounded bg-gray-300 bg-opacity-30 border border-gray-400 text-xs">
-    <div class="flex flex-row items-center gap-3">
-      <sfng-toggle [ngModel]="routeByDefault" (ngModelChange)="toggleRouteByDefault($event)"></sfng-toggle>
-      <div>
-        <div class="font-medium text-primary">
-          {{ 'xray.routeByDefault' | t: undefined : ('' | i18nVersion) }}
+    <div class="flex flex-row flex-wrap items-center gap-6">
+      <div class="flex flex-row items-center gap-3">
+        <sfng-toggle [ngModel]="routeByDefault" (ngModelChange)="toggleRouteByDefault($event)"></sfng-toggle>
+        <div>
+          <div class="font-medium text-primary">
+            {{ 'xray.routeByDefault' | t: undefined : ('' | i18nVersion) }}
+          </div>
+          <div class="text-xxs text-secondary">
+            {{ (routeByDefault ? 'xray.routeByDefaultDescOn' : 'xray.routeByDefaultDescOff') | t: undefined : ('' | i18nVersion) }}
+          </div>
         </div>
-        <div class="text-xxs text-secondary">
-          {{ (routeByDefault ? 'xray.routeByDefaultDescOn' : 'xray.routeByDefaultDescOff') | t: undefined : ('' | i18nVersion) }}
+      </div>
+
+      <div class="flex flex-row items-center gap-3">
+        <sfng-toggle [ngModel]="autoConnect" (ngModelChange)="toggleAutoConnect($event)"></sfng-toggle>
+        <div>
+          <div class="font-medium text-primary">
+            {{ 'xray.autoConnect' | t: undefined : ('' | i18nVersion) }}
+          </div>
+          <div class="text-xxs text-secondary">
+            {{ 'xray.autoConnectDesc' | t: undefined : ('' | i18nVersion) }}
+          </div>
         </div>
       </div>
     </div>
 
-    <div class="flex flex-row items-center gap-3">
+    <div class="flex flex-row flex-wrap items-center gap-3">
+      <button type="button" (click)="resetAllAppOverrides()" [disabled]="resettingApps"
+        class="px-2.5 py-1 text-xxs rounded border border-gray-500 bg-gray-200 hover:bg-gray-300 text-primary cursor-pointer">
+        {{ 'xray.resetAllApps' | t: undefined : ('' | i18nVersion) }}
+      </button>
       <a [routerLink]="['/settings']" [queryParams]="{setting: 'spn/usagePolicy'}"
         class="text-xs text-blue hover:underline cursor-pointer">
         {{ 'xray.openRoutingRules' | t: undefined : ('' | i18nVersion) }} →
+      </a>
+      <a [routerLink]="['/settings']" [queryParams]="{setting: 'xray/rules'}"
+        class="text-xs text-blue hover:underline cursor-pointer">
+        {{ 'xray.openXrayRules' | t: undefined : ('' | i18nVersion) }} →
       </a>
     </div>
   </div>

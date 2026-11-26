@@ -185,7 +185,26 @@ pub fn AppSwitcher() -> impl IntoView {
                             let app_name = p.display_name().to_string();
                             let initials = p.name.chars().take(2).collect::<String>().to_uppercase();
                             let path_desc = if !p.presentation_path.is_empty() { p.presentation_path.clone() } else { p.source.clone() };
+                            let vpn_override = p.vpn_route_override();
                             let is_vpn = p.route_via_vpn_with_default(route_by_default.get());
+                            let (vpn_label, vpn_class) = match vpn_override {
+                                None => (
+                                    if is_vpn { "VPN: Auto (ON)" } else { "VPN: Auto (OFF)" },
+                                    if is_vpn {
+                                        "btn-pm !bg-[#4e97fa]/10 text-[#8ab4f8] border border-[#4e97fa]/25"
+                                    } else {
+                                        "btn-pm !bg-[#222222] text-[#888888] hover:text-white"
+                                    },
+                                ),
+                                Some(true) => (
+                                    "VPN: Always ON",
+                                    "btn-pm !bg-[#4e97fa]/20 text-[#4e97fa] border border-[#4e97fa]/40 font-semibold",
+                                ),
+                                Some(false) => (
+                                    "VPN: Direct",
+                                    "btn-pm !bg-[#342a18] text-[#e9b84a] border border-[#e9b84a]/30",
+                                ),
+                            };
                             let default_action = p.default_action();
                             let is_blocked = default_action == "block";
 
@@ -283,17 +302,13 @@ pub fn AppSwitcher() -> impl IntoView {
                                             view! { <span/> }.into_any()
                                         }}
 
-                                        // VPN Tunnel Toggle Button
+                                        // 3-state VPN Tunnel Cycle Button
                                         <button
                                             on:click=on_toggle_vpn
-                                            title="Route app traffic through VPN tunnel"
-                                            class=if is_vpn {
-                                                "btn-pm !bg-[#4e97fa]/20 text-[#4e97fa] border border-[#4e97fa]/40 font-semibold"
-                                            } else {
-                                                "btn-pm !bg-[#222222] text-[#888888] hover:text-white"
-                                            }
+                                            title="Click to cycle: Auto (Global) -> Always VPN -> Direct"
+                                            class=vpn_class
                                         >
-                                            {if is_vpn { "VPN ON" } else { "VPN OFF" }}
+                                            {vpn_label}
                                         </button>
 
                                         // Firewall Permit / Block Switch

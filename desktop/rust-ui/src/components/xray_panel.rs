@@ -22,23 +22,30 @@ pub fn XrayPanel() -> impl IntoView {
 
     let (new_sub_url, set_new_sub_url) = signal(String::new());
 
-    let routing_rules = move || {
-        let all_settings = settings.get();
-        if let Some(s) = all_settings.iter().find(|s| s.key == "xray/rules") {
-            if let Some(serde_json::Value::Array(arr)) = &s.value {
-                let rules: Vec<String> = arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
-                if !rules.is_empty() {
-                    return rules;
-                }
-            }
-        }
-        vec![
-            "+ geosite:blocked".to_string(),
-            "+ geoip:telegram".to_string(),
-            "- geoip:ru".to_string(),
-            "- LAN".to_string(),
-            "- Localhost".to_string(),
-        ]
+    let collect_array_setting = move |key: &str| -> Vec<String> {
+        settings
+            .get()
+            .into_iter()
+            .find(|s| s.key == key)
+            .and_then(|s| s.effective_value().as_array().cloned())
+            .map(|arr| {
+                arr.into_iter()
+                    .filter_map(|v| v.as_str().map(ToString::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    let firewall_rules = move || collect_array_setting("spn/usagePolicy");
+    let xray_rules = move || collect_array_setting("xray/rules");
+
+    let auto_connect = move || {
+        settings
+            .get()
+            .into_iter()
+            .find(|s| s.key == "xray/autoConnect")
+            .and_then(|s| s.effective_value().as_bool())
+            .unwrap_or(false)
     };
 
     let on_toggle_vpn = {
@@ -52,6 +59,21 @@ pub fn XrayPanel() -> impl IntoView {
         let state = state.clone();
         move |_| {
             state.toggle_route_by_default();
+        }
+    };
+
+    let on_toggle_auto_connect = {
+        let state = state.clone();
+        move |_| {
+            let next = !auto_connect();
+            state.save_setting("xray/autoConnect", Some(serde_json::Value::Bool(next)));
+        }
+    };
+
+    let on_reset_apps = {
+        let state = state.clone();
+        move |_| {
+            state.reset_all_routing_overrides();
         }
     };
 
@@ -156,56 +178,99 @@ pub fn XrayPanel() -> impl IntoView {
                 </div>
             </div>
 
-            // 2. Default Routing Global Setting
-            <div class="bg-[#1b1b1b] border border-[#2c2c2c] rounded p-3.5 flex items-center justify-between gap-4">
-                <div class="flex items-center space-x-3">
-                    // Portmaster Toggle Switch
-                    <button
-                        type="button"
-                        on:click=on_toggle_default_route
-                        class=move || {
-                            if route_by_default.get() {
-                                "w-10 h-5 rounded-full bg-[#1de966] p-0.5 transition-colors cursor-pointer flex items-center"
-                            } else {
-                                "w-10 h-5 rounded-full bg-[#343434] p-0.5 transition-colors cursor-pointer flex items-center"
+            // 2. Global VPN Routing & Auto-Connect Controls
+            <div class="bg-[#1b1b1b] border border-[#2c2c2c] rounded p-3.5 space-y-3">
+                <div class="flex items-center justify-between gap-4">
+                    <div class="flex items-center space-x-3">
+                        <button
+                            type="button"
+                            on:click=on_toggle_default_route
+                            class=move || {
+                                if route_by_default.get() {
+                                    "w-10 h-5 rounded-full bg-[#1de966] p-0.5 transition-colors cursor-pointer flex items-center"
+                                } else {
+                                    "w-10 h-5 rounded-full bg-[#343434] p-0.5 transition-colors cursor-pointer flex items-center"
+                                }
                             }
-                        }
-                    >
-                        <span class=move || {
-                            if route_by_default.get() {
-                                "w-4 h-4 rounded-full bg-white shadow-sm transform translate-x-5 transition-transform"
-                            } else {
-                                "w-4 h-4 rounded-full bg-[#ababab] shadow-sm transform translate-x-0 transition-transform"
-                            }
-                        }></span>
-                    </button>
+                        >
+                            <span class=move || {
+                                if route_by_default.get() {
+                                    "w-4 h-4 rounded-full bg-white shadow-sm transform translate-x-5 transition-transform"
+                                } else {
+                                    "w-4 h-4 rounded-full bg-[#ababab] shadow-sm transform translate-x-0 transition-transform"
+                                }
+                            }></span>
+                        </button>
 
-                    <div>
-                        <div class="text-xs font-semibold text-white">
-                            "Route Through VPN (Xray) by Default"
+                        <div>
+                            <div class="text-xs font-semibold text-white">
+                                "Route All Apps via VPN (Xray) by Default"
+                            </div>
+                            <div class="text-[11px] text-[#888888]">
+                                "Apps inheriting the global default route via Xray. When OFF, traffic goes direct unless an app is Always VPN or matches a (+) rule."
+                            </div>
                         </div>
-                        <div class="text-[11px] text-[#888888]">
-                            "Direct all application network traffic through VPN (Xray). When OFF, traffic connects directly unless an app is explicitly enabled or matched by routing rules."
-                        </div>
+                    </div>
+
+                    <div class="text-right flex-shrink-0">
+                        {move || {
+                            if route_by_default.get() {
+                                view! {
+                                    <span class="px-2 py-0.5 rounded-[2px] text-xs font-semibold bg-[#143d24] text-[#1de966] border border-[#1de966]/30">
+                                        "Default: VPN"
+                                    </span>
+                                }.into_any()
+                            } else {
+                                view! {
+                                    <span class="px-2 py-0.5 rounded-[2px] text-xs font-semibold bg-[#222222] text-[#888888] border border-[#2c2c2c]">
+                                        "Default: Direct"
+                                    </span>
+                                }.into_any()
+                            }
+                        }}
                     </div>
                 </div>
 
-                <div class="text-right flex-shrink-0">
-                    {move || {
-                        if route_by_default.get() {
-                            view! {
-                                <span class="px-2 py-0.5 rounded-[2px] text-xs font-semibold bg-[#143d24] text-[#1de966] border border-[#1de966]/30">
-                                    "Default: ON"
-                                </span>
-                            }.into_any()
-                        } else {
-                            view! {
-                                <span class="px-2 py-0.5 rounded-[2px] text-xs font-semibold bg-[#222222] text-[#888888] border border-[#2c2c2c]">
-                                    "Default: OFF"
-                                </span>
-                            }.into_any()
-                        }
-                    }}
+                <div class="flex items-center justify-between gap-4 pt-2 border-t border-[#262626]">
+                    <div class="flex items-center space-x-3">
+                        <button
+                            type="button"
+                            on:click=on_toggle_auto_connect
+                            class=move || {
+                                if auto_connect() {
+                                    "w-10 h-5 rounded-full bg-[#4e97fa] p-0.5 transition-colors cursor-pointer flex items-center"
+                                } else {
+                                    "w-10 h-5 rounded-full bg-[#343434] p-0.5 transition-colors cursor-pointer flex items-center"
+                                }
+                            }
+                        >
+                            <span class=move || {
+                                if auto_connect() {
+                                    "w-4 h-4 rounded-full bg-white shadow-sm transform translate-x-5 transition-transform"
+                                } else {
+                                    "w-4 h-4 rounded-full bg-[#ababab] shadow-sm transform translate-x-0 transition-transform"
+                                }
+                            }></span>
+                        </button>
+
+                        <div>
+                            <div class="text-xs font-semibold text-white">
+                                "Auto-Connect Xray on Startup"
+                            </div>
+                            <div class="text-[11px] text-[#888888]">
+                                "Reconnects to the last Xray server when Portmaster starts (does not overwrite per-app routing)."
+                            </div>
+                        </div>
+                    </div>
+
+                    <button
+                        type="button"
+                        on:click=on_reset_apps
+                        class="btn-pm !bg-[#222222] text-[#cacaca] border border-[#2c2c2c] hover:text-white flex-shrink-0"
+                        title="Clear per-app spn/use and splittun/use overrides so every app follows global defaults"
+                    >
+                        "Reset All Apps to Default"
+                    </button>
                 </div>
             </div>
 
@@ -323,30 +388,65 @@ pub fn XrayPanel() -> impl IntoView {
                 </div>
             </div>
 
-            // 5. Routing Rules Card
-            <div class="bg-[#1b1b1b] border border-[#2c2c2c] rounded p-3.5 space-y-2">
-                <div class="flex items-center justify-between">
-                    <div>
-                        <h3 class="text-xs font-semibold text-white">"Xray Routing Rules"</h3>
-                        <p class="text-[11px] text-[#888888]">"Configure routing for domains and subnets (+ = route via VPN, - = direct bypass)"</p>
+            // 5. Real Routing Rules Summary (Firewall spn/usagePolicy + Xray xray/rules)
+            <div class="bg-[#1b1b1b] border border-[#2c2c2c] rounded p-3.5 space-y-3">
+                <div>
+                    <h3 class="text-xs font-semibold text-white">"Active Routing Rules"</h3>
+                    <p class="text-[11px] text-[#888888]">"Live rules from Settings -> VPN / Xray Gateway (+ route via VPN, - direct bypass)"</p>
+                </div>
+
+                <div class="space-y-1.5">
+                    <div class="text-[10px] uppercase tracking-wider text-[#888888]">"Firewall Domain / IP Rules (spn/usagePolicy)"</div>
+                    <div class="flex flex-wrap gap-1.5">
+                        {move || {
+                            let rules = firewall_rules();
+                            if rules.is_empty() {
+                                view! {
+                                    <span class="text-[11px] text-[#666666]">"None configured"</span>
+                                }.into_any()
+                            } else {
+                                rules.into_iter().map(|rule| {
+                                    let is_proxy = rule.trim_start().starts_with('+');
+                                    view! {
+                                        <span class=if is_proxy {
+                                            "px-2 py-0.5 rounded bg-[#222222] text-[#4e97fa] border border-[#2c2c2c] text-[11px] font-mono"
+                                        } else {
+                                            "px-2 py-0.5 rounded bg-[#222222] text-[#888888] border border-[#2c2c2c] text-[11px] font-mono"
+                                        }>
+                                            {rule}
+                                        </span>
+                                    }
+                                }).collect::<Vec<_>>().into_any()
+                            }
+                        }}
                     </div>
                 </div>
 
-                <div class="flex flex-wrap gap-1.5 pt-1">
-                    {move || {
-                        routing_rules().into_iter().map(|rule| {
-                            let is_proxy = rule.trim_start().starts_with('+');
-                            view! {
-                                <span class=if is_proxy {
-                                    "px-2 py-0.5 rounded bg-[#222222] text-[#4e97fa] border border-[#2c2c2c] text-[11px] font-mono"
-                                } else {
-                                    "px-2 py-0.5 rounded bg-[#222222] text-[#888888] border border-[#2c2c2c] text-[11px] font-mono"
-                                }>
-                                    {rule}
-                                </span>
+                <div class="space-y-1.5 pt-2 border-t border-[#262626]">
+                    <div class="text-[10px] uppercase tracking-wider text-[#888888]">"Xray Geo Rules (xray/rules)"</div>
+                    <div class="flex flex-wrap gap-1.5">
+                        {move || {
+                            let rules = xray_rules();
+                            if rules.is_empty() {
+                                view! {
+                                    <span class="text-[11px] text-[#666666]">"Only automatic - LAN / - Localhost bypass active"</span>
+                                }.into_any()
+                            } else {
+                                rules.into_iter().map(|rule| {
+                                    let is_proxy = rule.trim_start().starts_with('+');
+                                    view! {
+                                        <span class=if is_proxy {
+                                            "px-2 py-0.5 rounded bg-[#222222] text-[#4e97fa] border border-[#2c2c2c] text-[11px] font-mono"
+                                        } else {
+                                            "px-2 py-0.5 rounded bg-[#222222] text-[#888888] border border-[#2c2c2c] text-[11px] font-mono"
+                                        }>
+                                            {rule}
+                                        </span>
+                                    }
+                                }).collect::<Vec<_>>().into_any()
                             }
-                        }).collect::<Vec<_>>()
-                    }}
+                        }}
+                    </div>
                 </div>
             </div>
         </div>

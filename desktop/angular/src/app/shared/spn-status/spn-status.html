@@ -13,7 +13,7 @@
   </sfng-netquery-line-chart>
 
   <div class="relative flex flex-col justify-start gap-1 px-8 py-4">
-    <h2 class="p-0 m-0 font-light outline-none cursor-pointer test-base" [routerLink]="['/spn']">Xray</h2>
+    <h2 class="p-0 m-0 font-light outline-none cursor-pointer test-base" [routerLink]="['/xray']">Xray VPN</h2>
 
     <span [ngSwitch]="spnStatus?.Status" class="-mt-1 text-xs font-medium text-secondary">
       <ng-template ngSwitchCase="disabled">
@@ -29,11 +29,6 @@
         {{ 'st.protected' | t: undefined : ('' | i18nVersion) }}
       </ng-template>
     </span>
-    <ng-container *ngIf="spnEnabled">
-      <span class="text-secondary text-xxs" *appExpertiseLevel="'developer'">
-        {{ 'st.home' | t: undefined : ('' | i18nVersion) }} <u>{{ spnStatus?.ConnectedIP }}</u> {{ 'st.via' | t: undefined : ('' | i18nVersion) }} <u>{{ spnStatus?.ConnectedTransport}}</u>
-      </span>
-    </ng-container>
 
     <sfng-toggle [ngModel]="spnEnabled" (ngModelChange)="setSPNEnabled($event)"
       *ngIf="spnEnabled || packageHasSPN"></sfng-toggle>
@@ -43,12 +38,6 @@
         (click)="openOrLogin()">
         {{ 'st.upgrade' | t: undefined : ('' | i18nVersion) }}
       </button>
-    </div>
-  </div>
-  <div class="relative flex flex-col items-end justify-end flex-grow pb-4" *ngIf="spnEnabled">
-    <div class="flex flex-col items-center">
-      <span class="-mb-1 leading-3 uppercase text-xxs text-secondary">{{ 'st.identities' | t: undefined : ('' | i18nVersion) }}</span>
-      <span class="text-lg text-primary">{{ identities }}</span>
     </div>
   </div>
 </div>

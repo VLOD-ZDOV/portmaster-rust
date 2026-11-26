@@ -78,7 +78,17 @@ pub fn AppDetailView(app_id: String) -> impl IntoView {
                 };
 
                 let app_id = p.id.clone();
-                let is_vpn = p.route_via_vpn_with_default(state.route_by_default.get());
+                let global_vpn = state.route_by_default.get();
+                let vpn_override = p.vpn_route_override();
+                let is_vpn = p.route_via_vpn_with_default(global_vpn);
+                let split_override = p.split_tun_override();
+                let global_split = state
+                    .settings
+                    .get()
+                    .into_iter()
+                    .find(|s| s.key == "splittun/use")
+                    .and_then(|s| s.effective_value().as_bool())
+                    .unwrap_or(false);
                 let action = p.default_action().to_string();
                 let display_name = p.display_name().to_string();
                 let display_name_match = display_name.clone();
@@ -136,9 +146,8 @@ pub fn AppDetailView(app_id: String) -> impl IntoView {
 
                 let state_vpn = state.clone();
                 let app_id_vpn = app_id.clone();
-                let on_toggle_vpn = move |_| {
-                    state_vpn.toggle_app_vpn(app_id_vpn.clone());
-                };
+                let state_split = state.clone();
+                let app_id_split = app_id.clone();
 
                 let state_act = state.clone();
                 let app_id_act = app_id.clone();
@@ -225,17 +234,97 @@ pub fn AppDetailView(app_id: String) -> impl IntoView {
                                             </button>
                                         </div>
 
-                                        // Route via VPN Toggle
-                                        <button
-                                            on:click=on_toggle_vpn
-                                            class=if is_vpn {
-                                                "btn-pm !bg-[#4e97fa]/20 text-[#4e97fa] border border-[#4e97fa]/40 font-semibold"
-                                            } else {
-                                                "btn-pm !bg-[#222222] text-[#888888] hover:text-white"
-                                            }
-                                        >
-                                            {if is_vpn { "Route via VPN: ON" } else { "Route via VPN: OFF" }}
-                                        </button>
+                                        // 3-State VPN Routing Selector (Default / Always VPN / Direct)
+                                        <div class="inline-flex rounded bg-[#222222] border border-[#2c2c2c] p-0.5">
+                                            <button
+                                                on:click={
+                                                    let s = state_vpn.clone();
+                                                    let id = app_id_vpn.clone();
+                                                    move |_| s.set_app_vpn_override(id.clone(), None)
+                                                }
+                                                class=if vpn_override.is_none() {
+                                                    "px-2.5 py-1 rounded-[2px] bg-[#2a3950] text-[#8ab4f8] font-medium text-[11px]"
+                                                } else {
+                                                    "px-2.5 py-1 rounded-[2px] text-[#888888] hover:text-white text-[11px] transition-colors"
+                                                }
+                                            >
+                                                {if global_vpn { "VPN: Default (ON)" } else { "VPN: Default (OFF)" }}
+                                            </button>
+                                            <button
+                                                on:click={
+                                                    let s = state_vpn.clone();
+                                                    let id = app_id_vpn.clone();
+                                                    move |_| s.set_app_vpn_override(id.clone(), Some(true))
+                                                }
+                                                class=if vpn_override == Some(true) {
+                                                    "px-2.5 py-1 rounded-[2px] bg-[#16345c] text-[#4e97fa] font-medium text-[11px]"
+                                                } else {
+                                                    "px-2.5 py-1 rounded-[2px] text-[#888888] hover:text-white text-[11px] transition-colors"
+                                                }
+                                            >
+                                                "Always VPN"
+                                            </button>
+                                            <button
+                                                on:click={
+                                                    let s = state_vpn.clone();
+                                                    let id = app_id_vpn.clone();
+                                                    move |_| s.set_app_vpn_override(id.clone(), Some(false))
+                                                }
+                                                class=if vpn_override == Some(false) {
+                                                    "px-2.5 py-1 rounded-[2px] bg-[#342a18] text-[#e9b84a] font-medium text-[11px]"
+                                                } else {
+                                                    "px-2.5 py-1 rounded-[2px] text-[#888888] hover:text-white text-[11px] transition-colors"
+                                                }
+                                            >
+                                                "Direct"
+                                            </button>
+                                        </div>
+
+                                        // 3-State Split Tunnel Selector (Default / On / Off)
+                                        <div class="inline-flex rounded bg-[#222222] border border-[#2c2c2c] p-0.5">
+                                            <button
+                                                on:click={
+                                                    let s = state_split.clone();
+                                                    let id = app_id_split.clone();
+                                                    move |_| s.set_app_split_tun_override(id.clone(), None)
+                                                }
+                                                class=if split_override.is_none() {
+                                                    "px-2 py-1 rounded-[2px] bg-[#2a3950] text-[#8ab4f8] font-medium text-[11px]"
+                                                } else {
+                                                    "px-2 py-1 rounded-[2px] text-[#888888] hover:text-white text-[11px] transition-colors"
+                                                }
+                                            >
+                                                {if global_split { "Split: Default (ON)" } else { "Split: Default (OFF)" }}
+                                            </button>
+                                            <button
+                                                on:click={
+                                                    let s = state_split.clone();
+                                                    let id = app_id_split.clone();
+                                                    move |_| s.set_app_split_tun_override(id.clone(), Some(true))
+                                                }
+                                                class=if split_override == Some(true) {
+                                                    "px-2 py-1 rounded-[2px] bg-[#143d24] text-[#1de966] font-medium text-[11px]"
+                                                } else {
+                                                    "px-2 py-1 rounded-[2px] text-[#888888] hover:text-white text-[11px] transition-colors"
+                                                }
+                                            >
+                                                "Split ON"
+                                            </button>
+                                            <button
+                                                on:click={
+                                                    let s = state_split.clone();
+                                                    let id = app_id_split.clone();
+                                                    move |_| s.set_app_split_tun_override(id.clone(), Some(false))
+                                                }
+                                                class=if split_override == Some(false) {
+                                                    "px-2 py-1 rounded-[2px] bg-[#333333] text-[#cacaca] font-medium text-[11px]"
+                                                } else {
+                                                    "px-2 py-1 rounded-[2px] text-[#888888] hover:text-white text-[11px] transition-colors"
+                                                }
+                                            >
+                                                "Split OFF"
+                                            </button>
+                                        </div>
                                     </div>
                                 </div>
                             </div>

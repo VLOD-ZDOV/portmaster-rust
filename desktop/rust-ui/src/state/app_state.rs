@@ -1017,16 +1017,17 @@ impl AppState {
         });
     }
 
-    /// Toggles whether a specific application routes its traffic via VPN.
-    pub fn toggle_app_vpn(&self, app_id: String) {
-        let set_profiles = self.set_profiles;
-        let global_default = self.route_by_default.get_untracked();
+    /// Helper to mutate an `AppProfile` optimistically and persist via `persist_profile`.
+    fn mutate_profile(&self, app_id: &str, mutate: impl FnOnce(&mut AppProfile)) {
         let mut change = None;
-        set_profiles.update(|list| {
-            if let Some(p) = list.iter_mut().find(|item| item.id == app_id) {
+        self.set_profiles.update(|list| {
+            if let Some(p) = list.iter_mut().find(|item| {
+                item.id == app_id
+                    || format!("{}/{}", item.source, item.id) == app_id
+                    || (app_id.contains('/') && app_id.split('/').next_back() == Some(&item.id))
+            }) {
                 let previous = p.clone();
-                let current_vpn = p.route_via_vpn_with_default(global_default);
-                p.set_route_via_vpn(!current_vpn);
+                mutate(p);
                 let key = p.database_key();
                 if let Ok(val) = serde_json::to_value(&*p) {
                     change = Some((previous, key, val));
@@ -1036,54 +1037,95 @@ impl AppState {
         if let Some((previous, key, val)) = change {
             self.persist_profile(previous, key, val);
         }
+    }
+
+    /// Sets or clears an application's explicit VPN override (`None` = inherit global).
+    pub fn set_app_vpn_override(&self, app_id: String, override_val: Option<bool>) {
+        self.mutate_profile(&app_id, |p| p.set_vpn_route_override(override_val));
+    }
+
+    /// Sets or clears an application's explicit Split Tunnel override (`None` = inherit global).
+    pub fn set_app_split_tun_override(&self, app_id: String, override_val: Option<bool>) {
+        self.mutate_profile(&app_id, |p| p.set_split_tun_override(override_val));
+    }
+
+    /// Cycles an application's VPN override: Inherit Global -> Always VPN -> Always Direct -> Inherit Global.
+    pub fn toggle_app_vpn(&self, app_id: String) {
+        self.mutate_profile(&app_id, |p| {
+            let next = match p.vpn_route_override() {
+                None => Some(true),
+                Some(true) => Some(false),
+                Some(false) => None,
+            };
+            p.set_vpn_route_override(next);
+        });
     }
 
     /// Changes an application default filter action ("permit", "block", "ask").
     pub fn set_app_action(&self, app_id: String, action: String) {
-        let set_profiles = self.set_profiles;
-        let mut change = None;
-        set_profiles.update(|list| {
-            if let Some(p) = list.iter_mut().find(|item| item.id == app_id) {
-                let previous = p.clone();
-                p.set_default_action(&action);
-                let key = p.database_key();
-                if let Ok(val) = serde_json::to_value(&*p) {
-                    change = Some((previous, key, val));
-                }
-            }
-        });
-        if let Some((previous, key, val)) = change {
-            self.persist_profile(previous, key, val);
-        }
+        self.mutate_profile(&app_id, |p| p.set_default_action(&action));
     }
 
     /// Saves or removes a specific setting override for an application profile.
     pub fn save_profile_config(&self, app_id: &str, cfg_key: &str, value: Option<serde_json::Value>) {
-        let app_id = app_id.to_string();
         let cfg_key = cfg_key.to_string();
-        let mut change = None;
-        self.set_profiles.update(|list| {
-            if let Some(p) = list.iter_mut().find(|p| p.id == app_id || format!("{}/{}", p.source, p.id) == app_id || (app_id.contains('/') && app_id.split('/').next_back() == Some(&p.id))) {
-                let previous = p.clone();
-                let mut map = match p.config.take() {
-                    Some(serde_json::Value::Object(m)) => m,
-                    _ => serde_json::Map::new(),
-                };
-                if let Some(val) = value {
-                    map.insert(cfg_key, val);
-                } else {
-                    map.remove(&cfg_key);
+        self.mutate_profile(app_id, |p| {
+            let mut map = match p.config.take() {
+                Some(serde_json::Value::Object(m)) => m,
+                _ => serde_json::Map::new(),
+            };
+            if let Some(val) = value {
+                map.insert(cfg_key, val);
+            } else {
+                map.remove(&cfg_key);
+            }
+            p.config = if map.is_empty() {
+                None
+            } else {
+                Some(serde_json::Value::Object(map))
+            };
+        });
+    }
+
+    /// Clears `spn/use` and `splittun/use` overrides across all local profiles via core HTTP API.
+    pub fn reset_all_routing_overrides(&self) {
+        let base_url = api_base_url();
+        let url = format!("{}/api/v1/profiles/reset-routing", base_url);
+        let set_profiles = self.set_profiles;
+        let state = self.clone();
+
+        spawn_local(async move {
+            let Ok(req) = gloo_net::http::Request::post(&url).json(&serde_json::json!({})) else {
+                state.notify_local("VPN routing", "Failed to build reset request.", "error");
+                return;
+            };
+            match req.send().await {
+                Ok(resp) if resp.ok() => {
+                    let updated = resp
+                        .json::<serde_json::Value>()
+                        .await
+                        .ok()
+                        .and_then(|v| v.get("updated").and_then(|n| n.as_u64()))
+                        .unwrap_or(0);
+                    set_profiles.update(|list| {
+                        for p in list.iter_mut() {
+                            if p.source == "local" {
+                                p.set_vpn_route_override(None);
+                                p.set_split_tun_override(None);
+                            }
+                        }
+                    });
+                    state.notify_local(
+                        "VPN routing",
+                        &format!("Reset {updated} app profiles to global defaults."),
+                        "info",
+                    );
                 }
-                p.config = Some(serde_json::Value::Object(map));
-                let db_key = p.database_key();
-                if let Ok(val) = serde_json::to_value(&*p) {
-                    change = Some((previous, db_key, val));
+                _ => {
+                    state.notify_local("VPN routing", "Failed to reset app routing overrides.", "error");
                 }
             }
         });
-        if let Some((previous, key, val)) = change {
-            self.persist_profile(previous, key, val);
-        }
     }
 
     /// Resolves a pending connection prompt by selecting the matching action

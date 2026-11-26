@@ -99,8 +99,6 @@
 <ng-template #spnTooltipTemplate>
   {{ 'fs.spnTooltip' | t: undefined : ('' | i18nVersion) }}
   <ul class="pl-4 list-disc">
-    <li>{{ 'fs.connectedTo' | t: {ip: spnStatus?.ConnectedIP}: ('' | i18nVersion) }}</li>
     <li>{{ 'fs.encrypted' | t: undefined : ('' | i18nVersion) }}</li>
-    <li>{{ 'fs.builtWith' | t: {transport: spnStatus?.ConnectedTransport}: ('' | i18nVersion) }}</li>
   </ul>
 </ng-template>

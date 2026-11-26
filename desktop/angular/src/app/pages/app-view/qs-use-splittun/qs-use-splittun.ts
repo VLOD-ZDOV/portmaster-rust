@@ -12,6 +12,8 @@ const configKeys = {
   spnUsagePolicy: 'spn/usagePolicy',
 } as const;
 
+export type SplitTunMode = 'default' | 'on' | 'off';
+
 @Component({
   selector: 'app-qs-use-splittun',
   templateUrl: './qs-use-splittun.html',
@@ -27,6 +29,8 @@ export class QuickSettingUseSplitTunButtonComponent implements OnInit, OnChanges
   save = new EventEmitter<SaveSettingEvent>();
 
   currentValue = false;
+  defaultValue = false;
+  mode: SplitTunMode = 'default';
 
   /** App-level settings (Exclude rules in usagePolicy) that may interfere. */
   interferingSettings: Setting[] = [];
@@ -51,10 +55,18 @@ export class QuickSettingUseSplitTunButtonComponent implements OnInit, OnChanges
   ngOnChanges(changes: SimpleChanges): void {
     if ('settings' in changes) {
       this.currentValue = false;
+      this.defaultValue = false;
+      this.mode = 'default';
 
       const useSetting = this.settings.find(s => s.Key === configKeys.splitTunUse) as BoolSetting | undefined;
       if (useSetting) {
+        this.defaultValue = !!useSetting.DefaultValue;
         this.currentValue = getActualValue(useSetting);
+        if (useSetting.Value !== undefined && useSetting.Value !== null) {
+          this.mode = useSetting.Value ? 'on' : 'off';
+        } else {
+          this.mode = 'default';
+        }
       }
 
       this.updateInterfering();
@@ -79,12 +91,20 @@ export class QuickSettingUseSplitTunButtonComponent implements OnInit, OnChanges
       });
   }
 
-  updateUseSplitTun(enabled: boolean): void {
-    this.save.next({
-      isDefault: false,
-      key: configKeys.splitTunUse,
-      value: enabled,
-    });
+  setMode(mode: SplitTunMode): void {
+    if (mode === 'default') {
+      this.save.next({
+        isDefault: true,
+        key: configKeys.splitTunUse,
+        value: this.defaultValue,
+      });
+    } else {
+      this.save.next({
+        isDefault: false,
+        key: configKeys.splitTunUse,
+        value: mode === 'on',
+      });
+    }
   }
 
   private updateInterfering(): void {

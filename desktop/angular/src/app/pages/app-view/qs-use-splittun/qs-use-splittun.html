@@ -6,9 +6,24 @@
     {{ 'app.splitTunnel' | t: undefined : ('' | i18nVersion) }}
   </span>
 
-  <sfng-toggle *ngIf="splitTunModuleEnabled === true"
-    [ngModel]="currentValue" (ngModelChange)="updateUseSplitTun($event)">
-  </sfng-toggle>
+  <div *ngIf="splitTunModuleEnabled === true"
+    class="inline-flex overflow-hidden border border-gray-500 rounded bg-gray-200 text-xxs">
+    <button type="button" (click)="setMode('default')"
+      class="px-2 py-0.5 transition-colors cursor-pointer"
+      [ngClass]="mode === 'default' ? 'bg-blue text-white font-medium' : 'text-secondary hover:text-primary'">
+      {{ 'app.routingDefault' | t: undefined : ('' | i18nVersion) }} ({{ (defaultValue ? 'app.splitTunOn' : 'app.splitTunOff') | t: undefined : ('' | i18nVersion) }})
+    </button>
+    <button type="button" (click)="setMode('on')"
+      class="px-2 py-0.5 transition-colors cursor-pointer border-l border-gray-500"
+      [ngClass]="mode === 'on' ? 'bg-blue text-white font-medium' : 'text-secondary hover:text-primary'">
+      {{ 'app.splitTunOn' | t: undefined : ('' | i18nVersion) }}
+    </button>
+    <button type="button" (click)="setMode('off')"
+      class="px-2 py-0.5 transition-colors cursor-pointer border-l border-gray-500"
+      [ngClass]="mode === 'off' ? 'bg-gray-500 text-primary font-medium' : 'text-secondary hover:text-primary'">
+      {{ 'app.splitTunOff' | t: undefined : ('' | i18nVersion) }}
+    </button>
+  </div>
 
   <span *ngIf="splitTunModuleEnabled === false"
     routerLink="/settings" [queryParams]="{setting: 'splittun/enable'}" class="cursor-pointer text-tertiary hover:underline"

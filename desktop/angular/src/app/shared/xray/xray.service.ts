@@ -18,6 +18,7 @@ import { XrayNode, XrayStatus, XraySubscription } from './xray.types';
 @Injectable({ providedIn: 'root' })
 export class XrayService {
   private readonly basePath: string;
+  private readonly apiBase: string;
   private readonly reload$ = new BehaviorSubject<void>(undefined);
 
   readonly subscriptions$: Observable<XraySubscription[]> = this.reload$.pipe(
@@ -39,7 +40,8 @@ export class XrayService {
     private readonly http: HttpClient,
     @Inject(PORTMASTER_HTTP_API_ENDPOINT) httpAPI: string,
   ) {
-    this.basePath = `${httpAPI}/v1/xray`;
+    this.apiBase = `${httpAPI}/v1`;
+    this.basePath = `${this.apiBase}/xray`;
   }
 
   /** Add a subscription by URL. */
@@ -70,6 +72,11 @@ export class XrayService {
   downloadBinary(): Observable<{ success: boolean; path: string; version?: string }> {
     return this.http.post<{ success: boolean; path: string; version?: string }>(`${this.basePath}/download-binary`, {})
       .pipe(tap(() => this.refresh()));
+  }
+
+  /** Reset per-app VPN (spn/use) and Split Tunnel (splittun/use) overrides across all apps. */
+  resetRoutingOverrides(): Observable<{ updated: number; profiles: string[] }> {
+    return this.http.post<{ updated: number; profiles: string[] }>(`${this.apiBase}/profiles/reset-routing`, {});
   }
 
   /** Ask the backend to re-fetch all subscription URLs. */

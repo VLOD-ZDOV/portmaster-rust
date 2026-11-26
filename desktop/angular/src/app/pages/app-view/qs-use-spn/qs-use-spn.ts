@@ -5,6 +5,8 @@ import { SaveSettingEvent } from "src/app/shared/config/generic-setting/generic-
 
 const interferingSettingsWhenOn: string[] = []
 
+export type RoutingMode = 'default' | 'vpn' | 'direct';
+
 @Component({
   selector: 'app-qs-use-spn',
   templateUrl: './qs-use-spn.html',
@@ -22,11 +24,13 @@ export class QuickSettingUseSPNButtonComponent implements OnInit, OnChanges {
   @Output()
   save = new EventEmitter<SaveSettingEvent>();
 
-  currentValue = false
+  currentValue = false;
+  defaultValue = false;
+  mode: RoutingMode = 'default';
 
   interferingSettings: Setting[] = [];
 
-  /* Whether or not the SPN is currently disabled. null means we don't know yet ... */
+  /* Whether or not Xray VPN is currently disabled. null means we don't know yet ... */
   spnDisabled: boolean | null = null;
 
   constructor(
@@ -37,21 +41,37 @@ export class QuickSettingUseSPNButtonComponent implements OnInit, OnChanges {
   ngOnChanges(changes: SimpleChanges): void {
     if ('settings' in changes) {
       this.currentValue = false;
+      this.defaultValue = false;
+      this.mode = 'default';
 
       const useSpnSetting = this.settings.find(s => s.Key === 'spn/use') as (BoolSetting | undefined);
       if (!!useSpnSetting) {
+        this.defaultValue = !!useSpnSetting.DefaultValue;
         this.currentValue = getActualValue(useSpnSetting);
+        if (useSpnSetting.Value !== undefined && useSpnSetting.Value !== null) {
+          this.mode = useSpnSetting.Value ? 'vpn' : 'direct';
+        } else {
+          this.mode = 'default';
+        }
         this.updateInterfering();
       }
     }
   }
 
-  updateUseSpn(allowed: boolean) {
-    this.save.next({
-      isDefault: false,
-      key: 'spn/use',
-      value: allowed,
-    })
+  setMode(mode: RoutingMode) {
+    if (mode === 'default') {
+      this.save.next({
+        isDefault: true,
+        key: 'spn/use',
+        value: this.defaultValue,
+      });
+    } else {
+      this.save.next({
+        isDefault: false,
+        key: 'spn/use',
+        value: mode === 'vpn',
+      });
+    }
   }
 
   ngOnInit() {

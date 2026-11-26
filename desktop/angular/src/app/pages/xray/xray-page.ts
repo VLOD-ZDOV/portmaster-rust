@@ -30,7 +30,9 @@ export class XrayPageComponent implements OnInit, OnDestroy {
   selectedPinId: string | null = null;
   showRealExitIp = false;
   downloadingBinary = false;
-  routeByDefault = true;
+  routeByDefault = false;
+  autoConnect = false;
+  resettingApps = false;
 
   toggleRealExitIp(): void {
     this.xrayMapService.showRealExitIp = this.showRealExitIp;
@@ -83,6 +85,13 @@ export class XrayPageComponent implements OnInit, OnDestroy {
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe(v => {
         this.routeByDefault = v ?? false;
+        this.cdr.markForCheck();
+      });
+
+    this.configService.watch<BoolSetting>('xray/autoConnect')
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe(v => {
+        this.autoConnect = v ?? false;
         this.cdr.markForCheck();
       });
 
@@ -286,6 +295,43 @@ export class XrayPageComponent implements OnInit, OnDestroy {
         this.cdr.markForCheck();
       },
       error: err => this.actionIndicator.error(this.i18n.t('common.error'), err),
+    });
+  }
+
+  toggleAutoConnect(value: boolean): void {
+    this.configService.save('xray/autoConnect', value).subscribe({
+      next: () => {
+        this.autoConnect = value;
+        this.actionIndicator.success(
+          this.i18n.t('xray.autoConnect'),
+          value ? this.i18n.t('xray.routeByDefaultOn') : this.i18n.t('xray.routeByDefaultOff')
+        );
+        this.cdr.markForCheck();
+      },
+      error: err => this.actionIndicator.error(this.i18n.t('common.error'), err),
+    });
+  }
+
+  resetAllAppOverrides(): void {
+    if (this.resettingApps) {
+      return;
+    }
+    this.resettingApps = true;
+    this.cdr.markForCheck();
+    this.xray.resetRoutingOverrides().subscribe({
+      next: res => {
+        this.resettingApps = false;
+        this.actionIndicator.success(
+          this.i18n.t('xray.resetAllApps'),
+          this.i18n.t('xray.resetAllAppsDone', { count: res.updated })
+        );
+        this.cdr.markForCheck();
+      },
+      error: err => {
+        this.resettingApps = false;
+        this.actionIndicator.error(this.i18n.t('common.error'), err);
+        this.cdr.markForCheck();
+      },
     });
   }
 

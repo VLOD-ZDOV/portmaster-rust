@@ -7,7 +7,10 @@ use chrono::{DateTime, Local};
 use log::{debug, error};
 use tauri::{
     image::Image,
-    menu::{Menu, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder},
+    menu::{
+        CheckMenuItemBuilder, Menu, MenuBuilder, MenuItemBuilder, PredefinedMenuItem,
+        SubmenuBuilder,
+    },
     tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder},
     Manager, Wry,
 };
@@ -33,6 +36,7 @@ pub type AppIcon = TrayIcon<Wry>;
 pub type ContextMenu = Menu<Wry>;
 
 static SPN_STATE: AtomicBool = AtomicBool::new(false);
+static SPN_USE_STATE: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone)]
 enum IconColor {
@@ -51,6 +55,7 @@ const OPEN_BROWSER_KEY: &str = "open_browser";
 const EXIT_UI_KEY: &str = "exit_ui";
 const SPN_STATUS_KEY: &str = "spn_status";
 const SPN_BUTTON_KEY: &str = "spn_toggle";
+const SPN_USE_KEY: &str = "spn_route_all";
 const GLOBAL_STATUS_KEY: &str = "global_status";
 const SHUTDOWN_KEY: &str = "shutdown";
 const SYSTEM_THEME_KEY: &str = "system_theme";
@@ -196,19 +201,25 @@ fn build_tray_menu(
         (None, None, None)
     };
 
-    // Xray VPN button    
-    let (spn_enabled, spn_button_text ) = match spn_status_text {
-        "disabled" => { (false, "Connect Xray VPN") }
-        _ => { (true, "Disconnect Xray VPN") },
+    // Xray VPN connection + global routing mode
+    let (spn_enabled, spn_button_text, spn_status_display) = match spn_status_text {
+        "connected" => (true, "Disconnect Xray VPN", "Connected"),
+        "connecting" => (true, "Cancel Xray VPN", "Connecting..."),
+        "failed" => (false, "Connect Xray VPN", "Failed"),
+        "disabled" | "" => (false, "Connect Xray VPN", "Disconnected"),
+        other => (false, "Connect Xray VPN", other),
     };
-    
-    let spn_status = MenuItemBuilder::with_id(SPN_STATUS_KEY, format!("VPN (Xray): {}", spn_status_text))
+
+    let spn_status = MenuItemBuilder::with_id(SPN_STATUS_KEY, format!("Xray VPN: {}", spn_status_display))
         .enabled(false)
         .build(app)
         .unwrap();
     let spn_button = MenuItemBuilder::with_id(SPN_BUTTON_KEY, spn_button_text)
         .build(app)
         .unwrap();
+    let spn_use_item = CheckMenuItemBuilder::with_id(SPN_USE_KEY, "Route All Apps via VPN")
+        .checked(SPN_USE_STATE.load(Ordering::Acquire))
+        .build(app)?;
 
     // Setup Icon theme submenu
     let system_theme = MenuItemBuilder::with_id(SYSTEM_THEME_KEY, "System")
@@ -288,6 +299,7 @@ fn build_tray_menu(
 
     items.push(&spn_status);
     items.push(&spn_button);
+    items.push(&spn_use_item);
     items.push(&s);
 
     items.push(&theme_menu);
@@ -354,6 +366,10 @@ pub fn setup_tray_menu(
                 // The config subscription updates SPN_STATE (and the icon) once
                 // the core accepts the change; do not show a fake state here.
                 app.portmaster().set_spn_enabled(target_enabled);
+            }
+            SPN_USE_KEY => {
+                let current = SPN_USE_STATE.load(Ordering::Acquire);
+                app.portmaster().set_spn_use(!current);
             }
             SHUTDOWN_KEY => {
                 app.portmaster().trigger_shutdown();
@@ -501,7 +517,23 @@ pub async fn tray_handler(cli: PortAPI, app: tauri::AppHandle) {
         Ok(rx) => rx,
         Err(err) => {
             error!(
-                "cancel try_handler: failed to subscribe to 'runtime:spn/enable': {}",
+                "cancel try_handler: failed to subscribe to 'config:spn/enable': {}",
+                err
+            );
+            return;
+        }
+    };
+
+    let mut spn_use_subscription = match cli
+        .request(Request::QuerySubscribe(
+            "query config:spn/use".to_string(),
+        ))
+        .await
+    {
+        Ok(rx) => rx,
+        Err(err) => {
+            error!(
+                "cancel try_handler: failed to subscribe to 'config:spn/use': {}",
                 err
             );
             return;
@@ -609,32 +641,16 @@ pub async fn tray_handler(cli: PortAPI, app: tauri::AppHandle) {
                 }
             },
             msg = spn_config_subscription.recv() => {
-                let msg = match msg {
-                    Some(m) => m,
-                    None => { break }
-                };
-
-                let res = match msg {
-                    Response::Ok(key, payload) => Some((key, payload)),
-                    Response::New(key, payload) => Some((key, payload)),
-                    Response::Update(key, payload) => Some((key, payload)),
-                    _ => None,
-                };
-
-                if let Some((_, payload)) = res {
-                    match payload.parse::<BooleanValue>() {
-                        Ok(value) => {
-                            SPN_STATE.store(value.value.unwrap_or(false), Ordering::Release);
-                        },
-                        Err(err) => match err {
-                            ParseError::Json(err) => {
-                                error!("failed to parse config value: {}", err)
-                            },
-                            _ => {
-                                error!("unknown error when parsing config value")
-                            }
-                        }
-                    }
+                let Some(msg) = msg else { break };
+                if let Some(enabled) = parse_bool_config_response(msg) {
+                    SPN_STATE.store(enabled, Ordering::Release);
+                }
+            },
+            msg = spn_use_subscription.recv() => {
+                let Some(msg) = msg else { break };
+                if let Some(use_all) = parse_bool_config_response(msg) {
+                    SPN_USE_STATE.store(use_all, Ordering::Release);
+                    update_icon(icon.clone(), system_status.clone(), spn_status.clone());
                 }
             },
             msg = portmaster_shutdown_event_subscription.recv() => {
@@ -672,6 +688,22 @@ pub async fn tray_handler(cli: PortAPI, app: tauri::AppHandle) {
     }
 
     update_icon_nostate(icon.clone());
+}
+
+fn parse_bool_config_response(msg: Response) -> Option<bool> {
+    let payload = match msg {
+        Response::Ok(_, payload) | Response::New(_, payload) | Response::Update(_, payload) => {
+            payload
+        }
+        _ => return None,
+    };
+    match payload.parse::<BooleanValue>() {
+        Ok(value) => Some(value.value.unwrap_or(false)),
+        Err(err) => {
+            error!("failed to parse boolean config value: {:?}", err);
+            None
+        }
+    }
 }
 
 pub fn update_icon_nostate(icon: AppIcon) {

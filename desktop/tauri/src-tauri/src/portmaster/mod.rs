@@ -187,12 +187,13 @@ impl<R: Runtime> PortmasterInterface<R> {
         }
     }
 
-    /// Enables or disables the SPN / Xray VPN.
-    pub fn set_spn_enabled(&self, enabled: bool) {
+    /// Updates a boolean Portmaster config entry (`config:<key>`).
+    pub fn set_config_bool(&self, db_key: &str, enabled: bool) {
         let Some(api) = self.get_api() else {
-            error!("[tauri] cannot change the VPN state: Portmaster API is not connected");
+            error!("[tauri] cannot change {}: Portmaster API is not connected", db_key);
             return;
         };
+        let key = db_key.to_string();
         let body: Result<Payload, serde_json::Error> = BooleanValue {
             value: Some(enabled),
         }
@@ -201,16 +202,23 @@ impl<R: Runtime> PortmasterInterface<R> {
         match body {
             Ok(payload) => {
                 tauri::async_runtime::spawn(async move {
-                    if let Err(err) = api
-                        .request(Request::Update("config:spn/enable".to_string(), payload))
-                        .await
-                    {
-                        error!("failed to change config:spn/enable: {}", err);
+                    if let Err(err) = api.request(Request::Update(key.clone(), payload)).await {
+                        error!("failed to change {}: {}", key, err);
                     }
                 });
             }
-            Err(err) => error!("failed to build config:spn/enable payload: {}", err),
+            Err(err) => error!("failed to build {} payload: {}", key, err),
         }
+    }
+
+    /// Enables or disables the Xray VPN connection (`config:spn/enable`).
+    pub fn set_spn_enabled(&self, enabled: bool) {
+        self.set_config_bool("config:spn/enable", enabled);
+    }
+
+    /// Enables or disables routing all apps through VPN by default (`config:spn/use`).
+    pub fn set_spn_use(&self, enabled: bool) {
+        self.set_config_bool("config:spn/use", enabled);
     }
 
     /// Send Shutdown request to portmaster
