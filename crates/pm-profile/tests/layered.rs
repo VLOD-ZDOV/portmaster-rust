@@ -416,3 +416,44 @@ fn legacy_security_levels_are_migrated() {
         .unwrap();
     assert!(layered(&env, json!({})).block_scope_lan());
 }
+
+#[test]
+fn spn_usage_policy_and_tunnel_precedence() {
+    let env = env();
+
+    // Global spn/use = false, +example.com in global policy routes only example.com.
+    env.config
+        .set_config_option(CFG_OPTION_USE_SPN_KEY, json!(false))
+        .unwrap();
+    env.config
+        .set_config_option(
+            CFG_OPTION_SPN_USAGE_POLICY_KEY,
+            json!(["+ example.com", "- bypass.com"]),
+        )
+        .unwrap();
+    env.global.refresh().unwrap();
+
+    let inherited = layered(&env, json!({}));
+    assert_eq!(inherited.spn_override(), None);
+    assert!(inherited.should_tunnel_entity(&mut domain_entity(&env, "example.com.")).unwrap().0);
+    assert!(!inherited.should_tunnel_entity(&mut domain_entity(&env, "other.com.")).unwrap().0);
+
+    // Explicit app Always Direct (spn/use = false) skips VPN even for global + rules,
+    // unless a local app rule overrides it.
+    let always_direct = layered(&env, json!({"spn": {"use": false}}));
+    assert_eq!(always_direct.spn_override(), Some(false));
+    assert!(!always_direct.should_tunnel_entity(&mut domain_entity(&env, "example.com.")).unwrap().0);
+
+    // Explicit app Always VPN (spn/use = true) routes everything except global - exclusions.
+    let always_vpn = layered(&env, json!({"spn": {"use": true}}));
+    assert_eq!(always_vpn.spn_override(), Some(true));
+    assert!(always_vpn.should_tunnel_entity(&mut domain_entity(&env, "other.com.")).unwrap().0);
+    assert!(!always_vpn.should_tunnel_entity(&mut domain_entity(&env, "bypass.com.")).unwrap().0);
+
+    // App-level rule beats app-level spn/use and global policy.
+    let app_rules = layered(
+        &env,
+        json!({"spn": {"use": false, "usagePolicy": ["+ bypass.com"]}}),
+    );
+    assert!(app_rules.should_tunnel_entity(&mut domain_entity(&env, "bypass.com.")).unwrap().0);
+}

@@ -192,4 +192,94 @@ mod tests {
 
         proxy_handle.abort();
     }
+
+    #[tokio::test]
+    async fn test_udp_proxy_upstream_socks5_associate() {
+        // 1. Target UDP echo server
+        let echo_server = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let echo_addr = echo_server.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut buf = [0u8; 512];
+            if let Ok((len, peer)) = echo_server.recv_from(&mut buf).await {
+                let _ = echo_server.send_to(&buf[..len], peer).await;
+            }
+        });
+
+        // 2. Mock SOCKS5 UDP relay + TCP control server
+        let relay_sock = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let relay_addr = relay_sock.local_addr().unwrap();
+        let socks5_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let socks5_addr = socks5_listener.local_addr().unwrap();
+
+        let relay_for_udp = Arc::clone(&relay_sock);
+        tokio::spawn(async move {
+            let mut buf = [0u8; 1024];
+            if let Ok((len, client_udp_addr)) = relay_for_udp.recv_from(&mut buf).await {
+                // Verify RFC 1928 IPv4 header + forward payload to target
+                let payload = upstream::socks5::decode_udp_packet(&buf[..len]).unwrap();
+                let fwd = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+                fwd.send_to(payload, echo_addr).await.unwrap();
+                let mut reply = [0u8; 512];
+                let (rlen, _) = fwd.recv_from(&mut reply).await.unwrap();
+                let mut resp_pkt = upstream::socks5::encode_udp_header(
+                    &echo_addr.ip().to_string(),
+                    echo_addr.port(),
+                )
+                .unwrap();
+                resp_pkt.extend_from_slice(&reply[..rlen]);
+                let _ = relay_for_udp.send_to(&resp_pkt, client_udp_addr).await;
+            }
+        });
+
+        tokio::spawn(async move {
+            if let Ok((mut stream, _)) = socks5_listener.accept().await {
+                let mut greeting = [0u8; 3];
+                let _ = stream.read_exact(&mut greeting).await;
+                let _ = stream.write_all(&[0x05, 0x00]).await;
+
+                let mut req = [0u8; 10];
+                let _ = stream.read_exact(&mut req).await;
+                assert_eq!(req[1], 0x03); // UDP ASSOCIATE
+
+                let ip_bytes = match relay_addr.ip() {
+                    std::net::IpAddr::V4(v4) => v4.octets(),
+                    _ => unreachable!(),
+                };
+                let port_bytes = relay_addr.port().to_be_bytes();
+                let reply = [
+                    0x05, 0x00, 0x00, 0x01,
+                    ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3],
+                    port_bytes[0], port_bytes[1],
+                ];
+                let _ = stream.write_all(&reply).await;
+                // Keep TCP control open until test drops it
+                let mut hold = [0u8; 1];
+                let _ = stream.read(&mut hold).await;
+            }
+        });
+
+        let upstream = UpstreamProxy::parse(&format!("socks5://{}", socks5_addr)).unwrap();
+        assert!(upstream.supports_udp());
+        let decider: SharedDecider = Arc::new(move |_, _| {
+            let binding = LocalBinding::new().with_upstream(upstream.clone());
+            Ok(Decision::new(echo_addr.ip(), echo_addr.port()).with_binding(binding))
+        });
+
+        let proxy = UdpProxy::bind("127.0.0.1:0".parse().unwrap(), decider, UdpProxyConfig::default())
+            .await
+            .unwrap();
+        let proxy_addr = proxy.local_addr().unwrap();
+        let proxy_handle = tokio::spawn(async move {
+            let _ = proxy.run().await;
+        });
+
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        client.send_to(b"udp via socks5", proxy_addr).await.unwrap();
+
+        let mut buf = [0u8; 512];
+        let (n, _) = client.recv_from(&mut buf).await.unwrap();
+        assert_eq!(&buf[..n], b"udp via socks5");
+
+        proxy_handle.abort();
+    }
 }

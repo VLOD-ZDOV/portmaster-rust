@@ -158,7 +158,7 @@ pub fn register_options(config: &Config) -> pm_config::Result<()> {
             CFG_XRAY_AUTO_CONNECT,
             "Автоматически восстанавливать подключение к последнему серверу Xray при запуске Portmaster.",
             pm_config::OPT_TYPE_BOOL,
-            Value::Bool(true),
+            Value::Bool(false),
         )
         .with_expertise_level(pm_config::EXPERTISE_LEVEL_USER)
         .with_annotation(pm_config::DISPLAY_ORDER_ANNOTATION, json!(10))
@@ -764,13 +764,11 @@ impl Xray {
         self.manager.active_pid()
     }
 
-    /// Returns configured Xray routing rules (merging `xray/rules` and `spn/usagePolicy`).
+    /// Returns configured Xray-internal routing rules (`xray/rules`, e.g. `geosite:`/`geoip:`).
+    /// Per-app and firewall endpoint rules (`spn/usagePolicy`) are enforced by the firewall directly.
     pub fn routing_rules(&self) -> Vec<String> {
         let mut rules = self.config.get_as_string_array("xray/rules", &[])();
-        if rules.is_empty() {
-            rules = self.config.get_as_string_array("spn/usagePolicy", &[])();
-        }
-        // Always ensure private LAN subnets and local domains are bypassed directly
+        // Always ensure private LAN subnets and local addresses are bypassed directly.
         if !rules.iter().any(|r| r.contains("LAN") || r.contains("geoip:private") || r.contains("192.168.")) {
             rules.insert(0, "- LAN".to_string());
             rules.insert(1, "- Localhost".to_string());
@@ -812,23 +810,31 @@ impl Xray {
         self.manager.active_inbound()
     }
 
-    /// Clears VPN state only. Split Tunnel settings are intentionally left
-    /// untouched, so disconnecting Xray does not disable Split Tunnel.
-    pub(crate) fn reset_vpn_config(&self) {
-        let _ = self.config.set_config_option("spn/enable", serde_json::Value::Bool(false));
-        let port = self.config.get_as_int("xray/inboundPort", 1080)().clamp(1, i64::from(u16::MAX));
+    fn stale_xray_proxy_url(&self, port: u16) -> String {
         let scheme = if matches!(self.configured_inbound(), InboundProtocol::Http) {
             "http"
         } else {
             "socks5"
         };
-        let xray_proxy = format!("{scheme}://127.0.0.1:{port}");
+        format!("{scheme}://127.0.0.1:{port}")
+    }
+
+    fn clear_stale_splittun_proxy(&self, port: u16) {
+        let xray_proxy = self.stale_xray_proxy_url(port);
         if self.config.get_as_string("splittun/proxy", "")() == xray_proxy {
             let _ = self.config.set_config_option(
                 "splittun/proxy",
                 serde_json::Value::String(String::new()),
             );
         }
+    }
+
+    /// Clears VPN state only. Split Tunnel settings are intentionally left
+    /// untouched, so disconnecting Xray does not disable Split Tunnel.
+    pub(crate) fn reset_vpn_config(&self) {
+        let _ = self.config.set_config_option("spn/enable", serde_json::Value::Bool(false));
+        let port = self.configured_inbound_port();
+        self.clear_stale_splittun_proxy(port);
     }
 
     /// Returns whether the Xray integration is enabled in the current config.
@@ -856,8 +862,12 @@ impl Xray {
         }
     }
 
-    /// Connects to the last selected/active node using stored routing rules and inbound settings.
-    pub fn connect_last(self: &Arc<Self>) -> Result<XrayStatus> {
+    /// Connects to a specific node ID using stored routing rules and optional inbound port.
+    pub fn connect_node(
+        self: &Arc<Self>,
+        node_id: &str,
+        inbound_port_override: Option<u16>,
+    ) -> Result<XrayStatus> {
         if !self.is_enabled() {
             self.reset_vpn_config();
             return Err(crate::Error::Disabled);
@@ -866,30 +876,25 @@ impl Xray {
             self.reset_vpn_config();
             return Err(crate::Error::Process(format!("binary not found: {XRAY_BINARY_NAME}")));
         }
-        let node_id = self
-            .store
-            .last_node_id()
-            .ok_or_else(|| {
-                self.reset_vpn_config();
-                crate::Error::Process("no previous active node found to connect".into())
-            })?;
 
-        let node = match self.store.get_node(&node_id) {
+        let node = match self.store.get_node(node_id) {
             Ok(node) => node,
             Err(error) => {
-                // A stale last_node_id must not leave spn/enable=true behind:
-                // the firewall would keep rerouting all VPN traffic to a proxy
-                // that is not running.
-                self.store.clear_last_node();
+                // If connecting the stored last node failed because it was removed,
+                // clear stale state so spn/enable does not stay true.
+                if self.store.last_node_id().as_deref() == Some(node_id) {
+                    self.store.clear_last_node();
+                }
                 self.store.clear_active();
                 self.reset_vpn_config();
                 return Err(error);
             }
         };
+
+        let inbound_port = inbound_port_override.unwrap_or_else(|| self.configured_inbound_port());
         tracing::info!(node = %node.name, "xray: connecting to node");
         let rules = self.routing_rules();
         let custom_rules = if rules.is_empty() { None } else { Some(rules.as_slice()) };
-        let inbound_port = self.configured_inbound_port();
         if let Err(error) = self.manager.connect_with_rules(
             &node,
             inbound_port,
@@ -900,27 +905,39 @@ impl Xray {
             self.reset_vpn_config();
             return Err(error);
         }
-        let _ = self.store.set_active(&node.subscription_id, &node.id);
-        let _ = self.config.set_config_option("spn/enable", serde_json::Value::Bool(true));
-        // Xray is VPN routing, not Split Tunnel. Do not enable the Split Tunnel
-        // module or point its upstream proxy at Xray. The VPN path is resolved
-        // per app by CoreProfiles::split_tun_proxy().
-        let port = self.config.get_as_int("xray/inboundPort", 1080)().clamp(1, i64::from(u16::MAX));
-        let scheme = if matches!(self.configured_inbound(), InboundProtocol::Http) {
-            "http"
-        } else {
-            "socks5"
-        };
-        let xray_proxy = format!("{scheme}://127.0.0.1:{port}");
-        if self.config.get_as_string("splittun/proxy", "")() == xray_proxy {
-            let _ = self.config.set_config_option("splittun/proxy", serde_json::Value::String(String::new()));
+
+        self.store.set_active(&node.subscription_id, &node.id)?;
+        if inbound_port_override.is_some() {
+            let _ = self.config.set_config_option(
+                CFG_XRAY_INBOUND_PORT,
+                serde_json::Value::Number(u64::from(inbound_port).into()),
+            );
         }
+        let _ = self.config.set_config_option("spn/enable", serde_json::Value::Bool(true));
+        self.clear_stale_splittun_proxy(inbound_port);
+
         let probe = Arc::clone(self);
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(300));
             probe.manager.probe_exit_ip(Some(&probe.geoip));
         });
         Ok(self.manager.status())
+    }
+
+    /// Connects to the last selected/active node using stored routing rules and inbound settings.
+    pub fn connect_last(self: &Arc<Self>) -> Result<XrayStatus> {
+        if !self.is_enabled() {
+            self.reset_vpn_config();
+            return Err(crate::Error::Disabled);
+        }
+        let node_id = self
+            .store
+            .last_node_id()
+            .ok_or_else(|| {
+                self.reset_vpn_config();
+                crate::Error::Process("no previous active node found to connect".into())
+            })?;
+        self.connect_node(&node_id, None)
     }
 
     /// Disconnects Xray and resets proxy/spn config while preserving last_node_id in database.
@@ -955,7 +972,7 @@ impl Xray {
             self.reset_vpn_config();
             return;
         }
-        let auto_connect = self.config.get_as_bool(CFG_XRAY_AUTO_CONNECT, true)();
+        let auto_connect = self.config.get_as_bool(CFG_XRAY_AUTO_CONNECT, false)();
         if !auto_connect {
             tracing::info!("xray: auto-connect is disabled in settings");
             self.reset_vpn_config();

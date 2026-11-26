@@ -102,12 +102,15 @@ pub fn check_split_tunneling(conn: &mut Connection, env: &dyn SplitTunnelEnv) {
 
     let upstream_proxy = env.split_tun_proxy(conn);
 
-    // UDP cannot be relayed through the upstream proxy. Go blocks it instead
-    // of silently bypassing the proxy; a direct UDP fallback would leak traffic
-    // that the user explicitly configured to be tunneled.
-    if conn.ip_protocol == protocol::UDP && !upstream_proxy.is_empty() {
+    // UDP can be relayed over SOCKS5 (`socks5://` / `socks5h://`) via UDP ASSOCIATE,
+    // but cannot be carried over HTTP CONNECT or SOCKS4 proxies. Block unsupported
+    // proxies instead of leaking directly outside the configured proxy.
+    if conn.ip_protocol == protocol::UDP
+        && !upstream_proxy.is_empty()
+        && !upstream_supports_udp(&upstream_proxy)
+    {
         conn.block(
-            "UDP cannot be relayed through the Split Tunnel proxy",
+            "UDP cannot be relayed through this Split Tunnel proxy (requires SOCKS5)",
             pm_profile::options::CFG_OPTION_SPLIT_TUN_PROXY_KEY,
         );
         return;
@@ -136,6 +139,13 @@ pub fn request_split_tunneling(
     let context = env.await_request(conn, &interface, &upstream_proxy)?;
     conn.split_tun_context = Some(context);
     Ok(())
+}
+
+fn upstream_supports_udp(proxy_url: &str) -> bool {
+    let Some((scheme, _)) = proxy_url.split_once("://") else {
+        return false;
+    };
+    scheme.eq_ignore_ascii_case("socks5") || scheme.eq_ignore_ascii_case("socks5h")
 }
 
 /// Returns whether the connection is a proxied connection of the split tunnel

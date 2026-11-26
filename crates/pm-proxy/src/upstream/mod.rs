@@ -36,6 +36,10 @@ impl UpstreamScheme {
         matches!(self, Self::Http | Self::Socks4a | Self::Socks5h)
     }
 
+    pub fn supports_udp(self) -> bool {
+        matches!(self, Self::Socks5 | Self::Socks5h)
+    }
+
     pub fn supported_schemes() -> &'static [&'static str] {
         &["http", "socks4", "socks4a", "socks5", "socks5h"]
     }
@@ -166,6 +170,53 @@ impl UpstreamProxy {
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "proxy handshake timeout"))??;
 
         Ok(stream)
+    }
+
+    /// Returns whether this proxy scheme supports UDP relaying.
+    pub fn supports_udp(&self) -> bool {
+        self.scheme.supports_udp()
+    }
+
+    /// Resolves the proxy host address list.
+    pub async fn resolve_peers(&self, timeout: Duration) -> io::Result<Vec<SocketAddr>> {
+        resolve_peers(&self.host, self.port, timeout).await
+    }
+
+    /// Connects to an already-resolved SOCKS5 proxy address and negotiates
+    /// UDP ASSOCIATE, returning `(control_stream, relay_addr)`.
+    pub async fn associate_udp_to(
+        &self,
+        proxy_addr: SocketAddr,
+        binding: Option<&LocalBinding>,
+        timeout: Duration,
+    ) -> io::Result<(TcpStream, SocketAddr)> {
+        if !self.supports_udp() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "upstream proxy scheme does not support UDP",
+            ));
+        }
+        let mut stream = connect_tcp(proxy_addr, binding, timeout).await?;
+        let relay_addr = tokio::time::timeout(
+            timeout,
+            socks5::socks5_udp_associate(
+                &mut stream,
+                self.username.as_deref(),
+                self.password.as_deref(),
+                proxy_addr.ip(),
+            ),
+        )
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "proxy UDP ASSOCIATE timeout"))??;
+        Ok((stream, relay_addr))
+    }
+
+    /// Encodes the SOCKS5 UDP header for `target_ip:target_port`, honoring
+    /// `target_host_override` for `socks5h://` proxies.
+    pub fn encode_socks5_udp_header(&self, target_addr: SocketAddr) -> io::Result<Vec<u8>> {
+        let target_ip_str = target_addr.ip().to_string();
+        let host = self.host_to_send(&target_ip_str);
+        socks5::encode_udp_header(host, target_addr.port())
     }
 
     /// Returns the destination host to send in the proxy handshake.

@@ -4,15 +4,20 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::net::UdpSocket;
+use tokio::io::AsyncReadExt;
+use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::{watch, Mutex};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
+use crate::binding::LocalBinding;
 use crate::decider::SharedDecider;
 use crate::dial::connect_udp;
 use crate::egress::{EgressCache, EgressGuard};
 use crate::metrics::ProxyMetrics;
+use crate::upstream::{socks5, UpstreamProxy};
+
+const UDP_ASSOCIATE_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct UdpProxyConfig {
     pub max_sessions: usize,
@@ -32,6 +37,7 @@ impl Default for UdpProxyConfig {
 
 struct UdpSession {
     upstream_socket: Arc<UdpSocket>,
+    socks5_header: Option<Arc<[u8]>>,
     last_activity: Instant,
     /// Cancelled when the session is evicted or the proxy stops. The reply
     /// relay watches this so an evicted session's socket is released and its
@@ -39,6 +45,79 @@ struct UdpSession {
     cancel: CancellationToken,
     /// Egress registration lives exactly as long as the session is in the map.
     _egress: EgressGuard,
+    _control_egress: Option<EgressGuard>,
+}
+
+struct PreparedUdpUpstream {
+    socket: Arc<UdpSocket>,
+    socks5_header: Option<Arc<[u8]>>,
+    control_stream: Option<TcpStream>,
+    egress: EgressGuard,
+    control_egress: Option<EgressGuard>,
+}
+
+async fn send_session_datagram(
+    socket: &UdpSocket,
+    socks5_header: Option<&[u8]>,
+    data: &[u8],
+) -> io::Result<()> {
+    if let Some(header) = socks5_header {
+        let mut framed = Vec::with_capacity(header.len() + data.len());
+        framed.extend_from_slice(header);
+        framed.extend_from_slice(data);
+        socket.send(&framed).await?;
+    } else {
+        socket.send(data).await?;
+    }
+    Ok(())
+}
+
+async fn open_socks5_udp_upstream(
+    proxy: &UpstreamProxy,
+    target_addr: SocketAddr,
+    binding: Option<&LocalBinding>,
+    egress: &Arc<EgressCache>,
+) -> io::Result<PreparedUdpUpstream> {
+    let header = proxy.encode_socks5_udp_header(target_addr)?;
+    let peers = proxy.resolve_peers(UDP_ASSOCIATE_TIMEOUT).await?;
+    let mut last_error = None;
+    for proxy_addr in peers {
+        let control_egress = EgressGuard::new(Arc::clone(egress), proxy_addr);
+        let dial_binding = if proxy_addr.ip().is_loopback() {
+            None
+        } else {
+            binding
+        };
+        match proxy
+            .associate_udp_to(proxy_addr, dial_binding, UDP_ASSOCIATE_TIMEOUT)
+            .await
+        {
+            Ok((control_stream, relay_addr)) => {
+                let relay_egress = EgressGuard::new(Arc::clone(egress), relay_addr);
+                let relay_binding = if relay_addr.ip().is_loopback() {
+                    None
+                } else {
+                    dial_binding
+                };
+                match connect_udp(relay_addr, relay_binding).await {
+                    Ok(socket) => {
+                        return Ok(PreparedUdpUpstream {
+                            socket: Arc::new(socket),
+                            socks5_header: Some(Arc::from(header)),
+                            control_stream: Some(control_stream),
+                            egress: relay_egress,
+                            control_egress: Some(control_egress),
+                        });
+                    }
+                    Err(e) => last_error = Some(e),
+                }
+            }
+            Err(e) => last_error = Some(e),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| {
+        io::Error::new(io::ErrorKind::NotFound, "proxy host has no addresses")
+    }))
 }
 
 pub struct UdpProxy {
@@ -143,22 +222,37 @@ impl UdpProxy {
                             let data = &buf[..len];
                             self.metrics.bytes_rx.fetch_add(len as u64, Ordering::Relaxed);
 
-                            let mut sessions_guard = self.sessions.lock().await;
-                            if let Some(session) = sessions_guard.get_mut(&peer_addr) {
-                                session.last_activity = Instant::now();
-                                if let Err(e) = session.upstream_socket.send(data).await {
+                            let existing = {
+                                let mut sessions_guard = self.sessions.lock().await;
+                                if let Some(session) = sessions_guard.get_mut(&peer_addr) {
+                                    session.last_activity = Instant::now();
+                                    Some((
+                                        Arc::clone(&session.upstream_socket),
+                                        session.socks5_header.clone(),
+                                    ))
+                                } else {
+                                    if self.config.max_sessions > 0 && sessions_guard.len() >= self.config.max_sessions {
+                                        warn!("udp_proxy: max concurrent sessions reached, dropping datagram from {}", peer_addr);
+                                        self.metrics.inc_errors();
+                                        continue;
+                                    }
+                                    None
+                                }
+                            };
+
+                            if let Some((upstream_socket, socks5_header)) = existing {
+                                if let Err(e) = send_session_datagram(
+                                    &upstream_socket,
+                                    socks5_header.as_deref(),
+                                    data,
+                                )
+                                .await
+                                {
                                     debug!("udp_proxy: upstream send error: {}", e);
                                     self.metrics.inc_errors();
                                 } else {
                                     self.metrics.bytes_tx.fetch_add(len as u64, Ordering::Relaxed);
                                 }
-                                continue;
-                            }
-
-                            // New session
-                            if self.config.max_sessions > 0 && sessions_guard.len() >= self.config.max_sessions {
-                                warn!("udp_proxy: max concurrent sessions reached, dropping datagram from {}", peer_addr);
-                                self.metrics.inc_errors();
                                 continue;
                             }
 
@@ -172,54 +266,107 @@ impl UdpProxy {
                             };
 
                             let target_addr = SocketAddr::new(decision.remote_ip, decision.remote_port);
+                            let binding = decision.binding.clone();
 
-                            // UDP cannot be relayed through an upstream proxy.
-                            // Dropping is the fail-closed behavior: a direct
-                            // fallback would bypass the proxy the user chose.
-                            if decision
-                                .binding
-                                .as_ref()
-                                .is_some_and(|binding| binding.upstream.is_some())
-                            {
-                                warn!(
-                                    "udp_proxy: UDP cannot be relayed through upstream proxy, dropping datagram to {}",
-                                    target_addr
-                                );
-                                self.metrics.inc_errors();
-                                continue;
-                            }
-                            let binding_direct = decision.binding.clone();
-
-                            let upstream = match connect_udp(target_addr, binding_direct.as_ref()).await {
-                                Ok(socket) => Arc::new(socket),
-                                Err(e) => {
-                                    error!("udp_proxy: failed to create upstream socket for {}: {}", target_addr, e);
+                            let prepared = if let Some(proxy) = binding.as_ref().and_then(|b| b.upstream.as_deref()) {
+                                if !proxy.supports_udp() {
+                                    warn!(
+                                        "udp_proxy: UDP cannot be relayed through {:?} proxy, dropping datagram to {}",
+                                        proxy.scheme,
+                                        target_addr
+                                    );
                                     self.metrics.inc_errors();
                                     continue;
                                 }
+                                match open_socks5_udp_upstream(proxy, target_addr, binding.as_ref(), &self.egress).await {
+                                    Ok(prepared) => prepared,
+                                    Err(e) => {
+                                        error!("udp_proxy: failed to associate SOCKS5 UDP for {}: {}", target_addr, e);
+                                        self.metrics.inc_errors();
+                                        continue;
+                                    }
+                                }
+                            } else {
+                                let egress = EgressGuard::new(Arc::clone(&self.egress), target_addr);
+                                let upstream = match connect_udp(target_addr, binding.as_ref()).await {
+                                    Ok(socket) => Arc::new(socket),
+                                    Err(e) => {
+                                        drop(egress);
+                                        error!("udp_proxy: failed to create upstream socket for {}: {}", target_addr, e);
+                                        self.metrics.inc_errors();
+                                        continue;
+                                    }
+                                };
+                                PreparedUdpUpstream {
+                                    socket: upstream,
+                                    socks5_header: None,
+                                    control_stream: None,
+                                    egress,
+                                    control_egress: None,
+                                }
                             };
 
-                            // Register egress before the first datagram so the
-                            // firewall can recognize it as a proxy session.
-                            // The guard is moved into the session so egress is
-                            // released exactly when the session is evicted.
-                            let egress = EgressGuard::new(Arc::clone(&self.egress), target_addr);
-                            if let Err(e) = upstream.send(data).await {
-                                drop(egress);
+                            // Re-check map in case another initial datagram raced while
+                            // SOCKS5 UDP ASSOCIATE was completing.
+                            let race_winner = {
+                                let mut sessions_guard = self.sessions.lock().await;
+                                if let Some(session) = sessions_guard.get_mut(&peer_addr) {
+                                    session.last_activity = Instant::now();
+                                    Some((
+                                        Arc::clone(&session.upstream_socket),
+                                        session.socks5_header.clone(),
+                                    ))
+                                } else {
+                                    None
+                                }
+                            };
+                            if let Some((upstream_socket, socks5_header)) = race_winner {
+                                drop(prepared);
+                                if let Err(e) = send_session_datagram(
+                                    &upstream_socket,
+                                    socks5_header.as_deref(),
+                                    data,
+                                )
+                                .await
+                                {
+                                    debug!("udp_proxy: upstream send error: {}", e);
+                                    self.metrics.inc_errors();
+                                } else {
+                                    self.metrics.bytes_tx.fetch_add(len as u64, Ordering::Relaxed);
+                                }
+                                continue;
+                            }
+
+                            if let Err(e) = send_session_datagram(
+                                &prepared.socket,
+                                prepared.socks5_header.as_deref(),
+                                data,
+                            )
+                            .await
+                            {
+                                drop(prepared);
                                 error!("udp_proxy: failed to send initial datagram to {}: {}", target_addr, e);
                                 self.metrics.inc_errors();
                                 continue;
                             }
                             self.metrics.bytes_tx.fetch_add(len as u64, Ordering::Relaxed);
                             self.metrics.session_started();
+
                             let session_cancel = CancellationToken::new();
-                            sessions_guard.insert(peer_addr, UdpSession {
-                                upstream_socket: Arc::clone(&upstream),
-                                last_activity: Instant::now(),
-                                cancel: session_cancel.clone(),
-                                _egress: egress,
-                            });
-                            drop(sessions_guard);
+                            let is_socks5 = prepared.socks5_header.is_some();
+                            let upstream = Arc::clone(&prepared.socket);
+                            let mut control_stream = prepared.control_stream;
+                            {
+                                let mut sessions_guard = self.sessions.lock().await;
+                                sessions_guard.insert(peer_addr, UdpSession {
+                                    upstream_socket: Arc::clone(&upstream),
+                                    socks5_header: prepared.socks5_header,
+                                    last_activity: Instant::now(),
+                                    cancel: session_cancel.clone(),
+                                    _egress: prepared.egress,
+                                    _control_egress: prepared.control_egress,
+                                });
+                            }
 
                             // Spawn reply receiver for this upstream socket
                             let client_sock = Arc::clone(&self.listen_socket);
@@ -229,6 +376,7 @@ impl UdpProxy {
 
                             tokio::spawn(async move {
                                 let mut reply_buf = vec![0u8; 65535];
+                                let mut control_buf = [0u8; 64];
                                 loop {
                                     tokio::select! {
                                         res = upstream.recv(&mut reply_buf) => {
@@ -241,13 +389,25 @@ impl UdpProxy {
                                                     if session_cancel.is_cancelled() {
                                                         break;
                                                     }
-                                                    metrics_ref.bytes_rx.fetch_add(reply_len as u64, Ordering::Relaxed);
-                                                    if let Err(e) = client_sock.send_to(&reply_buf[..reply_len], peer_addr).await {
+                                                    let payload = if is_socks5 {
+                                                        match socks5::decode_udp_packet(&reply_buf[..reply_len]) {
+                                                            Ok(slice) => slice,
+                                                            Err(e) => {
+                                                                debug!("udp_proxy: invalid socks5 udp packet: {}", e);
+                                                                metrics_ref.inc_errors();
+                                                                continue;
+                                                            }
+                                                        }
+                                                    } else {
+                                                        &reply_buf[..reply_len]
+                                                    };
+                                                    metrics_ref.bytes_rx.fetch_add(payload.len() as u64, Ordering::Relaxed);
+                                                    if let Err(e) = client_sock.send_to(payload, peer_addr).await {
                                                         debug!("udp_proxy: client reply send error: {}", e);
                                                         metrics_ref.inc_errors();
                                                         break;
                                                     }
-                                                    metrics_ref.bytes_tx.fetch_add(reply_len as u64, Ordering::Relaxed);
+                                                    metrics_ref.bytes_tx.fetch_add(payload.len() as u64, Ordering::Relaxed);
                                                     let mut map = sessions_ref.lock().await;
                                                     if let Some(s) = map.get_mut(&peer_addr) {
                                                         // Re-check after acquiring the lock:
@@ -262,6 +422,28 @@ impl UdpProxy {
                                                     break;
                                                 }
                                             }
+                                        }
+                                        _ = async {
+                                            if let Some(ref mut stream) = control_stream {
+                                                loop {
+                                                    match stream.read(&mut control_buf).await {
+                                                        Ok(0) | Err(_) => break,
+                                                        Ok(_) => continue,
+                                                    }
+                                                }
+                                            }
+                                        }, if control_stream.is_some() => {
+                                            debug!("udp_proxy: SOCKS5 UDP control channel closed for {}", peer_addr);
+                                            let mut map = sessions_ref.lock().await;
+                                            if let Some(s) = map.get(&peer_addr) {
+                                                if Arc::ptr_eq(&s.upstream_socket, &upstream) {
+                                                    if let Some(removed) = map.remove(&peer_addr) {
+                                                        removed.cancel.cancel();
+                                                        metrics_ref.session_finished();
+                                                    }
+                                                }
+                                            }
+                                            break;
                                         }
                                         _ = reply_shutdown.changed() => break,
                                         _ = session_cancel.cancelled() => break,

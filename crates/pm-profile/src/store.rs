@@ -122,16 +122,18 @@ impl ProfileStore {
     }
 
     /// Rewrites profiles that still contain legacy wrongly-typed options.
-    /// Returns the number of migrated records.
-    pub fn migrate_legacy_configs(&self) -> Result<usize> {
+    fn rewrite_local_configs(
+        &self,
+        mut transform: impl FnMut(serde_json::Map<String, serde_json::Value>) -> serde_json::Map<String, serde_json::Value>,
+    ) -> Result<Vec<String>> {
         let records = self.db.query(&Query::new(PROFILES_DB_PATH))?;
-        let mut migrated = 0;
+        let mut updated_ids = Vec::new();
         for record in records {
             let mut profile: Profile = match serde_json::from_slice(&record.data) {
                 Ok(profile) => profile,
                 Err(_) => continue,
             };
-            // Go migrations only rewrite local profiles.
+            // Only rewrite local profiles.
             if profile.source != crate::SOURCE_LOCAL {
                 continue;
             }
@@ -146,14 +148,30 @@ impl ProfileStore {
             if profile.id.is_empty() {
                 continue;
             }
-            let clean = crate::profile::sanitize_legacy_config(profile.config.clone());
-            if clean != profile.config {
-                profile.config = clean;
+            let updated = transform(profile.config.clone());
+            if updated != profile.config {
+                profile.config = updated;
                 self.db.put(encode_profile(&profile)?)?;
-                migrated += 1;
+                updated_ids.push(profile.id);
             }
         }
-        Ok(migrated)
+        Ok(updated_ids)
+    }
+
+    /// Rewrites local profiles that still carry legacy `usagePolicy` values.
+    ///
+    /// Returns the number of migrated records.
+    pub fn migrate_legacy_configs(&self) -> Result<usize> {
+        self.rewrite_local_configs(crate::profile::sanitize_legacy_config)
+            .map(|ids| ids.len())
+    }
+
+    /// Removes per-app `spn/use` and `splittun/use` overrides from all local
+    /// profiles so they inherit the global routing defaults cleanly.
+    ///
+    /// Returns the local IDs of profiles whose config changed.
+    pub fn clear_routing_overrides(&self) -> Result<Vec<String>> {
+        self.rewrite_local_configs(crate::profile::clear_routing_overrides_map)
     }
 
     /// Saves a profile.

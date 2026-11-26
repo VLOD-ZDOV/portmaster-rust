@@ -802,3 +802,115 @@ async fn firewall_stop_and_restart_recreates_cancellation_token() {
 
     let _ = std::fs::remove_dir_all(&data_dir);
 }
+
+#[tokio::test]
+async fn xray_routing_isolation_udp_policy_and_reset_endpoint() {
+    use pm_firewall::packet::PacketEnv;
+    use pm_splittun::SplitTunnelProfiles;
+
+    let data_dir = temp_dir("xray-routing");
+    let options = test_options(&data_dir);
+    let service = Arc::new(Service::start(&options).await.unwrap());
+
+    // autoConnect defaults to false and both proxy listeners start disabled.
+    assert!(!service.config.get_as_bool("xray/autoConnect", true)());
+    assert!(!service.tunnel_proxies.is_ready());
+    assert!(!service.split_proxies.is_ready());
+
+    // Bind tunnel_proxies on an ephemeral port so non-root tests can test check_tunneling.
+    service
+        .tunnel_proxies
+        .start_on(0, service.tunnel_queue.clone(), service.system_interfaces.as_ref())
+        .await
+        .expect("bind ephemeral tunnel proxy");
+
+    // Create a local profile with explicit spn/use + splittun/use + spn/usagePolicy.
+    let mut cfg = serde_json::Map::new();
+    cfg.insert("spn/use".into(), json!(true));
+    cfg.insert("splittun/use".into(), json!(true));
+    cfg.insert("spn/usagePolicy".into(), json!(["- direct.example"]));
+    let app_profile = pm_profile::Profile::new(pm_profile::Profile {
+        source: pm_profile::SOURCE_LOCAL.to_string(),
+        name: "TestApp".to_string(),
+        fingerprints: vec![pm_profile::Fingerprint::new("path", "", "equals", "/usr/bin/testapp")],
+        config: cfg,
+        ..pm_profile::Profile::default()
+    });
+    service.firewall.profiles.store().save(&app_profile).unwrap();
+    service.firewall.profiles.refresh().unwrap();
+
+    // Enable spn/enable globally in config.
+    service.config.set_config_option("spn/enable", json!(true)).unwrap();
+
+    let mut raw_proc = pm_process::Process::empty("4242-0");
+    raw_proc.pid = 4242;
+    raw_proc.name = "testapp".into();
+    raw_proc.path = "/usr/bin/testapp".into();
+    let proc_info = Arc::new(raw_proc);
+
+    // SplitTunnelProfiles must NOT return the Xray proxy for VPN apps.
+    assert_eq!(service.firewall.profiles.split_tun_proxy(&proc_info), "");
+
+    let make_conn = |proto: u8, domain: &str| {
+        let mut entity = pm_intel::Entity::new(
+            Arc::clone(&service.filter_lists),
+            Arc::clone(&service.geoip) as Arc<dyn pm_intel::LocationProvider>,
+        );
+        entity.ip = Some("1.1.1.1".parse().unwrap());
+        entity.protocol = proto;
+        entity.ip_scope = pm_netstate::IpScope::Global;
+        entity.domain = domain.to_string();
+        entity.init(443);
+        pm_network::Connection {
+            ip_protocol: proto,
+            pid: 4242,
+            entity: Some(entity),
+            process: Some(Arc::clone(&proc_info)),
+            verdict: pm_network::Verdict::Accept,
+            ..pm_network::Connection::default()
+        }
+    };
+
+    // UDP over default SOCKS5 inbound is rerouted to Xray tunnel (717), NOT blocked and NOT SplitTun.
+    let mut udp_conn = make_conn(pm_network::protocol::UDP, "chat.example.");
+    service.firewall.env.check_tunneling(&mut udp_conn);
+    assert_eq!(udp_conn.verdict, pm_network::Verdict::RerouteToTunnel);
+    assert!(udp_conn.tunneled);
+
+    // Local exclusion rule `- direct.example` bypasses VPN cleanly.
+    let mut bypass_conn = make_conn(pm_network::protocol::TCP, "direct.example.");
+    service.firewall.env.check_tunneling(&mut bypass_conn);
+    assert_eq!(bypass_conn.verdict, pm_network::Verdict::Accept);
+    assert!(!bypass_conn.tunneled);
+
+    // HTTP inbound cannot carry UDP, so UDP is blocked cleanly instead of leaking.
+    service
+        .config
+        .set_config_option("xray/inboundProtocol", json!("http"))
+        .unwrap();
+    let mut http_udp_conn = make_conn(pm_network::protocol::UDP, "chat.example.");
+    service.firewall.env.check_tunneling(&mut http_udp_conn);
+    assert_eq!(http_udp_conn.verdict, pm_network::Verdict::Block);
+
+    // HTTP POST /api/v1/profiles/reset-routing clears spn/use & splittun/use across local profiles.
+    let address = service.local_addr();
+    let server = tokio::spawn(Arc::clone(&service).run());
+    let resp = http_post(address, "/api/v1/profiles/reset-routing", "{}").await;
+    assert!(resp.starts_with("HTTP/1.1 200"), "{resp}");
+    let body = resp.split("\r\n\r\n").nth(1).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(body).unwrap();
+    assert_eq!(parsed["updated"], json!(1));
+
+    let reloaded = service
+        .firewall
+        .profiles
+        .store()
+        .get(&app_profile.scoped_id())
+        .unwrap();
+    assert!(!reloaded.config.contains_key("spn/use"));
+    assert!(!reloaded.config.contains_key("splittun/use"));
+
+    server.abort();
+    service.tunnel_proxies.stop();
+    let _ = std::fs::remove_dir_all(&data_dir);
+}

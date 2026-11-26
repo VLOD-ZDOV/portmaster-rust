@@ -191,11 +191,11 @@ fn matching_errors_fail_and_denials_keep_the_verdict() {
 }
 
 #[test]
-fn udp_with_proxy_is_blocked_instead_of_bypassing_it() {
+fn udp_with_http_proxy_is_blocked_while_socks5_udp_is_rerouted() {
     let mut conn = connection();
     conn.ip_protocol = protocol::UDP;
     let env = FakeEnv {
-        proxy: "socks5://127.0.0.1:1080".to_string(),
+        proxy: "http://127.0.0.1:8080".to_string(),
         ..FakeEnv::default()
     };
 
@@ -204,8 +204,18 @@ fn udp_with_proxy_is_blocked_instead_of_bypassing_it() {
     assert_eq!(conn.verdict, Verdict::Block);
     assert_eq!(
         conn.reason.msg,
-        "UDP cannot be relayed through the Split Tunnel proxy"
+        "UDP cannot be relayed through this Split Tunnel proxy (requires SOCKS5)"
     );
+
+    let mut conn_socks = connection();
+    conn_socks.ip_protocol = protocol::UDP;
+    let env_socks = FakeEnv {
+        proxy: "socks5://127.0.0.1:1080".to_string(),
+        ..FakeEnv::default()
+    };
+
+    check_split_tunneling(&mut conn_socks, &env_socks);
+    assert_eq!(conn_socks.verdict, Verdict::RerouteToSplitTun);
 }
 
 #[test]

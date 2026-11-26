@@ -346,11 +346,11 @@ pub fn parse_routing_rules(raw_rules: &[String]) -> Vec<Value> {
                 "type": "field",
                 "outboundTag": action,
                 "ip": [
-                    "geoip:private",
                     "192.168.0.0/16",
                     "10.0.0.0/8",
                     "172.16.0.0/12",
                     "169.254.0.0/16",
+                    "100.64.0.0/10",
                     "fe80::/10",
                     "fc00::/7"
                 ]
@@ -455,6 +455,11 @@ pub fn generate_config_full(
             "listen": "127.0.0.1",
             "port": inbound_port,
             "settings": inbound_settings,
+            "sniffing": {
+                "enabled": true,
+                "destOverride": ["http", "tls", "quic"],
+                "routeOnly": true
+            }
         }],
         "outbounds": outbounds,
         "routing": {

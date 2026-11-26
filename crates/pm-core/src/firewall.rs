@@ -491,30 +491,9 @@ impl SplitTunnelProfiles for CoreProfiles {
     }
 
     fn split_tun_proxy(&self, process: &Process) -> String {
-        let layered = self.layered_for(process);
-        let Some(layered) = layered else {
-            return String::new();
-        };
-
-        // VPN apps must use the Xray proxy, not the Split Tunnel upstream.
-        if self.config.get_as_bool("spn/enable", false)() && layered.use_spn() {
-            let port = self
-                .config
-                .get_as_int("xray/inboundPort", 1080)()
-                .clamp(1, i64::from(u16::MAX));
-            let scheme = if self
-                .config
-                .get_as_string("xray/inboundProtocol", "socks")()
-                .eq_ignore_ascii_case("http")
-            {
-                "http"
-            } else {
-                "socks5"
-            };
-            return format!("{scheme}://127.0.0.1:{port}");
-        }
-
-        layered.split_tun_proxy()
+        self.layered_for(process)
+            .map(|layered| layered.split_tun_proxy())
+            .unwrap_or_default()
     }
 
     fn split_tun_interface(&self, process: &Process) -> String {
@@ -545,6 +524,7 @@ pub struct CoreFirewallEnv {
     unbreak_lists: Arc<pm_intel::FilterLists>,
     ip_info: Arc<IpInfoStore>,
     split_tunnel: Arc<SplitTunnelEnvAdapter>,
+    tunnel_adapter: Arc<SplitTunnelEnvAdapter>,
     compat: Arc<pm_compat::Compat>,
     api_endpoint: Option<(IpAddr, u16)>,
     filter_enabled: AtomicBool,
@@ -572,6 +552,7 @@ impl CoreFirewallEnv {
         custom_lists: ServiceCustomLists,
         profiles: Arc<CoreProfiles>,
         split_tunnel: Arc<SplitTunnelEnvAdapter>,
+        tunnel_adapter: Arc<SplitTunnelEnvAdapter>,
         ip_info: Arc<IpInfoStore>,
         compat: Arc<pm_compat::Compat>,
         interop: Arc<pm_interop::Interop>,
@@ -590,6 +571,7 @@ impl CoreFirewallEnv {
             unbreak_lists,
             ip_info,
             split_tunnel,
+            tunnel_adapter,
             compat,
             api_endpoint,
             filter_enabled: AtomicBool::new(config.get_as_bool("filter/enable", true)()),
@@ -638,6 +620,23 @@ impl CoreFirewallEnv {
     /// Returns the inspector registry used by the packet verdict handler.
     pub fn inspectors(&self) -> &Arc<InspectorRegistry> {
         &self.inspectors
+    }
+
+    /// Returns `(upstream_proxy_url, supports_udp)` for the local Xray inbound.
+    fn xray_upstream_proxy(&self) -> (String, bool) {
+        let port = self
+            .config
+            .get_as_int("xray/inboundPort", 1080)()
+            .clamp(1, i64::from(u16::MAX));
+        let is_http = self
+            .config
+            .get_as_string("xray/inboundProtocol", "socks")()
+            .eq_ignore_ascii_case("http");
+        if is_http {
+            (format!("http://127.0.0.1:{port}"), false)
+        } else {
+            (format!("socks5://127.0.0.1:{port}"), true)
+        }
     }
 }
 
@@ -747,10 +746,7 @@ impl PacketEnv for CoreFirewallEnv {
         self.dns_interception.load(Ordering::SeqCst)
     }
 
-    /// VPN/Xray routing. The Rust core uses the split-tunnel proxy as the
-    /// transport for Xray, because Xray exposes a SOCKS endpoint and the
-    /// firewall DNATs raw TCP. This keeps VPN apps separate from Split Tunnel
-    /// apps: VPN wins before Split Tunnel is considered.
+    /// VPN/Xray routing (`RerouteToTunnel`, port `717`), separate from Split Tunnel (`719`).
     fn check_tunneling(&self, conn: &mut pm_network::Connection) {
         let is_local_or_lan = conn
             .entity
@@ -772,28 +768,76 @@ impl PacketEnv for CoreFirewallEnv {
         }
 
         let Some(process) = conn.process.as_ref() else {
+            conn.failed(
+                "no profile set",
+                pm_profile::options::CFG_OPTION_USE_SPN_KEY,
+            );
             return;
         };
         if is_xray_process(process) {
             return;
         }
 
-        let layered = self.profiles.layered_for(process);
-        if layered.is_some_and(|layered| layered.use_spn()) {
-            // The local proxy path cannot relay UDP through Xray, and falling
-            // back to a direct connection would leak traffic outside the VPN.
-            if conn.ip_protocol == pm_network::protocol::UDP {
+        let Some(layered) = self.profiles.layered_for(process) else {
+            conn.failed(
+                "no profile set",
+                pm_profile::options::CFG_OPTION_USE_SPN_KEY,
+            );
+            return;
+        };
+        if layered.needs_update() {
+            let id = layered.local_profile().id.clone();
+            let _ = layered.update(|_| self.profiles.store().get(&id).map_err(|e| e.to_string()));
+        }
+        conn.profile_revision_counter = layered.revision();
+
+        let Some(entity) = conn.entity.as_mut() else {
+            return;
+        };
+        match layered.should_tunnel_entity(entity) {
+            Ok((true, _)) => {}
+            Ok((false, _)) => return,
+            Err(_) => {
                 conn.save_when_finished = true;
-                conn.block(
-                    "UDP cannot be relayed through the Xray proxy",
-                    pm_profile::options::CFG_OPTION_USE_SPN_KEY,
+                conn.failed(
+                    "failed to check Xray routing rules",
+                    pm_profile::options::CFG_OPTION_SPN_USAGE_POLICY_KEY,
                 );
                 return;
             }
-            conn.save_when_finished = true;
-            conn.tunneled = true;
-            conn.verdict = pm_network::Verdict::RerouteToSplitTun;
         }
+
+        if !self.tunnel_adapter.is_ready() {
+            conn.save_when_finished = true;
+            conn.failed(
+                "Xray tunnel proxy is not ready",
+                pm_profile::options::CFG_OPTION_USE_SPN_KEY,
+            );
+            return;
+        }
+
+        let (_, supports_udp) = self.xray_upstream_proxy();
+        if conn.ip_protocol == pm_network::protocol::UDP && !supports_udp {
+            conn.save_when_finished = true;
+            conn.block(
+                "UDP cannot be relayed when Xray inbound protocol is HTTP (use SOCKS5)",
+                pm_profile::options::CFG_OPTION_USE_SPN_KEY,
+            );
+            return;
+        }
+
+        conn.save_when_finished = true;
+        conn.tunneled = true;
+        conn.verdict = pm_network::Verdict::RerouteToTunnel;
+    }
+
+    fn request_tunneling(&self, conn: &mut pm_network::Connection) -> Result<(), String> {
+        if conn.process.is_none() {
+            return Err("no profile set".to_string());
+        }
+        let (upstream_proxy, _) = self.xray_upstream_proxy();
+        let _ = self.tunnel_adapter.await_request(conn, "", &upstream_proxy)?;
+        Ok(())
     }
 
     fn submit_icmp(&self, pkt: &dyn QueuedPacket) -> bool {
@@ -860,6 +904,7 @@ impl PacketEnv for CoreFirewallEnv {
 
     fn is_proxied_split_tunnel_connection(&self, conn: &pm_network::Connection) -> bool {
         self.split_tunnel.is_proxied_connection_info(conn)
+            || self.tunnel_adapter.is_proxied_connection_info(conn)
     }
 
     fn check_split_tunneling(&self, conn: &mut pm_network::Connection) {
@@ -971,6 +1016,7 @@ pub struct FirewallDeps<'a> {
     pub resolver: Arc<ResolverService>,
     pub profiles: Arc<CoreProfiles>,
     pub split_tunnel: Arc<SplitTunnelEnvAdapter>,
+    pub tunnel_adapter: Arc<SplitTunnelEnvAdapter>,
     pub ip_info: Arc<IpInfoStore>,
     /// Compatibility module, wired to the self-check hooks.
     pub compat: Arc<pm_compat::Compat>,
@@ -1029,6 +1075,7 @@ impl Firewall {
             resolver,
             profiles,
             split_tunnel,
+            tunnel_adapter,
             ip_info,
             compat,
             interop,
@@ -1051,6 +1098,7 @@ impl Firewall {
             custom_lists,
             Arc::clone(&profiles),
             split_tunnel,
+            tunnel_adapter,
             Arc::clone(&ip_info),
             compat,
             interop,
@@ -1179,6 +1227,45 @@ impl Firewall {
     /// flows. Called after a successful resume.
     pub fn delete_unmarked(&self) -> std::io::Result<usize> {
         self.conntrack.delete_unmarked(self.env.ipv6_enabled())
+    }
+
+    #[cfg(windows)]
+    fn clear_winkext_cache(&self) {
+        let kext = self
+            .winkext
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        if let Some(kext) = kext {
+            if let Err(error) = kext.clear_cache() {
+                tracing::debug!(%error, "filter: failed to clear windows kext verdict cache");
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn clear_winkext_cache(&self) {}
+
+    /// Refreshes verdicts and OS interception state for a single local profile.
+    pub fn reset_profile_verdicts(&self, source: &str, id: &str) {
+        self.handler.reset_profile_connection_verdict(source, id);
+        self.clear_winkext_cache();
+    }
+
+    /// Re-evaluates all active connection verdicts and flushes marked (and
+    /// optionally unmarked) OS conntrack / kext entries so routing changes apply live.
+    pub fn reset_routing_flows(&self, include_unmarked: bool) {
+        self.handler.reset_all_connection_verdicts();
+        let ipv6 = self.env.ipv6_enabled();
+        if let Err(error) = self.conntrack.delete_all_marked(ipv6) {
+            tracing::debug!(%error, "filter: failed to delete marked conntrack entries");
+        }
+        if include_unmarked {
+            if let Err(error) = self.conntrack.delete_unmarked(ipv6) {
+                tracing::debug!(%error, "filter: failed to delete unmarked conntrack entries");
+            }
+        }
+        self.clear_winkext_cache();
     }
 
     /// Returns whether the current interception cancellation token is cancelled.

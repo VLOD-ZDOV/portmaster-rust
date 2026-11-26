@@ -29,6 +29,7 @@ struct Layer {
     default_action: u8,
     endpoints: Arc<Endpoints>,
     service_endpoints: Arc<Endpoints>,
+    spn_usage_policy: Endpoints,
     split_tun_usage_policy: Endpoints,
     /// Whether the profile sets filter lists (and they could be resolved).
     filter_lists_set: bool,
@@ -59,6 +60,7 @@ impl Layer {
             default_action: DEFAULT_ACTION_NOT_SET,
             endpoints: Arc::default(),
             service_endpoints: Arc::default(),
+            spn_usage_policy: Endpoints::default(),
             split_tun_usage_policy: Endpoints::default(),
             filter_lists_set: false,
             filter_list_ids: Vec::new(),
@@ -93,6 +95,7 @@ impl Layer {
         };
         layer.endpoints = Arc::new(parse(CFG_OPTION_ENDPOINTS_KEY));
         layer.service_endpoints = Arc::new(parse(CFG_OPTION_SERVICE_ENDPOINTS_KEY));
+        layer.spn_usage_policy = parse(CFG_OPTION_SPN_USAGE_POLICY_KEY);
         layer.split_tun_usage_policy = parse(CFG_OPTION_SPLIT_TUN_USAGE_POLICY_KEY);
 
         if let Some(list) = perspective.get_string_array(CFG_OPTION_FILTER_LISTS_KEY) {
@@ -357,6 +360,77 @@ impl LayeredProfile {
             self.global.service_endpoints(),
             entity,
         )
+    }
+
+    /// Returns the explicit per-app `spn/use` override if set, or `None` when inheriting global.
+    pub fn spn_override(&self) -> Option<bool> {
+        self.first_layer(|layer| layer.perspective.get_bool(CFG_OPTION_USE_SPN_KEY))
+    }
+
+    /// Returns the explicit per-app `splittun/use` override if set, or `None` when inheriting global.
+    pub fn split_tun_override(&self) -> Option<bool> {
+        self.first_layer(|layer| layer.perspective.get_bool(CFG_OPTION_SPLIT_TUN_USE_KEY))
+    }
+
+    /// Matches the entity against the VPN (Xray) usage policies (`spn/usagePolicy`).
+    pub fn match_spn_usage_policy(&self, entity: &mut Entity) -> (EpResult, Option<Reason>) {
+        self.match_layers(
+            |l| &l.spn_usage_policy,
+            self.global.spn_usage_policy(),
+            entity,
+        )
+    }
+
+    /// Resolves whether a connection to `entity` should be routed through VPN (Xray):
+    /// 1. Per-app `spn/usagePolicy` (`+` routes, `-` bypasses)
+    /// 2. Explicit app `spn/use`:
+    ///    - `Some(false)` ("Always Direct") -> bypasses VPN
+    ///    - `Some(true)` ("Always VPN") -> routes via VPN unless global `spn/usagePolicy` denies (`-`)
+    /// 3. Global `spn/usagePolicy` (`+` routes even when global `spn/use` is false; `-` bypasses)
+    /// 4. Global `spn/use` default
+    pub fn should_tunnel_entity(
+        &self,
+        entity: &mut Entity,
+    ) -> std::result::Result<(bool, Option<Reason>), Option<Reason>> {
+        for layer in self.layers() {
+            if layer.spn_usage_policy.is_set() {
+                let (result, reason) = layer.spn_usage_policy.match_entity(entity);
+                match result {
+                    EpResult::MatchError => return Err(reason),
+                    EpResult::Permitted => return Ok((true, reason)),
+                    EpResult::Denied => return Ok((false, reason)),
+                    EpResult::NoMatch => {}
+                }
+            }
+        }
+
+        let global_policy = self.global.spn_usage_policy();
+        match self.spn_override() {
+            Some(false) => Ok((false, None)),
+            Some(true) => {
+                if global_policy.is_set() {
+                    let (result, reason) = global_policy.match_entity(entity);
+                    match result {
+                        EpResult::MatchError => return Err(reason),
+                        EpResult::Denied => return Ok((false, reason)),
+                        EpResult::Permitted | EpResult::NoMatch => {}
+                    }
+                }
+                Ok((true, None))
+            }
+            None => {
+                if global_policy.is_set() {
+                    let (result, reason) = global_policy.match_entity(entity);
+                    match result {
+                        EpResult::MatchError => return Err(reason),
+                        EpResult::Permitted => return Ok((true, reason)),
+                        EpResult::Denied => return Ok((false, reason)),
+                        EpResult::NoMatch => {}
+                    }
+                }
+                Ok(((self.global.use_spn)(), None))
+            }
+        }
     }
 
     /// Matches the entity against the split tunnel usage policies.

@@ -94,9 +94,15 @@ impl HandlerCore {
         tracing::debug!("filter: re-evaluating verdict of {}", *conn);
         let previous = conn.verdict;
 
-        // Apply the privacy filter and check tunneling. A running SPN tunnel
-        // is not stopped, as tunnels are not ported.
+        // Apply the privacy filter and check tunneling.
         self.filter_connection(&mut conn, true, true);
+
+        if conn.verdict != pm_network::Verdict::RerouteToTunnel {
+            conn.tunneled = false;
+        }
+        if conn.verdict != pm_network::Verdict::RerouteToSplitTun {
+            conn.split_tun_context = None;
+        }
 
         if conn.verdict == previous {
             tracing::trace!(

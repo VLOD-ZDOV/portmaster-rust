@@ -150,9 +150,13 @@ impl Setting {
     }
 
     /// Returns the subsystem key prefix (e.g. "filter", "dns", "core", "xray", "splittun").
+    /// Groups `spn/*` routing options under `"xray"` so they are visible in settings UIs.
     pub fn subsystem(&self) -> &str {
         if let Some(pos) = self.key.find('/') {
-            &self.key[..pos]
+            match &self.key[..pos] {
+                "spn" => "xray",
+                other => other,
+            }
         } else {
             "core"
         }
@@ -198,13 +202,13 @@ pub const SUBSYSTEMS: &[SubsystemDef] = &[
     SubsystemDef {
         id: "xray",
         name: "VPN / Xray Gateway",
-        description: "VLESS, Trojan, VMess proxy routing and split-tunneling",
+        description: "Xray connection, auto-connect, global VPN routing, and domain rules",
         config_prefix: "xray/",
     },
     SubsystemDef {
         id: "splittun",
         name: "Split Tunnel",
-        description: "Direct routing bypass and per-interface routing",
+        description: "Route specific apps through a chosen network interface or external proxy",
         config_prefix: "splittun/",
     },
     SubsystemDef {

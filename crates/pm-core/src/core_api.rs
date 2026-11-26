@@ -11,14 +11,14 @@
 use std::sync::mpsc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use pm_api::{Api, ApiError, Endpoint, Result, PERMIT_ANYONE, PERMIT_USER};
+use pm_api::{Api, ApiError, Endpoint, Result, PERMIT_ADMIN, PERMIT_ANYONE, PERMIT_USER};
 use pm_config::Config;
 use pm_notifications::{Action, Notification, Notifications};
 use serde_json::json;
 
 use crate::service::CFG_API_KEYS;
 
-/// Registers `app/profile`, `app/auth` and `debug/core`.
+/// Registers `app/profile`, `app/auth`, `debug/core`, and `profiles/reset-routing`.
 ///
 /// `api` is an `Arc` so the `app/auth` action handler can refresh the runtime
 /// API key registry as soon as a new key is written to the config.
@@ -26,10 +26,11 @@ pub fn register_api(
     api: std::sync::Arc<Api>,
     config: std::sync::Arc<Config>,
     notifications: std::sync::Arc<Notifications>,
-    netquery_db: std::sync::Arc<pm_netquery::Database>,
-    profiles: std::sync::Arc<crate::firewall::CoreProfiles>,
+    firewall: std::sync::Arc<crate::firewall::Firewall>,
     data_dir: impl AsRef<std::path::Path>,
 ) -> Result<()> {
+    let netquery_db = std::sync::Arc::clone(&firewall.netquery_db);
+    let profiles = std::sync::Arc::clone(&firewall.profiles);
     register_profile_icon_api(&api, data_dir.as_ref())?;
 
     api.register_endpoint(
@@ -95,6 +96,31 @@ pub fn register_api(
             let style = request.query_param("style").unwrap_or_default();
             let chains = pm_compat::iptables::SystemChainLister::new();
             Ok(debug_info(&netquery_db, style, &chains).into_bytes())
+        }),
+    )?;
+
+    let reset_fw = std::sync::Arc::clone(&firewall);
+    api.register_endpoint(
+        Endpoint::new(
+            "profiles/reset-routing",
+            "Reset Per-App VPN and Split Tunnel Overrides",
+            "Clears per-app spn/use and splittun/use overrides across all local profiles so they inherit global defaults.",
+        )
+        .with_write(PERMIT_ADMIN)
+        .with_struct(move |_request| {
+            let updated_ids = reset_fw
+                .profiles
+                .store()
+                .clear_routing_overrides()
+                .map_err(|error| ApiError::Message(error.to_string()).with_status(500))?;
+            if let Err(error) = reset_fw.profiles.refresh() {
+                return Err(ApiError::Message(error).with_status(500));
+            }
+            reset_fw.reset_routing_flows(true);
+            Ok(json!({
+                "updated": updated_ids.len(),
+                "profiles": updated_ids,
+            }))
         }),
     )?;
 

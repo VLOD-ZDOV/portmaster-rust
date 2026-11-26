@@ -17,7 +17,7 @@ use pm_proxy::{
     SharedDecider, TcpProxy, TcpProxyConfig, UdpProxy, UdpProxyConfig,
 };
 
-use crate::{InterfaceEnv, RequestQueue, SPLIT_TUN_PORT};
+use crate::{InterfaceEnv, RequestQueue, SPLIT_TUN_PORT, TUNNEL_PORT};
 
 /// The running split tunnel proxies.
 #[derive(Default)]
@@ -48,6 +48,15 @@ impl Proxies {
         env: &dyn InterfaceEnv,
     ) -> Result<(), String> {
         self.start_on(SPLIT_TUN_PORT, queue, env).await
+    }
+
+    /// Starts the proxies on the VPN / Xray tunnel port (`717`).
+    pub async fn start_tunnel(
+        &self,
+        queue: Arc<RequestQueue>,
+        env: &dyn InterfaceEnv,
+    ) -> Result<(), String> {
+        self.start_on(TUNNEL_PORT, queue, env).await
     }
 
     /// Starts the proxies on the given port; `0` selects a free port.

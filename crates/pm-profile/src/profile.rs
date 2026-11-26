@@ -73,6 +73,25 @@ pub(crate) fn sanitize_legacy_config(mut config: Map<String, Value>) -> Map<Stri
     config
 }
 
+/// Clears per-app `spn/use` and `splittun/use` overrides so a profile inherits
+/// global routing settings again, while also sanitizing legacy `usagePolicy` strings.
+pub(crate) fn clear_routing_overrides_map(config: Map<String, Value>) -> Map<String, Value> {
+    let mut config = sanitize_legacy_config(config);
+    for (section, key) in [("spn", "use"), ("splittun", "use")] {
+        config.remove(&format!("{section}/{key}"));
+        let remove_section = if let Some(section_obj) = config.get_mut(section).and_then(Value::as_object_mut) {
+            section_obj.remove(key);
+            section_obj.is_empty()
+        } else {
+            false
+        };
+        if remove_section {
+            config.remove(section);
+        }
+    }
+    config
+}
+
 /// A profile that predefines the security settings for applications.
 ///
 /// Field names and order match the Go struct.

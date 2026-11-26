@@ -23,5 +23,5 @@ pub use config::{register_options, CFG_OPTION_SPLIT_TUN_ENABLE_KEY};
 pub use proxies::Proxies;
 pub use requests::{
     BestPhysicalDefaultInterfaces, InterfaceEnv, InterfaceInfo, PendingRequest, RequestQueue,
-    PENDING_REQUEST_TTL, SPLIT_TUN_PORT,
+    PENDING_REQUEST_TTL, SPLIT_TUN_PORT, TUNNEL_PORT,
 };

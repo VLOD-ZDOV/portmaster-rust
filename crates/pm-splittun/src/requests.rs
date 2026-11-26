@@ -15,6 +15,9 @@ use pm_network::{Connection, JsonIp, SplitTunContext};
 use pm_proxy::{LocalBinding, UpstreamProxy};
 use tokio_util::sync::CancellationToken;
 
+/// Port the VPN / Xray tunnel proxies listen on.
+pub const TUNNEL_PORT: u16 = 717;
+
 /// Port the split tunnel proxies listen on.
 pub const SPLIT_TUN_PORT: u16 = 719;
 

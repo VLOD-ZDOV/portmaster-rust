@@ -241,69 +241,21 @@ pub fn register_api(xray: &Arc<Xray>, api: &Api) -> pm_api::Result<()> {
         )
         .with_write(PERMIT_ADMIN)
         .with_struct(move |request| {
-            if !connect.is_enabled() {
-                return Err(crate::Error::Disabled.api());
-            }
             let payload: ConnectRequest = request.body_json()?;
-            if payload.node_id.trim().is_empty() {
-                let status = connect.connect_last().map_err(crate::Error::api)?;
-                return serde_json::to_value(status).map_err(pm_api::ApiError::Json);
-            }
-            let node = connect.store.get_node(&payload.node_id).map_err(crate::Error::api)?;
-            let rules = connect.routing_rules();
-            let custom_rules = if rules.is_empty() { None } else { Some(rules.as_slice()) };
-            let inbound_port = payload
-                .inbound_port
-                .unwrap_or_else(|| connect.configured_inbound_port());
-            if inbound_port == 0 {
+            if let Some(0) = payload.inbound_port {
                 return Err(pm_api::ApiError::WithStatus {
                     status: 400,
                     message: "inboundPort must be between 1 and 65535".to_string(),
                 });
             }
-            if let Err(error) = connect
-                .manager
-                .connect_with_rules(
-                    &node,
-                    inbound_port,
-                    connect.configured_inbound(),
-                    custom_rules,
-                )
-            {
-                connect.store.clear_active();
-                connect.reset_vpn_config();
-                return Err(crate::Error::api(error));
-            }
-            connect
-                .store
-                .set_active(&node.subscription_id, &node.id)
-                .map_err(crate::Error::api)?;
-            let _ = connect.config.set_config_option(
-                "xray/inboundPort",
-                serde_json::Value::Number(u64::from(inbound_port).into()),
-            );
-            let _ = connect.config.set_config_option("spn/enable", serde_json::Value::Bool(true));
-            // Xray is VPN routing, not Split Tunnel. Do not enable Split Tunnel
-            // or set its upstream proxy to Xray here. Only clear a stale value
-            // written by older versions.
-            let scheme = if matches!(connect.configured_inbound(), crate::InboundProtocol::Http) {
-                "http"
+            let status = if payload.node_id.trim().is_empty() {
+                connect.connect_last().map_err(crate::Error::api)?
             } else {
-                "socks5"
+                connect
+                    .connect_node(&payload.node_id, payload.inbound_port)
+                    .map_err(crate::Error::api)?
             };
-            let xray_proxy = format!("{scheme}://127.0.0.1:{inbound_port}");
-            if connect.config.get_as_string("splittun/proxy", "")() == xray_proxy {
-                let _ = connect.config.set_config_option(
-                    "splittun/proxy",
-                    serde_json::Value::String(String::new()),
-                );
-            }
-            let probe_xray = Arc::clone(&connect);
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(300));
-                probe_xray.manager.probe_exit_ip(Some(&probe_xray.geoip));
-            });
-            serde_json::to_value(connect.manager.status()).map_err(pm_api::ApiError::Json)
+            serde_json::to_value(status).map_err(pm_api::ApiError::Json)
         }),
     )?;
 

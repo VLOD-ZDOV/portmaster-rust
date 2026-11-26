@@ -148,23 +148,58 @@ impl AppProfile {
         }
     }
 
-    /// Returns the per-profile VPN override, or `None` when the global
-    /// `spn/use` default applies.
-    pub fn vpn_route_override(&self) -> Option<bool> {
+    fn read_bool_option(&self, flat_key: &str, section: &str, nested_key: &str) -> Option<bool> {
         let cfg = self.config.as_ref()?;
-        if let Some(value) = cfg.get("spn/use") {
-            if let Some(enabled) = value.as_bool() {
-                return Some(enabled);
-            }
+        if let Some(enabled) = cfg.get(flat_key).and_then(Value::as_bool) {
+            return Some(enabled);
         }
-        if let Some(spn) = cfg.get("spn") {
-            if let Some(value) = spn.get("use") {
-                if let Some(enabled) = value.as_bool() {
-                    return Some(enabled);
+        cfg.get(section)
+            .and_then(|obj| obj.get(nested_key))
+            .and_then(Value::as_bool)
+    }
+
+    fn write_bool_option(
+        &mut self,
+        flat_key: &str,
+        section: &str,
+        nested_key: &str,
+        value: Option<bool>,
+    ) {
+        let mut map = match self.config.take() {
+            Some(Value::Object(m)) => m,
+            _ => Map::new(),
+        };
+        match value {
+            Some(enabled) => {
+                map.insert(flat_key.to_string(), Value::Bool(enabled));
+                if let Some(obj) = map.get_mut(section).and_then(Value::as_object_mut) {
+                    obj.remove(nested_key);
+                }
+            }
+            None => {
+                map.remove(flat_key);
+                let remove_section = if let Some(obj) = map.get_mut(section).and_then(Value::as_object_mut) {
+                    obj.remove(nested_key);
+                    obj.is_empty()
+                } else {
+                    false
+                };
+                if remove_section {
+                    map.remove(section);
                 }
             }
         }
-        None
+        self.config = if map.is_empty() {
+            None
+        } else {
+            Some(Value::Object(map))
+        };
+    }
+
+    /// Returns the per-profile VPN override, or `None` when the global
+    /// `spn/use` default applies.
+    pub fn vpn_route_override(&self) -> Option<bool> {
+        self.read_bool_option("spn/use", "spn", "use")
     }
 
     /// Returns true if this profile is configured to route via VPN (Xray),
@@ -178,21 +213,29 @@ impl AppProfile {
         self.vpn_route_override().unwrap_or(global_default)
     }
 
+    /// Sets or clears the per-app VPN override (`None` inherits global `spn/use`).
+    pub fn set_vpn_route_override(&mut self, override_val: Option<bool>) {
+        self.write_bool_option("spn/use", "spn", "use", override_val);
+    }
+
     /// Updates this profile's configuration to enable or disable VPN routing.
     pub fn set_route_via_vpn(&mut self, route_vpn: bool) {
-        let mut map = match self.config.take() {
-            Some(Value::Object(m)) => m,
-            _ => Map::new(),
-        };
+        self.set_vpn_route_override(Some(route_vpn));
+    }
 
-        // VPN routing is controlled by `spn/use`. Split Tunnel
-        // (`splittun/use`, `splittun/usagePolicy`) is a separate feature and
-        // must be preserved when toggling VPN.
-        map.insert(
-            "spn/use".to_string(),
-            Value::Bool(route_vpn),
-        );
-        self.config = Some(Value::Object(map));
+    /// Returns explicit Split Tunnel override if set (`splittun/use`), or `None` when inheriting global.
+    pub fn split_tun_override(&self) -> Option<bool> {
+        self.read_bool_option("splittun/use", "splittun", "use")
+    }
+
+    /// Returns the effective Split Tunnel state with the global `splittun/use` default.
+    pub fn route_via_split_tun_with_default(&self, global_default: bool) -> bool {
+        self.split_tun_override().unwrap_or(global_default)
+    }
+
+    /// Sets or clears the per-app Split Tunnel override (`None` inherits global `splittun/use`).
+    pub fn set_split_tun_override(&mut self, override_val: Option<bool>) {
+        self.write_bool_option("splittun/use", "splittun", "use", override_val);
     }
 
     /// Returns default action ("permit", "block", "ask" or "default").

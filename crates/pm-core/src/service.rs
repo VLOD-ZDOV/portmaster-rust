@@ -16,7 +16,7 @@ use crate::api_auth::{ApiAuthenticator, SystemLookup};
 use crate::cli::Options;
 
 /// Current Portmaster release version.
-pub const PORTMASTER_VERSION: &str = "2.2.31";
+pub const PORTMASTER_VERSION: &str = "2.2.32";
 /// GitHub repository for update checks.
 pub const CFG_GITHUB_RELEASE_REPO: &str = "core/updates/githubRepo";
 
@@ -88,10 +88,14 @@ pub struct Service {
     /// Set only when the stop was requested by a restart (API or updater), so
     /// `main` can exit with [`crate::cli::RESTART_EXIT_CODE`] instead of 0.
     restart_requested: Arc<std::sync::atomic::AtomicBool>,
-    /// Split tunnel proxies.
+    /// Split tunnel proxies (port 719).
     pub split_proxies: Arc<pm_splittun::Proxies>,
     /// Pending split tunnel requests.
     pub split_queue: Arc<pm_splittun::RequestQueue>,
+    /// VPN / Xray tunnel proxies (port 717).
+    pub tunnel_proxies: Arc<pm_splittun::Proxies>,
+    /// Pending VPN / Xray tunnel requests.
+    pub tunnel_queue: Arc<pm_splittun::RequestQueue>,
     /// Profile and settings export/import module.
     pub sync: Arc<pm_sync::Sync>,
     /// Metrics registry module, including persistence and the /metrics API.
@@ -604,14 +608,23 @@ impl Service {
         #[cfg(not(target_os = "linux"))]
         let dns_monitor = None;
 
-        // Split tunnel request queue and proxies. The proxies are only started
-        // when the split tunnel module is enabled.
+        // Split tunnel (port 719) and VPN/Xray tunnel (port 717) queues and proxies.
         let split_queue = Arc::new(pm_splittun::RequestQueue::new());
         let split_proxies = Arc::new(pm_splittun::Proxies::new());
         let split_env = Arc::new(pm_splittun::SplitTunnelEnvAdapter::new(
             std::process::id() as i32,
             Arc::clone(&split_queue),
             Arc::clone(&split_proxies),
+            Arc::clone(&system_interfaces) as Arc<dyn pm_splittun::InterfaceEnv>,
+            Arc::clone(&profiles) as Arc<dyn pm_splittun::SplitTunnelProfiles>,
+        ));
+
+        let tunnel_queue = Arc::new(pm_splittun::RequestQueue::new());
+        let tunnel_proxies = Arc::new(pm_splittun::Proxies::new());
+        let tunnel_adapter = Arc::new(pm_splittun::SplitTunnelEnvAdapter::new(
+            std::process::id() as i32,
+            Arc::clone(&tunnel_queue),
+            Arc::clone(&tunnel_proxies),
             Arc::clone(&system_interfaces) as Arc<dyn pm_splittun::InterfaceEnv>,
             Arc::clone(&profiles) as Arc<dyn pm_splittun::SplitTunnelProfiles>,
         ));
@@ -631,6 +644,7 @@ impl Service {
                 resolver: Arc::new(dns.resolver().clone()),
                 profiles,
                 split_tunnel: split_env,
+                tunnel_adapter,
                 ip_info,
                 compat: Arc::clone(&compat),
                 interop: Arc::clone(&interop),
@@ -738,8 +752,7 @@ impl Service {
             Arc::clone(&api),
             Arc::clone(&config),
             Arc::clone(&notifications),
-            Arc::clone(&firewall.netquery_db),
-            Arc::clone(&firewall.profiles),
+            Arc::clone(&firewall),
             &options.data_dir,
         )
         .map_err(|error| anyhow::anyhow!("register core api: {error}"))?;
@@ -772,14 +785,16 @@ impl Service {
         xray.start();
         crate::account_api::register_spn_and_user_profile(&runtime, &databases, Arc::clone(&xray));
 
-        // Watch for external changes to `spn/enable` (e.g. from UI, CLI, or tray)
+        // Watch for external changes to `spn/enable` / `xray/*` (e.g. from UI, CLI, or tray)
         let xray_watcher = Arc::clone(&xray);
         let config_watcher = Arc::clone(&config);
         let control_watcher = Arc::clone(&control);
+        let notifications_watcher = Arc::clone(&notifications);
         let mut rx = config.subscribe_changes();
         let stop_watcher = service_stop_token.clone();
         tokio::spawn(async move {
             let mut last_state = xray_watcher.is_connected() && xray_watcher.is_enabled();
+            let mut last_rules = xray_watcher.routing_rules();
             let mut recovery_failures = 0u32;
             let mut stable_since: Option<std::time::Instant> = if xray_watcher.is_connected() {
                 Some(std::time::Instant::now())
@@ -787,7 +802,9 @@ impl Service {
                 None
             };
             let mut health = tokio::time::interval(Duration::from_secs(5));
-            while !stop_watcher.is_cancelled() {
+            health.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+            loop {
                 tokio::select! {
                     _ = stop_watcher.cancelled() => break,
                     _ = health.tick() => {
@@ -809,6 +826,11 @@ impl Service {
                             recovery_failures += 1;
                             if recovery_failures > 3 {
                                 tracing::warn!("Xray keeps dying; disabling spn/enable");
+                                notifications_watcher.notify(pm_notifications::Notification::warning(
+                                    "xray:connect-failed",
+                                    "Xray VPN отключён",
+                                    "Процесс Xray завершился с ошибкой. Проверьте выбранный сервер и бинарник Xray.",
+                                ));
                                 let _ = config_watcher.set_config_option(
                                     "spn/enable",
                                     serde_json::Value::Bool(false),
@@ -821,6 +843,7 @@ impl Service {
                                     Ok(status) if status.connected => {
                                         stable_since = Some(std::time::Instant::now());
                                         last_state = true;
+                                        last_rules = xray_watcher.routing_rules();
                                     }
                                     Ok(status) => {
                                         tracing::warn!(?status.state, "Xray recovery returned without a live process");
@@ -873,9 +896,17 @@ impl Service {
                             if desired && !xray_watcher.is_connected() {
                                 tracing::info!("spn/enable is true, connecting Xray to last node");
                                 match xray_watcher.connect_last() {
-                                    Ok(status) if status.connected => recovery_failures = 0,
+                                    Ok(status) if status.connected => {
+                                        recovery_failures = 0;
+                                        last_rules = xray_watcher.routing_rules();
+                                    }
                                     Ok(status) => {
                                         tracing::warn!(?status.state, "Xray did not stay connected");
+                                        notifications_watcher.notify(pm_notifications::Notification::warning(
+                                            "xray:connect-failed",
+                                            "Не удалось подключить Xray VPN",
+                                            "Процесс Xray не запустился. Проверьте сервер или переустановите Xray.",
+                                        ));
                                         let _ = config_watcher.set_config_option(
                                             "spn/enable",
                                             serde_json::Value::Bool(false),
@@ -883,6 +914,11 @@ impl Service {
                                     }
                                     Err(err) => {
                                         tracing::warn!(%err, "failed to connect Xray on spn/enable=true");
+                                        notifications_watcher.notify(pm_notifications::Notification::warning(
+                                            "xray:connect-failed",
+                                            "Не удалось подключить Xray VPN",
+                                            &err.to_string(),
+                                        ));
                                         let _ = config_watcher.set_config_option("spn/enable", serde_json::Value::Bool(false));
                                     }
                                 }
@@ -892,28 +928,32 @@ impl Service {
                             }
                         }
 
-                        // Reconnect if the live inbound settings changed while
-                        // Xray is already running; otherwise split-tunnel would
-                        // point at the old port/protocol.
+                        // Reconnect if inbound or xray/rules changed while Xray is running.
                         if desired && xray_watcher.is_connected() {
                             let wanted = (
                                 xray_watcher.configured_inbound_port(),
                                 xray_watcher.configured_inbound(),
                             );
-                            if xray_watcher.active_inbound() != Some(wanted) {
+                            let wanted_rules = xray_watcher.routing_rules();
+                            if xray_watcher.active_inbound() != Some(wanted)
+                                || wanted_rules != last_rules
+                            {
                                 tracing::info!(
                                     port = wanted.0,
                                     protocol = wanted.1.as_str(),
-                                    "xray inbound settings changed; reconnecting"
+                                    "xray settings changed; reconnecting"
                                 );
+                                last_rules = wanted_rules;
                                 if let Err(err) = xray_watcher.connect_last() {
-                                    tracing::warn!(%err, "failed to reconnect Xray after inbound change");
+                                    tracing::warn!(%err, "failed to reconnect Xray after config change");
                                     let _ = config_watcher.set_config_option(
                                         "spn/enable",
                                         serde_json::Value::Bool(false),
                                     );
                                 }
                             }
+                        } else {
+                            last_rules = xray_watcher.routing_rules();
                         }
                     }
                 }
@@ -955,6 +995,8 @@ impl Service {
             restart_requested,
             split_proxies: Arc::clone(&split_proxies),
             split_queue: Arc::clone(&split_queue),
+            tunnel_proxies: Arc::clone(&tunnel_proxies),
+            tunnel_queue: Arc::clone(&tunnel_queue),
             sync,
             metrics,
             xray,
@@ -1322,34 +1364,33 @@ impl Service {
             }
         });
 
-        // Start the split tunnel proxies when split tunneling or Xray routing
-        // is enabled, like Go's splittun module. Per-app proxy/interface
-        // settings are resolved per connection, not here: gating on the global
-        // strings would silently disable split tunneling for the common
-        // per-app configuration flow.
-        let proxies_wanted = {
-            let splittun_on = self.config.get_as_bool("splittun/enable", false)();
-            let spn_on = self.config.get_as_bool("spn/enable", false)();
-            splittun_on || spn_on
-        };
-        if proxies_wanted {
-            if let Err(error) = self
-                .split_proxies
-                .start(self.split_queue.clone(), self.system_interfaces.as_ref())
-                .await
-            {
-                tracing::error!(%error, "splittun: failed to start proxies");
-            }
-        }
+        // Start Split Tunnel (719) and VPN/Xray Tunnel (717) independently.
+        let initial_split = self.config.get_as_bool("splittun/enable", false)();
+        let initial_tunnel = self.config.get_as_bool("spn/enable", false)();
+        sync_proxy_pair(
+            &self.split_proxies,
+            &self.split_queue,
+            &self.tunnel_proxies,
+            &self.tunnel_queue,
+            self.system_interfaces.as_ref(),
+            initial_split,
+            initial_tunnel,
+        )
+        .await;
 
-        // Dynamically manage split proxies lifecycle on config changes
+        // Live-sync tunnel/split proxy listeners and flush conntrack/verdicts
+        // strictly in order whenever routing or filtering settings change.
         let proxies_dyn = Arc::clone(&self.split_proxies);
         let queue_dyn = Arc::clone(&self.split_queue);
+        let tunnel_proxies_dyn = Arc::clone(&self.tunnel_proxies);
+        let tunnel_queue_dyn = Arc::clone(&self.tunnel_queue);
         let ifaces_dyn = Arc::clone(&self.system_interfaces);
         let config_dyn = Arc::clone(&self.config);
+        let firewall_dyn = Arc::clone(&self.firewall);
         let mut config_rx = self.config.subscribe_changes();
         let stop_token_dyn = self.stop_token.clone();
         let proxies_dyn_worker = tokio::spawn(async move {
+            let mut prev_snapshot = routing_config_snapshot(&config_dyn);
             loop {
                 tokio::select! {
                     _ = stop_token_dyn.cancelled() => break,
@@ -1358,21 +1399,74 @@ impl Service {
                         match event {
                             Ok(()) => {}
                             Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                                tracing::warn!(skipped, "splittun: config watcher lagged behind; re-reading state");
-                                // Fall through and apply the current config.
+                                tracing::warn!(skipped, "routing: config watcher lagged behind; re-reading state");
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                         }
-                        let splittun_on = config_dyn.get_as_bool("splittun/enable", false)();
-                        let spn_on = config_dyn.get_as_bool("spn/enable", false)();
-                        let wanted = splittun_on || spn_on;
-                        let running = proxies_dyn.is_ready();
-                        if wanted && !running {
+                        let current = routing_config_snapshot(&config_dyn);
+                        let splittun_on = current.splittun_enable;
+                        let spn_on = current.spn_enable;
+
+                        // Start newly requested proxy listeners BEFORE flushing
+                        // firewall flows so check_tunneling sees is_ready() == true.
+                        if splittun_on && !proxies_dyn.is_ready() {
                             if let Err(err) = proxies_dyn.start(queue_dyn.clone(), ifaces_dyn.as_ref()).await {
-                                tracing::error!(%err, "splittun: failed to start dynamic proxies");
+                                tracing::error!(%err, "splittun: failed to start proxies on port 719");
                             }
-                        } else if !wanted && running {
+                        }
+                        if spn_on && !tunnel_proxies_dyn.is_ready() {
+                            if let Err(err) = tunnel_proxies_dyn.start_tunnel(tunnel_queue_dyn.clone(), ifaces_dyn.as_ref()).await {
+                                tracing::error!(%err, "tunnel: failed to start Xray tunnel proxies on port 717");
+                            }
+                        }
+
+                        if current != prev_snapshot {
+                            prev_snapshot = current;
+                            if let Err(error) = firewall_dyn.profiles.refresh() {
+                                tracing::warn!(%error, "profile: failed to reload before routing reset");
+                            }
+                            firewall_dyn.reset_routing_flows(true);
+                        }
+
+                        // Stop unneeded proxies AFTER flows were re-evaluated off 717/719.
+                        if !splittun_on && proxies_dyn.is_ready() {
                             proxies_dyn.stop();
+                        }
+                        if !spn_on && tunnel_proxies_dyn.is_ready() {
+                            tunnel_proxies_dyn.stop();
+                        }
+                    }
+                }
+            }
+        });
+
+        // Watch per-app profile writes (`core:profiles/local/*`) so UI toggles
+        // immediately refresh LayeredProfile caches and re-evaluate connections.
+        let firewall_db_watch = Arc::clone(&self.firewall);
+        let stop_token_profiles = self.stop_token.clone();
+        let profile_sub_res = databases
+            .internal_interface()
+            .subscribe(pm_database::Query::new("core:profiles/local/"));
+        let profile_db_watcher = tokio::spawn(async move {
+            let Ok(mut sub) = profile_sub_res else {
+                tracing::warn!("profile: failed to subscribe to local profile DB updates");
+                return;
+            };
+            loop {
+                tokio::select! {
+                    _ = stop_token_profiles.cancelled() => break,
+                    update = sub.recv() => {
+                        let Some(update) = update else { break };
+                        let Some(id) = update.key.key.strip_prefix("profiles/local/") else {
+                            continue;
+                        };
+                        if id.is_empty() || id.contains('/') {
+                            continue;
+                        }
+                        if let Err(error) = firewall_db_watch.profiles.refresh() {
+                            tracing::warn!(%error, %id, "profile: failed to refresh profiles after DB write");
+                        } else {
+                            firewall_db_watch.reset_profile_verdicts(pm_profile::SOURCE_LOCAL, id);
                         }
                     }
                 }
@@ -1428,6 +1522,7 @@ impl Service {
         list_watcher.abort();
         broadcasts_worker.abort();
         proxies_dyn_worker.abort();
+        profile_db_watcher.abort();
         maintenance_worker.abort();
 
         // Mark API not ready immediately
@@ -1440,6 +1535,7 @@ impl Service {
             tracing::warn!(%error, "filter: failed to stop interception");
         }
         self.interop_env.set_interception_started(false);
+        self.tunnel_proxies.stop();
         self.split_proxies.stop();
         self.compat.stop();
 
@@ -1484,6 +1580,7 @@ impl Service {
             tracing::warn!(%error, "filter: failed to stop interception");
         }
         self.interop_env.set_interception_started(false);
+        self.tunnel_proxies.stop();
         self.split_proxies.stop();
         self.compat.stop();
         self.xray.stop();
@@ -1505,6 +1602,7 @@ impl Service {
     /// Shuts the service down.
     pub fn shutdown(&self) -> anyhow::Result<()> {
         self.api.set_ready(false);
+        self.tunnel_proxies.stop();
         self.split_proxies.stop();
         self.compat.stop();
         self.xray.stop();
@@ -1520,6 +1618,63 @@ impl Service {
             .clean_up();
         self.databases.shutdown()?;
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RoutingSnapshot {
+    filter_enable: bool,
+    spn_enable: bool,
+    spn_use: bool,
+    spn_policy: Vec<String>,
+    xray_port: i64,
+    xray_proto: String,
+    splittun_enable: bool,
+    splittun_use: bool,
+    splittun_proxy: String,
+    splittun_iface: String,
+    splittun_policy: Vec<String>,
+}
+
+fn routing_config_snapshot(config: &Arc<Config>) -> RoutingSnapshot {
+    RoutingSnapshot {
+        filter_enable: config.get_as_bool("filter/enable", true)(),
+        spn_enable: config.get_as_bool("spn/enable", false)(),
+        spn_use: config.get_as_bool("spn/use", false)(),
+        spn_policy: config.get_as_string_array("spn/usagePolicy", &[])(),
+        xray_port: config.get_as_int("xray/inboundPort", 1080)(),
+        xray_proto: config.get_as_string("xray/inboundProtocol", "socks")(),
+        splittun_enable: config.get_as_bool("splittun/enable", false)(),
+        splittun_use: config.get_as_bool("splittun/use", false)(),
+        splittun_proxy: config.get_as_string("splittun/proxy", "")(),
+        splittun_iface: config.get_as_string("splittun/networkInterface", "")(),
+        splittun_policy: config.get_as_string_array("splittun/usagePolicy", &[])(),
+    }
+}
+
+async fn sync_proxy_pair(
+    split_proxies: &pm_splittun::Proxies,
+    split_queue: &Arc<pm_splittun::RequestQueue>,
+    tunnel_proxies: &pm_splittun::Proxies,
+    tunnel_queue: &Arc<pm_splittun::RequestQueue>,
+    ifaces: &pm_splittun::SystemInterfaceEnv,
+    split_wanted: bool,
+    tunnel_wanted: bool,
+) {
+    if split_wanted && !split_proxies.is_ready() {
+        if let Err(error) = split_proxies.start(split_queue.clone(), ifaces).await {
+            tracing::error!(%error, "splittun: failed to start proxies on port 719");
+        }
+    } else if !split_wanted && split_proxies.is_ready() {
+        split_proxies.stop();
+    }
+
+    if tunnel_wanted && !tunnel_proxies.is_ready() {
+        if let Err(error) = tunnel_proxies.start_tunnel(tunnel_queue.clone(), ifaces).await {
+            tracing::error!(%error, "tunnel: failed to start Xray tunnel proxies on port 717");
+        }
+    } else if !tunnel_wanted && tunnel_proxies.is_ready() {
+        tunnel_proxies.stop();
     }
 }
 

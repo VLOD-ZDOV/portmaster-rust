@@ -258,4 +258,35 @@ fn store_get_accepts_a_bare_local_id() {
     });
     store.save(&profile).unwrap();
     assert_eq!(store.get(&profile.id).unwrap().id, profile.id);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn clear_routing_overrides_removes_per_app_spn_and_splittun_flags() {
+    let databases = Arc::new(Databases::without_disk());
+    databases.register_injected("core", "core database").unwrap();
+    databases.inject("core", Box::new(MemoryStorage::new())).unwrap();
+    let store = ProfileStore::new(databases.internal_interface());
+
+    let mut config = serde_json::Map::new();
+    config.insert("spn/use".into(), serde_json::json!(true));
+    config.insert("splittun/use".into(), serde_json::json!(true));
+    config.insert("filter/defaultAction".into(), serde_json::json!("permit"));
+    let profile = Profile::new(Profile {
+        source: SOURCE_LOCAL.to_string(),
+        name: "Browser".to_string(),
+        config,
+        ..Profile::default()
+    });
+    store.save(&profile).unwrap();
+
+    let updated = store.clear_routing_overrides().unwrap();
+    assert_eq!(updated, vec![profile.id.clone()]);
+
+    let loaded = store.get(&profile.scoped_id()).unwrap();
+    assert!(!loaded.config.contains_key("spn/use"));
+    assert!(!loaded.config.contains_key("spn"));
+    assert!(!loaded.config.contains_key("splittun/use"));
+    assert!(!loaded.config.contains_key("splittun"));
+    assert_eq!(loaded.config["filter"]["defaultAction"], serde_json::json!("permit"));
 }

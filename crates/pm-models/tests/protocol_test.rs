@@ -120,3 +120,38 @@ fn test_xray_models() {
     assert_eq!(deserialized.exit_country.as_deref(), Some("NL"));
     assert_eq!(deserialized.traffic.unwrap().formatted_downlink(), "25.0 MB");
 }
+
+#[test]
+fn test_app_profile_three_state_overrides_and_subsystems() {
+    let mut profile = AppProfile::new("app", "App");
+    assert_eq!(profile.vpn_route_override(), None);
+    assert_eq!(profile.split_tun_override(), None);
+
+    profile.set_vpn_route_override(Some(true));
+    profile.set_split_tun_override(Some(false));
+    assert_eq!(profile.vpn_route_override(), Some(true));
+    assert_eq!(profile.split_tun_override(), Some(false));
+
+    profile.set_vpn_route_override(None);
+    profile.set_split_tun_override(None);
+    assert_eq!(profile.vpn_route_override(), None);
+    assert_eq!(profile.split_tun_override(), None);
+    assert!(profile.config.is_none());
+
+    let spn_setting = Setting {
+        key: "spn/use".to_string(),
+        name: "Route".to_string(),
+        description: String::new(),
+        help: String::new(),
+        opt_type: OptionType::Bool,
+        value: None,
+        default_value: json!(false),
+        expertise_level: 0,
+        release_level: 0,
+        annotations: SettingAnnotations::default(),
+        possible_values: vec![],
+        requires_restart: false,
+        meta: None,
+    };
+    assert_eq!(spn_setting.subsystem(), "xray");
+}
