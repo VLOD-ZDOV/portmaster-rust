@@ -264,6 +264,18 @@ fn serve(module: &str, requested_path: &str, archives: &UiArchives) -> AxumRespo
     if let Ok(value) = HeaderValue::from_str(content_type(&path)) {
         response.headers_mut().insert(header::CONTENT_TYPE, value);
     }
+    let cache_control = if path.ends_with(".html") || path.ends_with(".htm") {
+        "no-store, no-cache, must-revalidate"
+    } else {
+        "no-cache"
+    };
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(cache_control),
+    );
+    response
+        .headers_mut()
+        .insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
     response
 }
 

@@ -158,8 +158,12 @@ function Invoke-PortmasterPatch {
             Copy-Item -Path (Join-Path $latestBackup "portmaster-core.exe") -Destination (Join-Path $InstallDir "portmaster-core.exe") -Force
         }
         if (Test-Path (Join-Path $latestBackup "portmaster.exe")) {
-            Get-Process -Name "portmaster" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Get-Process -Name "*portmaster*" -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -notlike "*core*" } | Stop-Process -Force -ErrorAction SilentlyContinue
             Copy-Item -Path (Join-Path $latestBackup "portmaster.exe") -Destination (Join-Path $InstallDir "portmaster.exe") -Force
+        }
+        if (Test-Path (Join-Path $latestBackup "portmaster.zip")) {
+            Copy-Item -Path (Join-Path $latestBackup "portmaster.zip") -Destination (Join-Path $InstallDir "portmaster.zip") -Force
+            Copy-Item -Path (Join-Path $latestBackup "portmaster.zip") -Destination (Join-Path $DataDir "portmaster.zip") -Force
         }
         if (Test-Path (Join-Path $latestBackup "config.json")) {
             Copy-Item -Path (Join-Path $latestBackup "config.json") -Destination (Join-Path $DataDir "config.json") -Force
@@ -200,54 +204,77 @@ function Invoke-PortmasterPatch {
     $pilotUrl = "$BaseUrl/pilot-web.zip"
     $appUrl = "$BaseUrl/portmaster-app-windows-amd64.exe"
 
+    function Invoke-DownloadWithRetry {
+        param(
+            [string]$Uri,
+            [string]$OutFile,
+            [string]$Label,
+            [bool]$Required = $true
+        )
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            try {
+                Write-Host "[*] Downloading $Label ($attempt/3) from $Uri..." -ForegroundColor Gray
+                Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing -Headers @{ "User-Agent" = "PortmasterPatcher" }
+                if ((Test-Path $OutFile) -and ((Get-Item $OutFile).Length -gt 0)) {
+                    return $true
+                }
+            } catch {
+                Write-Host "[!] Attempt $attempt failed for ${Label}: $($_.Exception.Message)" -ForegroundColor Yellow
+                # On retry 1 failure, stop Portmaster firewall/kext so it cannot block GitHub downloads.
+                $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+                if ($svc -and $svc.Status -eq "Running") {
+                    Write-Host "[*] Stopping $ServiceName and cleaning kext before retrying download..." -ForegroundColor Yellow
+                    Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
+                    Start-Sleep -Seconds 1
+                    Repair-NetworkState
+                }
+                Start-Sleep -Seconds 2
+            }
+        }
+        if ($Required) {
+            throw "Failed to download required file '$Label' from '$Uri'."
+        }
+        return $false
+    }
+
     $tempDir = Join-Path $env:TEMP ("pm-patch-" + [System.Guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 
     try {
-        # Download binary
         $tempBin = Join-Path $tempDir $binName
-        Write-Host "[*] Downloading $binName from $binUrl..." -ForegroundColor Gray
-        Invoke-WebRequest -Uri $binUrl -OutFile $tempBin -UseBasicParsing -Headers @{ "User-Agent" = "PortmasterPatcher" }
+        $null = Invoke-DownloadWithRetry -Uri $binUrl -OutFile $tempBin -Label $binName -Required $true
 
-        # Download Tauri tray UI executable
         $tempApp = Join-Path $tempDir "portmaster.exe"
-        $hasApp = $false
-        try {
-            Write-Host "[*] Downloading tray UI binary (portmaster-app-windows-amd64.exe)..." -ForegroundColor Gray
-            Invoke-WebRequest -Uri $appUrl -OutFile $tempApp -UseBasicParsing -Headers @{ "User-Agent" = "PortmasterPatcher" }
-            $hasApp = $true
-        } catch {
-            Write-Host "[*] Tray UI binary not found or download failed, continuing without tray binary update." -ForegroundColor Yellow
-        }
+        $hasApp = Invoke-DownloadWithRetry -Uri $appUrl -OutFile $tempApp -Label "portmaster-app-windows-amd64.exe" -Required $true
 
-        # Download UI bundle
         $tempZip = Join-Path $tempDir "portmaster.zip"
-        $hasUi = $false
-        try {
-            Write-Host "[*] Downloading UI bundle (portmaster.zip)..." -ForegroundColor Gray
-            Invoke-WebRequest -Uri $uiUrl -OutFile $tempZip -UseBasicParsing -Headers @{ "User-Agent" = "PortmasterPatcher" }
-            $hasUi = $true
-        } catch {
-            Write-Host "[*] UI bundle not found or download failed, continuing without UI update." -ForegroundColor Yellow
-        }
+        $hasUi = Invoke-DownloadWithRetry -Uri $uiUrl -OutFile $tempZip -Label "portmaster.zip" -Required $true
 
-        # Download Rust pilot UI bundle (served under /pilot by the Rust core).
         $tempPilotZip = Join-Path $tempDir "pilot-web.zip"
-        $hasPilot = $false
-        try {
-            Write-Host "[*] Downloading Rust Pilot UI bundle (pilot-web.zip)..." -ForegroundColor Gray
-            Invoke-WebRequest -Uri $pilotUrl -OutFile $tempPilotZip -UseBasicParsing -Headers @{ "User-Agent" = "PortmasterPatcher" }
-            $hasPilot = $true
-        } catch {
-            Write-Host "[*] Pilot UI bundle not found or download failed, continuing." -ForegroundColor Yellow
-        }
+        $hasPilot = Invoke-DownloadWithRetry -Uri $pilotUrl -OutFile $tempPilotZip -Label "pilot-web.zip" -Required $false
 
-        # Stop Portmaster Service, tray UI & cleanup driver
-        $appWasRunning = [bool](Get-Process -Name "portmaster" -ErrorAction SilentlyContinue)
-        if ($hasApp -and $appWasRunning) {
-            Write-Host "[*] Stopping Portmaster tray UI process..." -ForegroundColor Gray
-            Get-Process -Name "portmaster" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-            Start-Sleep -Milliseconds 500
+        # Capture full exe paths of running Portmaster tray UI processes before stopping them
+        $trayProcs = Get-Process -ErrorAction SilentlyContinue | Where-Object {
+            ($_.ProcessName -ieq "portmaster" -or $_.ProcessName -ieq "portmaster-app" -or $_.ProcessName -ieq "portmaster_app")
+        }
+        $capturedTrayPaths = @()
+        $appWasRunning = $false
+        foreach ($tp in $trayProcs) {
+            $appWasRunning = $true
+            try {
+                if ($tp.Path -and ($capturedTrayPaths -notcontains $tp.Path)) {
+                    $capturedTrayPaths += $tp.Path
+                }
+            } catch {}
+        }
+        if ($appWasRunning) {
+            Write-Host "[*] Stopping Portmaster tray UI processes ($($trayProcs.Count))..." -ForegroundColor Gray
+            $trayProcs | Stop-Process -Force -ErrorAction SilentlyContinue
+            # Also release WebView2 child file locks owned by Portmaster UI
+            Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" -ErrorAction SilentlyContinue |
+                Where-Object { $_.CommandLine -match 'io\.safing\.portmaster|Portmaster' } |
+                ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+            Start-Sleep -Milliseconds 1200
         }
         $serviceRunning = $false
         $pmService = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
@@ -276,19 +303,53 @@ function Invoke-PortmasterPatch {
         if ($hasApp -and (Test-Path $existingApp)) {
             Copy-Item -Path $existingApp -Destination (Join-Path $currentBackup "portmaster.exe") -Force
         }
+        $existingZip = Join-Path $InstallDir "portmaster.zip"
+        if (Test-Path $existingZip) {
+            Copy-Item -Path $existingZip -Destination (Join-Path $currentBackup "portmaster.zip") -Force
+        }
         $existingConfig = Join-Path $DataDir "config.json"
         if (Test-Path $existingConfig) {
             Copy-Item -Path $existingConfig -Destination (Join-Path $currentBackup "config.json") -Force
             Write-Host "[*] Backed up config.json to: $currentBackup" -ForegroundColor Gray
         }
 
-        # Install new binaries
+        # Install new core binaries
         Copy-Item -Path $tempBin -Destination (Join-Path $InstallDir $binName) -Force
         Copy-Item -Path $tempBin -Destination (Join-Path $InstallDir "portmaster-core.exe") -Force
-        if ($hasApp -and (Test-Path $tempApp)) {
-            Copy-Item -Path $tempApp -Destination (Join-Path $InstallDir "portmaster.exe") -Force
-            Write-Host "[*] Updated tray UI binary: $InstallDir\portmaster.exe" -ForegroundColor Gray
+
+        # Install new tray binary in InstallDir, all captured running paths, and standard candidate paths
+        $trayDestinations = @((Join-Path $InstallDir "portmaster.exe"))
+        foreach ($cp in $capturedTrayPaths) {
+            if ($trayDestinations -notcontains $cp) {
+                $trayDestinations += $cp
+            }
         }
+        $knownTrayPaths = @(
+            "C:\Program Files\Portmaster\portmaster.exe",
+            "C:\Program Files\Safing\Portmaster\portmaster.exe",
+            (Join-Path $DataDir "updates\windows_amd64\app\portmaster-app.exe")
+        )
+        foreach ($kp in $knownTrayPaths) {
+            if ((Test-Path $kp) -and ($trayDestinations -notcontains $kp)) {
+                $trayDestinations += $kp
+            }
+        }
+        foreach ($destExe in $trayDestinations) {
+            Copy-Item -Path $tempApp -Destination $destExe -Force
+            Write-Host "[*] Updated tray UI binary: $destExe" -ForegroundColor Gray
+        }
+
+        # Verify updated tray binary actually contains the new Xray VPN strings (not legacy SPN)
+        $trayBytes = [System.IO.File]::ReadAllBytes((Join-Path $InstallDir "portmaster.exe"))
+        $trayAscii = [System.Text.Encoding]::ASCII.GetString($trayBytes)
+        $hasXrayTray = $trayAscii.Contains("Xray VPN")
+        $hasLegacySpn = $trayAscii.Contains("Enable SPN")
+        if (-not $hasXrayTray -or $hasLegacySpn) {
+            Write-Warning "Installed tray binary verification unexpected (XrayVPN=$hasXrayTray, LegacyEnableSPN=$hasLegacySpn)."
+        } else {
+            Write-Host "[+] Verified tray binary contains Xray VPN menu (no Enable SPN)." -ForegroundColor Green
+        }
+        $trayHash = (Get-FileHash -Path (Join-Path $InstallDir "portmaster.exe") -Algorithm SHA256).Hash
 
         # Also update in updates dir if present
         $updatesBin = Join-Path $DataDir "updates\windows_amd64\core\portmaster-core_windows_amd64.exe"
@@ -324,7 +385,20 @@ function Invoke-PortmasterPatch {
             $updatesUi = Join-Path $DataDir "updates\windows_amd64\ui\modules\portmaster"
             if (Test-Path (Split-Path $updatesUi)) {
                 New-Item -ItemType Directory -Path $updatesUi -Force | Out-Null
+                Copy-Item -Path $tempZip -Destination (Join-Path $updatesUi "portmaster.zip") -Force
                 Expand-Archive -Path $tempZip -DestinationPath $updatesUi -Force
+            }
+        }
+
+        # Clear WebView2 HTTP cache so the desktop window loads fresh UI bundles immediately
+        $webViewProfiles = Get-ChildItem -Path "C:\Users" -Directory -ErrorAction SilentlyContinue
+        foreach ($prof in $webViewProfiles) {
+            $ebBase = Join-Path $prof.FullName "AppData\Local\io.safing.portmaster\EBWebView\Default"
+            foreach ($cacheSub in @("Cache", "Code Cache", "GPUCache", "DawnGraphiteCache", "DawnWebGPUCache")) {
+                $cachePath = Join-Path $ebBase $cacheSub
+                if (Test-Path $cachePath) {
+                    Remove-Item -Path $cachePath -Recurse -Force -ErrorAction SilentlyContinue
+                }
             }
         }
 
@@ -397,16 +471,23 @@ function Invoke-PortmasterPatch {
             Write-Host "[!] API is still initializing; background workers are running." -ForegroundColor Yellow
         }
 
-        if ($hasApp -and $appWasRunning -and (Test-Path (Join-Path $InstallDir "portmaster.exe"))) {
-            Write-Host "[*] Relaunching Portmaster tray UI..." -ForegroundColor Gray
-            Start-Process -FilePath (Join-Path $InstallDir "portmaster.exe") -ArgumentList "--background", "--with-prompts", "--with-notifications"
+        $launchExe = if ($capturedTrayPaths.Count -gt 0 -and (Test-Path $capturedTrayPaths[0])) {
+            $capturedTrayPaths[0]
+        } else {
+            Join-Path $InstallDir "portmaster.exe"
+        }
+        if ($hasApp -and $appWasRunning -and (Test-Path $launchExe)) {
+            Write-Host "[*] Relaunching Portmaster tray UI ($launchExe)..." -ForegroundColor Gray
+            Start-Process -FilePath $launchExe -ArgumentList "--background", "--with-prompts", "--with-notifications"
         }
 
         Write-Host ""
         Write-Host "==========================================================" -ForegroundColor Green
         Write-Host " [+] Portmaster Windows patched successfully!" -ForegroundColor Green
         Write-Host "     Service: $ServiceName (Running)" -ForegroundColor Green
-        Write-Host "     Core: $binName" -ForegroundColor Green
+        Write-Host "     Core: $binName ($InstallDir\portmaster-core.exe)" -ForegroundColor Green
+        Write-Host "     Tray: $InstallDir\portmaster.exe (SHA256: $trayHash)" -ForegroundColor Green
+        Write-Host "     UI:   $InstallDir\portmaster.zip" -ForegroundColor Green
         Write-Host "     Backup saved in: $currentBackup" -ForegroundColor Green
         Write-Host "==========================================================" -ForegroundColor Green
     } finally {

@@ -45,6 +45,10 @@
         class="text-xs font-normal text-white cursor-pointer btn bg-red-400 hover:bg-red-300 py-1.5 px-3 whitespace-nowrap">
         {{ 'xray.disconnect' | t: undefined : ('' | i18nVersion) }}
       </button>
+      <button routerLink="/app/overview"
+        class="text-xs font-normal text-white cursor-pointer btn bg-gray-300 hover:bg-gray-400 py-1.5 px-3 whitespace-nowrap">
+        {{ 'xray.openAppsRouting' | t: undefined : ('' | i18nVersion) }}
+      </button>
       <button routerLink="/xray"
         class="text-xs font-normal text-white cursor-pointer btn bg-blue bg-opacity-80 hover:bg-opacity-100 hover:bg-blue py-1.5 px-3 whitespace-nowrap">
         {{ 'dash.manageXray' | t: undefined : ('' | i18nVersion) }}
@@ -191,10 +195,10 @@
   </app-dashboard-widget>
 
   <app-dashboard-widget class="flex-grow" id="connmap" style="min-height: 400px" [label]="'dash.connCountries' | t: undefined : ('' | i18nVersion)" beta="true">
-    <div class="relative w-full h-full">
-      <spn-map-renderer class="w-full h-full" mapId="dashboard-map"></spn-map-renderer>
+    <div class="relative w-full flex-1 min-h-0" style="min-height: 360px">
+      <spn-map-renderer class="block w-full h-full" mapId="dashboard-map"></spn-map-renderer>
       <div *ngIf="xrayStatus$ | async as xs"
-        class="absolute top-2 left-2 z-10 flex flex-row flex-wrap items-center gap-2 px-3 py-1.5 rounded bg-gray-200 bg-opacity-90 border border-gray-400 shadow text-xs">
+        class="absolute top-2 left-2 z-20 flex flex-row flex-wrap items-center gap-2 px-3 py-1.5 rounded bg-gray-200 bg-opacity-90 border border-gray-400 shadow text-xs">
         <span class="inline-block w-2 h-2 rounded-full"
           [ngClass]="xs.connected ? 'bg-green-400' : (spnEnabled ? 'bg-yellow-400' : 'bg-gray-400')"></span>
         <span class="font-medium text-primary">

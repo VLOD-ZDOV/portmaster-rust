@@ -111,6 +111,11 @@ async fn serves_ui_archives() {
     );
     assert_eq!(body, b"<html>portmaster ui</html>");
     assert_eq!(header(&headers, "x-frame-options"), Some("deny"));
+    assert_eq!(
+        header(&headers, "cache-control"),
+        Some("no-store, no-cache, must-revalidate")
+    );
+    assert_eq!(header(&headers, "pragma"), Some("no-cache"));
 
     // Files are served with their content type.
     let (status, headers, body) = request(address, "GET", "/ui/modules/portmaster/main.js").await;
@@ -119,6 +124,7 @@ async fn serves_ui_archives() {
         header(&headers, "content-type"),
         Some("application/javascript; charset=utf-8")
     );
+    assert_eq!(header(&headers, "cache-control"), Some("no-cache"));
     assert_eq!(body, b"console.log('ui')");
 
     let (status, headers, _) =

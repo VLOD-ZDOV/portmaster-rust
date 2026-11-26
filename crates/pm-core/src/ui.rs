@@ -130,6 +130,13 @@ async fn pilot_response(api: &Api, pilot_dir: &Path, requested: &str) -> AxumRes
     if let Ok(value) = HeaderValue::from_str(content_type) {
         response.headers_mut().insert(header::CONTENT_TYPE, value);
     }
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, no-cache, must-revalidate"),
+    );
+    response
+        .headers_mut()
+        .insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
     with_security_headers(api, response)
 }
 

@@ -23,7 +23,7 @@ export enum SortTypes {
   totalConnections = "Total Connections",
   connectionsDenied = "Denied Connections",
   connectionsAllowed = "Allowed Connections",
-  spnIdentities = "SPN Identities",
+  spnIdentities = "Xray Identities",
   bytesSent = "Bytes Sent",
   bytesReceived = "Bytes Received",
   totalBytes = "Total Bytes"
@@ -82,7 +82,7 @@ export class NetworkScoutComponent implements OnInit {
   triggerSearch = new Subject<string>();
 
   /** The current search term as entered in the input[type="text"] */
-  searchTerm: string = '';
+  searchTerm = '';
 
   /** A list of all active profiles without any search applied */
   allProfiles: _Profile[] = [];
@@ -236,7 +236,7 @@ export class NetworkScoutComponent implements OnInit {
         .pipe(
           startWith(-1),
           switchMap(() => {
-            let query: Condition = {};
+            const query: Condition = {};
             if (this.expertise.currentLevel !== ExpertiseLevel.Developer) {
               query["internal"] = { $eq: false }
             }
@@ -306,7 +306,7 @@ export class NetworkScoutComponent implements OnInit {
         // make sure our sort methods are updated.
         if (this.profiles.some(p => p.bytes_received > 0 || p.bytes_sent > 0)) {
           if (!this.sortTypes.includes(SortTypes.bytesReceived)) {
-            this.sortTypes.push.apply(this.sortTypes, bandwidthSorts)
+            this.sortTypes.push(...bandwidthSorts)
           }
 
           this.sortTypes = [...this.sortTypes];

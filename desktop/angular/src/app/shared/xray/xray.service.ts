@@ -1,7 +1,7 @@
 import { HttpClient } from '@angular/common/http';
 import { Inject, Injectable } from '@angular/core';
 import { BoolSetting, ConfigService, PORTMASTER_HTTP_API_ENDPOINT, PortapiService } from '@safing/portmaster-api';
-import { BehaviorSubject, EMPTY, Observable, catchError, debounceTime, merge, shareReplay, skip, switchMap, tap, timer } from 'rxjs';
+import { BehaviorSubject, EMPTY, Observable, catchError, debounceTime, merge, shareReplay, skip, startWith, switchMap, tap, timer } from 'rxjs';
 import { XrayNode, XrayStatus, XraySubscription } from './xray.types';
 
 /**
@@ -45,6 +45,7 @@ export class XrayService {
     switchMap(() => this.http.get<XrayStatus>(`${this.basePath}/status`).pipe(
       catchError(() => EMPTY),
     )),
+    startWith({ connected: false } as XrayStatus),
     // Share live Xray state across header, dashboard, and map page, and stay
     // in sync when tray or other tabs toggle spn/enable.
     shareReplay({ bufferSize: 1, refCount: true }),

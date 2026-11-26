@@ -83,6 +83,10 @@ if [[ "${ACTION}" == "restore" ]]; then
     cp -af "${LATEST_BACKUP}/portmaster" "${INSTALL_DIR}/portmaster"
     chmod 755 "${INSTALL_DIR}/portmaster"
   fi
+  if [[ -f "${LATEST_BACKUP}/portmaster.zip" ]]; then
+    cp -af "${LATEST_BACKUP}/portmaster.zip" "${INSTALL_DIR}/portmaster.zip"
+    cp -af "${LATEST_BACKUP}/portmaster.zip" "${DATA_DIR}/portmaster.zip"
+  fi
   if [[ -f "${LATEST_BACKUP}/config.json" ]]; then
     cp -af "${LATEST_BACKUP}/config.json" "${DATA_DIR}/config.json"
   fi
@@ -108,9 +112,9 @@ download_file() {
   local url="$1"
   local dest="$2"
   if command -v curl >/dev/null 2>&1; then
-    curl -fSL "${url}" -o "${dest}"
+    curl -fSL --retry 3 --retry-delay 2 "${url}" -o "${dest}"
   elif command -v wget >/dev/null 2>&1; then
-    wget -qO "${dest}" "${url}"
+    wget --tries=3 -qO "${dest}" "${url}"
   else
     echo "[!] Neither curl nor wget was found." >&2
     return 1
@@ -142,24 +146,75 @@ if ! download_file "${DOWNLOAD_BIN_URL}" "${TMP_DIR}/${BIN_NAME}"; then
 fi
 chmod +x "${TMP_DIR}/${BIN_NAME}"
 
-HAS_APP=0
 echo "[*] Downloading tray UI binary (${APP_NAME})..."
-if download_file "${DOWNLOAD_APP_URL}" "${TMP_DIR}/${APP_NAME}"; then
-  chmod +x "${TMP_DIR}/${APP_NAME}"
-  HAS_APP=1
-else
-  echo "[*] Notice: ${APP_NAME} download failed or not found, continuing without tray binary patch."
+if ! download_file "${DOWNLOAD_APP_URL}" "${TMP_DIR}/${APP_NAME}"; then
+  echo "[!] Failed to download tray UI binary from: ${DOWNLOAD_APP_URL}" >&2
+  exit 1
 fi
+chmod +x "${TMP_DIR}/${APP_NAME}"
 
 echo "[*] Downloading modern UI bundle (portmaster.zip)..."
-download_file "${DOWNLOAD_UI_URL}" "${TMP_DIR}/portmaster.zip" || {
-  echo "[*] Notice: portmaster.zip download failed or not found, continuing without UI patch."
-}
+if ! download_file "${DOWNLOAD_UI_URL}" "${TMP_DIR}/portmaster.zip"; then
+  echo "[!] Failed to download UI bundle from: ${DOWNLOAD_UI_URL}" >&2
+  exit 1
+fi
 
 echo "[*] Downloading Rust Pilot UI bundle (pilot-web.zip)..."
 download_file "${DOWNLOAD_PILOT_URL}" "${TMP_DIR}/pilot-web.zip" || {
   echo "[*] Notice: pilot-web.zip download failed or not found, continuing."
 }
+
+# Capture any running tray UI processes (exe + desktop session env) before stopping them
+TRAY_PID_LIST=()
+TRAY_EXE_LIST=()
+TRAY_USER=""
+TRAY_ENV_VARS=()
+TRAY_LAUNCH_EXE=""
+
+for exe_link in /proc/[0-9]*/exe; do
+  [[ -L "${exe_link}" ]] || continue
+  exe_target=$(readlink -f "${exe_link}" 2>/dev/null || true)
+  exe_target="${exe_target% (deleted)}"
+  exe_base=$(basename "${exe_target}")
+  if [[ "${exe_base}" == "portmaster" || "${exe_base}" == "portmaster-app" ]]; then
+    pid="${exe_link#/proc/}"
+    pid="${pid%/exe}"
+    TRAY_PID_LIST+=("${pid}")
+    TRAY_EXE_LIST+=("${exe_target}")
+    if [[ -z "${TRAY_USER}" ]]; then
+      TRAY_USER=$(ps -p "${pid}" -o user= 2>/dev/null | xargs || true)
+      TRAY_LAUNCH_EXE="${exe_target}"
+      if [[ -r "/proc/${pid}/environ" ]]; then
+        while IFS= read -r -d '' env_entry; do
+          case "${env_entry}" in
+            DISPLAY=*|WAYLAND_DISPLAY=*|DBUS_SESSION_BUS_ADDRESS=*|XDG_RUNTIME_DIR=*|XAUTHORITY=*)
+              TRAY_ENV_VARS+=("${env_entry}")
+              ;;
+          esac
+        done < "/proc/${pid}/environ" || true
+      fi
+    fi
+  fi
+done
+
+if [[ ${#TRAY_PID_LIST[@]} -gt 0 ]]; then
+  echo "[*] Stopping running tray UI process(es): ${TRAY_PID_LIST[*]}..."
+  kill "${TRAY_PID_LIST[@]}" 2>/dev/null || true
+  for _ in 1 2 3 4 5 6; do
+    still_alive=0
+    for pid in "${TRAY_PID_LIST[@]}"; do
+      if kill -0 "${pid}" 2>/dev/null; then
+        still_alive=1
+        break
+      fi
+    done
+    [[ ${still_alive} -eq 0 ]] && break
+    sleep 0.5
+  done
+  for pid in "${TRAY_PID_LIST[@]}"; do
+    kill -9 "${pid}" 2>/dev/null || true
+  done
+fi
 
 # Stop Portmaster service
 SERVICE_WAS_ACTIVE=0
@@ -174,11 +229,14 @@ STAMP=$(date +%Y%m%d-%H%M%S)
 CURRENT_BACKUP="${BACKUP_DIR}/${STAMP}"
 mkdir -p "${CURRENT_BACKUP}"
 
-for target_file in portmaster-core portmaster-core-rs portmaster-core-go portmaster; do
+for target_file in portmaster-core portmaster-core-rs portmaster-core-go portmaster portmaster.zip; do
   if [[ -f "${INSTALL_DIR}/${target_file}" ]]; then
     cp -af "${INSTALL_DIR}/${target_file}" "${CURRENT_BACKUP}/"
   fi
 done
+if [[ -f "${DATA_DIR}/portmaster.zip" ]]; then
+  cp -af "${DATA_DIR}/portmaster.zip" "${CURRENT_BACKUP}/data-portmaster.zip"
+fi
 if [[ -f "${DATA_DIR}/config.json" ]]; then
   cp -af "${DATA_DIR}/config.json" "${CURRENT_BACKUP}/"
 fi
@@ -215,32 +273,49 @@ else
   systemctl daemon-reload || true
 fi
 
-if [[ ${HAS_APP} -eq 1 ]]; then
-  echo "[*] Updating tray UI binary..."
-  cp -af "${TMP_DIR}/${APP_NAME}" "${INSTALL_DIR}/portmaster"
-  chmod 755 "${INSTALL_DIR}/portmaster"
-  if [[ -f "/usr/bin/portmaster" && ! -L "/usr/bin/portmaster" ]]; then
-    mv -f "/usr/bin/portmaster" "${CURRENT_BACKUP}/usr-bin-portmaster" || true
+echo "[*] Updating tray UI binary..."
+cp -af "${TMP_DIR}/${APP_NAME}" "${INSTALL_DIR}/portmaster"
+chmod 755 "${INSTALL_DIR}/portmaster"
+for extra_exe in "${TRAY_EXE_LIST[@]}"; do
+  if [[ -n "${extra_exe}" && "${extra_exe}" != "${INSTALL_DIR}/portmaster" && "${extra_exe}" != "/usr/bin/portmaster" ]]; then
+    if [[ -f "${extra_exe}" ]]; then
+      cp -af "${extra_exe}" "${CURRENT_BACKUP}/$(basename "${extra_exe}").prev" 2>/dev/null || true
+    fi
+    cp -af "${TMP_DIR}/${APP_NAME}" "${extra_exe}"
+    chmod 755 "${extra_exe}"
   fi
-  ln -sf "${INSTALL_DIR}/portmaster" "/usr/bin/portmaster" || true
-  echo "[*] Notice: restart the Portmaster tray UI if it is currently running."
+done
+if [[ -f "/opt/safing/portmaster/portmaster-app" ]]; then
+  cp -af "${TMP_DIR}/${APP_NAME}" "/opt/safing/portmaster/portmaster-app"
+  chmod 755 "/opt/safing/portmaster/portmaster-app"
 fi
+if [[ -f "/usr/bin/portmaster" && ! -L "/usr/bin/portmaster" ]]; then
+  mv -f "/usr/bin/portmaster" "${CURRENT_BACKUP}/usr-bin-portmaster" || true
+fi
+ln -sf "${INSTALL_DIR}/portmaster" "/usr/bin/portmaster" || true
 
-# Unpack UI bundle if present
-if [[ -f "${TMP_DIR}/portmaster.zip" ]] && command -v unzip >/dev/null 2>&1; then
-  echo "[*] Updating Web UI..."
+# Clear WebKit/Tauri HTTP cache so UI reloads fresh assets immediately
+rm -rf /home/*/.cache/io.safing.portmaster /home/*/.cache/portmaster /root/.cache/io.safing.portmaster 2>/dev/null || true
+
+# Update Web UI archive (read directly by pm-core UiArchives) and extracted dirs
+echo "[*] Updating Web UI archive (portmaster.zip)..."
+cp -af "${TMP_DIR}/portmaster.zip" "${INSTALL_DIR}/portmaster.zip"
+chmod 644 "${INSTALL_DIR}/portmaster.zip"
+cp -af "${TMP_DIR}/portmaster.zip" "${DATA_DIR}/portmaster.zip"
+chmod 644 "${DATA_DIR}/portmaster.zip"
+
+if command -v unzip >/dev/null 2>&1; then
   UI_DEST="${DATA_DIR}/ui/modules/portmaster"
+  rm -rf "${UI_DEST}"
   mkdir -p "${UI_DEST}"
-  if ! unzip -q -o "${TMP_DIR}/portmaster.zip" -d "${UI_DEST}"; then
+  unzip -q -o "${TMP_DIR}/portmaster.zip" -d "${UI_DEST}" || {
     echo "[!] Warning: failed to unpack portmaster.zip to ${UI_DEST}" >&2
-  fi
+  }
 
-  # Also update updates path if present
   UPDATES_UI="${INSTALL_DIR}/updates/linux_amd64/ui/modules/portmaster"
   if [[ -d "${UPDATES_UI}" ]]; then
-    if ! unzip -q -o "${TMP_DIR}/portmaster.zip" -d "${UPDATES_UI}"; then
-      echo "[!] Warning: failed to unpack portmaster.zip to ${UPDATES_UI}" >&2
-    fi
+    cp -af "${TMP_DIR}/portmaster.zip" "${UPDATES_UI}/portmaster.zip"
+    unzip -q -o "${TMP_DIR}/portmaster.zip" -d "${UPDATES_UI}" || true
   fi
 fi
 
@@ -276,9 +351,26 @@ if [[ ${SERVICE_WAS_ACTIVE} -eq 1 ]] || systemctl is-enabled --quiet portmaster 
   fi
 fi
 
+# Relaunch tray UI under original desktop user session if it was running
+if [[ -n "${TRAY_USER}" && -n "${TRAY_LAUNCH_EXE}" && ${#TRAY_ENV_VARS[@]} -gt 0 ]] && command -v runuser >/dev/null 2>&1; then
+  echo "[*] Relaunching tray UI (${TRAY_LAUNCH_EXE}) as ${TRAY_USER}..."
+  runuser -u "${TRAY_USER}" -- env "${TRAY_ENV_VARS[@]}" setsid -f "${TRAY_LAUNCH_EXE}" --background --with-prompts --with-notifications >/dev/null 2>&1 || true
+fi
+
+TRAY_VERIFY="unknown"
+if command -v strings >/dev/null 2>&1; then
+  if strings "${INSTALL_DIR}/portmaster" 2>/dev/null | grep -q "Xray VPN"; then
+    TRAY_VERIFY="verified Xray VPN tray (no Enable SPN)"
+  else
+    TRAY_VERIFY="warning: Xray VPN string not found in ${INSTALL_DIR}/portmaster"
+  fi
+fi
+
 echo ""
 echo "=========================================================="
 echo " [✓] Portmaster patched successfully!"
-echo "     Active binary: ${TARGET_BIN_PATH}"
-echo "     Backup saved:  ${CURRENT_BACKUP}"
+echo "     Core binary: ${TARGET_BIN_PATH}"
+echo "     Tray binary: ${INSTALL_DIR}/portmaster (${TRAY_VERIFY})"
+echo "     UI archive:  ${INSTALL_DIR}/portmaster.zip"
+echo "     Backup saved: ${CURRENT_BACKUP}"
 echo "=========================================================="
