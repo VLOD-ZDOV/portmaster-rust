@@ -151,6 +151,11 @@ pub trait FirewallHook: Send + Sync {
 
     /// Go `Connection.Save`, for blocked, dropped and failed requests.
     fn save_connection(&self, _conn: &SharedConnection) {}
+
+    /// Optional per-application DNS nameservers overriding global `dns/nameservers`.
+    fn dns_nameserver_overrides(&self, _conn: &SharedConnection) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// Allows everything. Requests are saved through the connection store when

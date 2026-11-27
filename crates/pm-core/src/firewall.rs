@@ -18,7 +18,7 @@ use pm_firewall::packet::{
     PacketHandler, QueuedPacket, SystemConntrack,
 };
 #[cfg(target_os = "linux")]
-use pm_firewall::packet::NfqPacket;
+use pm_firewall::packet::{BandwidthMethod, BandwidthUpdate, NfqPacket};
 use pm_firewall::{
     create_prompt, endpoint_rule, CustomLists, FirewallEnv, LocalNetwork, MulticastRequest,
     PromptEnv, PromptProfile, ServiceCustomLists, SplitTunnelEnv, CANCEL_PROMPT,
@@ -1389,6 +1389,12 @@ impl Firewall {
             }
         }
 
+        // Enable kernel per-connection byte accounting so ctnetlink reports
+        // bytes_sent / bytes_received even for CONNMARK fast-tracked flows.
+        if let Err(error) = std::fs::write("/proc/sys/net/netfilter/nf_conntrack_acct", b"1") {
+            tracing::debug!(%error, "filter: could not enable /proc/sys/net/netfilter/nf_conntrack_acct");
+        }
+
         let (tx, mut rx) = mpsc::channel::<pm_interception::queue::QueuedPacket>(16384);
         let mut queues = Vec::new();
         for (number, inbound) in [
@@ -1499,11 +1505,33 @@ impl Firewall {
             })
         };
 
+        let bandwidth_tracker = {
+            let network = Arc::clone(&self.network);
+            let handler = Arc::clone(&self.handler);
+            let cancel_bw = cancel.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(2));
+                loop {
+                    tokio::select! {
+                        () = cancel_bw.cancelled() => break,
+                        _ = interval.tick() => {
+                            let network = Arc::clone(&network);
+                            let handler = Arc::clone(&handler);
+                            let _ = tokio::task::spawn_blocking(move || {
+                                poll_conntrack_bandwidth(&network, &handler, ipv6);
+                            })
+                            .await;
+                        }
+                    }
+                }
+            })
+        };
+
         let mut tasks = self
             .tasks
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        tasks.extend([dispatch, stop, ensure_rules, udp_cleaner]);
+        tasks.extend([dispatch, stop, ensure_rules, udp_cleaner, bandwidth_tracker]);
         if let Some(task) = metrics_writer {
             tasks.push(task);
         }
@@ -1700,6 +1728,100 @@ impl Firewall {
     #[cfg(all(not(target_os = "linux"), not(windows)))]
     pub async fn stop(&self) -> anyhow::Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn poll_conntrack_bandwidth(network: &Network, handler: &PacketHandler, ipv6: bool) {
+    use pm_interception::conntrack::{Conntrack, Family};
+    use pm_network::canonical_ip;
+    use std::collections::HashMap;
+
+    let Ok(mut ct) = Conntrack::open() else {
+        return;
+    };
+    let mut table: HashMap<(u8, IpAddr, u16, IpAddr, u16), (u64, u64)> = HashMap::new();
+    for family in if ipv6 {
+        &[Family::V4, Family::V6][..]
+    } else {
+        &[Family::V4][..]
+    } {
+        if let Ok(entries) = ct.dump_counters(*family) {
+            for e in entries {
+                table.insert(
+                    (
+                        e.orig.protocol,
+                        canonical_ip(e.orig.src),
+                        e.orig.src_port,
+                        canonical_ip(e.orig.dst),
+                        e.orig.dst_port,
+                    ),
+                    (e.orig_bytes, e.reply_bytes),
+                );
+                if let Some(reply) = e.reply {
+                    // Store reverse-direction lookup (reply.dst -> reply.src) for SNAT flows
+                    // if the socket originally bound before NAT rewriting.
+                    table.entry((
+                        reply.protocol,
+                        canonical_ip(reply.dst),
+                        reply.dst_port,
+                        canonical_ip(reply.src),
+                        reply.src_port,
+                    ))
+                    .or_insert((e.orig_bytes, e.reply_bytes));
+                }
+            }
+        }
+    }
+    if table.is_empty() {
+        return;
+    }
+
+    for shared in network.get_all_connections() {
+        let Ok(conn) = shared.try_lock() else {
+            continue;
+        };
+        if conn.internal || conn.ended != 0 {
+            continue;
+        }
+        let (Some(local_ip), Some(entity)) = (conn.local_ip, conn.entity.as_ref()) else {
+            continue;
+        };
+        let Some(remote_ip) = entity.ip else {
+            continue;
+        };
+        let local_ip = canonical_ip(local_ip);
+        let remote_ip = canonical_ip(remote_ip);
+        let local_port = conn.local_port;
+        let remote_port = entity.dst_port();
+        let proto = conn.ip_protocol;
+        let inbound = conn.inbound;
+        let prev_rx = conn.bytes_received;
+        let prev_tx = conn.bytes_sent;
+        let conn_id = conn.id.clone();
+        drop(conn);
+
+        let key = if inbound {
+            (proto, remote_ip, remote_port, local_ip, local_port)
+        } else {
+            (proto, local_ip, local_port, remote_ip, remote_port)
+        };
+        let Some(&(orig_bytes, reply_bytes)) = table.get(&key) else {
+            continue;
+        };
+        let (bytes_received, bytes_sent) = if inbound {
+            (orig_bytes, reply_bytes)
+        } else {
+            (reply_bytes, orig_bytes)
+        };
+        if bytes_received > prev_rx || bytes_sent > prev_tx {
+            handler.update_bandwidth(&BandwidthUpdate {
+                conn_id,
+                bytes_received,
+                bytes_sent,
+                method: BandwidthMethod::Absolute,
+            });
+        }
     }
 }
 

@@ -22,6 +22,7 @@ pub mod control;
 
 pub mod ui;
 pub mod ui_metrics;
+pub mod admin_lock;
 
 pub mod broadcasts;
 pub mod interop;

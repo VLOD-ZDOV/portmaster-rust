@@ -213,6 +213,13 @@ impl FirewallHook for DeferredHook {
             None => self.fallback.save_connection(conn),
         }
     }
+
+    fn dns_nameserver_overrides(&self, conn: &SharedConnection) -> Vec<String> {
+        match self.hook.get() {
+            Some(hook) => hook.dns_nameserver_overrides(conn),
+            None => Vec::new(),
+        }
+    }
 }
 
 struct Listeners {

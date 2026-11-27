@@ -27,7 +27,7 @@ use serde_json::Value;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio_util::sync::CancellationToken;
 
-use crate::{Api, Response, PERMIT_ADMIN};
+use crate::{Api, Response, WsWriteGuard, PERMIT_ADMIN};
 
 pub const DB_API_PATH: &str = "/api/database/v1";
 
@@ -39,19 +39,45 @@ pub struct DatabaseApi {
     sender: UnboundedSender<Vec<u8>>,
     shutdown: CancellationToken,
     subscriptions: Mutex<HashMap<String, CancellationToken>>,
+    write_guard: Option<WsWriteGuard>,
+    admin_token: Option<String>,
+    peer_addr: Option<String>,
 }
 
 impl DatabaseApi {
     /// Creates an API around the given databases and returns the frame receiver.
     pub fn new(databases: Arc<Databases>) -> (Arc<DatabaseApi>, UnboundedReceiver<Vec<u8>>) {
+        Self::with_guards(databases, None, None, None)
+    }
+
+    /// Creates a DB API connection attaching optional admin-lock write enforcement.
+    pub fn with_guards(
+        databases: Arc<Databases>,
+        write_guard: Option<WsWriteGuard>,
+        admin_token: Option<String>,
+        peer_addr: Option<String>,
+    ) -> (Arc<DatabaseApi>, UnboundedReceiver<Vec<u8>>) {
         let (sender, receiver) = mpsc::unbounded_channel();
         let api = Arc::new(DatabaseApi {
             db: Arc::new(databases.interface(Options::default())),
             sender,
             shutdown: CancellationToken::new(),
             subscriptions: Mutex::new(HashMap::new()),
+            write_guard,
+            admin_token,
+            peer_addr,
         });
         (api, receiver)
+    }
+
+    fn check_write(&self, op: &[u8], key: &str) -> bool {
+        if let Some(guard) = &self.write_guard {
+            if let Err(reason) = guard(self.admin_token.as_deref(), self.peer_addr.as_deref(), key) {
+                self.send(op, "error", Some(&reason), None);
+                return false;
+            }
+        }
+        true
     }
 
     /// Shuts the API down: cancels all subscriptions and stops delivery.
@@ -102,13 +128,21 @@ impl DatabaseApi {
                     self.send(&[], "error", Some("bad request: malformed message"), None);
                     return;
                 };
+                if !self.check_write(op, &scheme(key)) {
+                    return;
+                }
                 match parts[1] {
                     b"create" => self.handle_put(op, key, data, true),
                     b"update" => self.handle_put(op, key, data, false),
                     _ => self.handle_insert(op, key, data),
                 }
             }
-            b"delete" => self.handle_delete(op, parts[2]),
+            b"delete" => {
+                if !self.check_write(op, &scheme(parts[2])) {
+                    return;
+                }
+                self.handle_delete(op, parts[2])
+            }
             _ => self.send(op, "error", Some("bad request: unknown method"), None),
         }
     }
@@ -500,15 +534,39 @@ pub async fn database_ws_upgrade(
         }
     };
 
+    let ws_guard = api
+        .ws_write_guard
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone();
+    let ws_admin_token = api_request
+        .header("x-portmaster-admin-token")
+        .or_else(|| api_request.query_param("admin_token"))
+        .map(str::to_string);
+    let ws_peer = if api_request.remote_addr.is_empty() {
+        None
+    } else {
+        Some(api_request.remote_addr.clone())
+    };
+
     websocket
         .read_buffer_size(1024)
         .write_buffer_size(65536)
-        .on_upgrade(move |socket| database_ws_session(socket, databases))
+        .on_upgrade(move |socket| {
+            database_ws_session(socket, databases, ws_guard, ws_admin_token, ws_peer)
+        })
 }
 
-async fn database_ws_session(socket: WebSocket, databases: Arc<Databases>) {
+async fn database_ws_session(
+    socket: WebSocket,
+    databases: Arc<Databases>,
+    ws_guard: Option<WsWriteGuard>,
+    ws_admin_token: Option<String>,
+    ws_peer: Option<String>,
+) {
     let mut socket = socket;
-    let (api, mut frames) = DatabaseApi::new(databases);
+    let (api, mut frames) =
+        DatabaseApi::with_guards(databases, ws_guard, ws_admin_token, ws_peer);
 
     loop {
         tokio::select! {

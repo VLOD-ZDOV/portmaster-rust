@@ -96,7 +96,8 @@ impl ResolverService {
 
         let mut rr_cache = None;
         let mut _guard = None;
-        if !q.no_caching {
+        let use_shared_cache = !q.no_caching && q.override_nameservers.is_empty();
+        if use_shared_cache {
             rr_cache = self.check_cache(&q);
             if let Some(cache) = rr_cache.as_mut() {
                 if !cache.expired() {
@@ -591,7 +592,7 @@ impl ResolverService {
         rr_cache.clean(MIN_TTL, self.clean_context(&rr_cache.domain));
 
         // Save the new entry if the cache is enabled and the record may be cached.
-        if !q.no_caching && rr_cache.cacheable() {
+        if !q.no_caching && q.override_nameservers.is_empty() && rr_cache.cacheable() {
             if let Err(err) = self.inner.store.save_rrcache(&rr_cache) {
                 tracing::warn!("resolver: failed to cache RR for {}: {err}", query_id(q));
             }

@@ -35,7 +35,7 @@ pub enum ParseError {
 /// Decoded wg-quick configuration, carried from the share link to the
 /// outbound generator.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub(crate) struct WireGuardProfile {
+pub struct WireGuardProfile {
     pub secret_key: String,
     pub public_key: String,
     pub pre_shared_key: String,
@@ -50,7 +50,7 @@ pub(crate) struct WireGuardProfile {
 
 /// Fields needed both for the node model and for config generation.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ParsedProfile {
+pub struct ParsedProfile {
     pub protocol: Protocol,
     pub name: String,
     pub address: String,
@@ -886,7 +886,7 @@ fn parse_wireguard(body: &str, name: Option<String>) -> Result<ParsedProfile, Pa
 }
 
 /// Parses one share link into its structured form.
-pub(crate) fn parse_link(raw: &str) -> Result<ParsedProfile, ParseError> {
+pub fn parse_link(raw: &str) -> Result<ParsedProfile, ParseError> {
     let raw = raw.trim();
     if raw.is_empty() {
         return Err(ParseError::Syntax("empty profile".into()));
@@ -1120,7 +1120,194 @@ pub fn parse_profile(
         address: parsed.address,
         port: parsed.port,
         raw_config: raw.to_string(),
+        routing_rules: Vec::new(),
+        rule_preset: String::new(),
     })
+}
+
+fn percent_encode(input: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(input.len());
+    for b in input.bytes() {
+        match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => {
+                let _ = write!(out, "%{:02X}", b);
+            }
+        }
+    }
+    out
+}
+
+fn format_host_port(address: &str, port: u16) -> String {
+    if address.contains(':') && !address.starts_with('[') {
+        format!("[{address}]:{port}")
+    } else {
+        format!("{address}:{port}")
+    }
+}
+
+/// Serializes an edited [`ParsedProfile`] back into a canonical Xray share link.
+pub fn encode_share_link(p: &ParsedProfile) -> String {
+    let endpoint = format_host_port(&p.address, p.port);
+    let frag = if p.name.is_empty() {
+        String::new()
+    } else {
+        format!("#{}", percent_encode(&p.name))
+    };
+
+    let push_common_params = |params: &mut Vec<String>| {
+        if !p.network.is_empty() && p.network != "raw" && p.network != "tcp" {
+            params.push(format!("type={}", percent_encode(&p.network)));
+        }
+        if !p.security.is_empty() && p.security != "none" {
+            params.push(format!("security={}", percent_encode(&p.security)));
+        }
+        if !p.sni.is_empty() {
+            params.push(format!("sni={}", percent_encode(&p.sni)));
+        }
+        if !p.host.is_empty() {
+            params.push(format!("host={}", percent_encode(&p.host)));
+        }
+        if !p.path.is_empty() {
+            params.push(format!("path={}", percent_encode(&p.path)));
+        }
+        if !p.fingerprint.is_empty() {
+            params.push(format!("fp={}", percent_encode(&p.fingerprint)));
+        }
+        if !p.flow.is_empty() {
+            params.push(format!("flow={}", percent_encode(&p.flow)));
+        }
+        if !p.alpn.is_empty() {
+            params.push(format!("alpn={}", percent_encode(&p.alpn.join(","))));
+        }
+        if !p.service_name.is_empty() {
+            params.push(format!("serviceName={}", percent_encode(&p.service_name)));
+        }
+        if !p.header_type.is_empty() {
+            params.push(format!("headerType={}", percent_encode(&p.header_type)));
+        }
+        if !p.reality_public_key.is_empty() {
+            params.push(format!("pbk={}", percent_encode(&p.reality_public_key)));
+        }
+        if !p.reality_short_id.is_empty() {
+            params.push(format!("sid={}", percent_encode(&p.reality_short_id)));
+        }
+        if !p.reality_spider_x.is_empty() {
+            params.push(format!("spx={}", percent_encode(&p.reality_spider_x)));
+        }
+    };
+
+    match p.protocol {
+        Protocol::Vless => {
+            let mut params = Vec::new();
+            if !p.encryption.is_empty() {
+                params.push(format!("encryption={}", percent_encode(&p.encryption)));
+            }
+            push_common_params(&mut params);
+            let q = if params.is_empty() { String::new() } else { format!("?{}", params.join("&")) };
+            format!("vless://{}@{endpoint}{q}{frag}", percent_encode(&p.credential))
+        }
+        Protocol::Trojan => {
+            let mut params = Vec::new();
+            push_common_params(&mut params);
+            let q = if params.is_empty() { String::new() } else { format!("?{}", params.join("&")) };
+            let pass = if p.password.is_empty() { &p.credential } else { &p.password };
+            format!("trojan://{}@{endpoint}{q}{frag}", percent_encode(pass))
+        }
+        Protocol::Vmess => {
+            let obj = serde_json::json!({
+                "v": "2",
+                "ps": p.name,
+                "add": p.address,
+                "port": p.port.to_string(),
+                "id": p.credential,
+                "aid": "0",
+                "net": if p.network == "raw" { "tcp" } else { p.network.as_str() },
+                "type": if p.header_type.is_empty() { "none" } else { p.header_type.as_str() },
+                "host": p.host,
+                "path": p.path,
+                "tls": if p.security == "tls" { "tls" } else { "" },
+                "sni": p.sni,
+                "alpn": p.alpn.join(","),
+                "fp": p.fingerprint,
+            });
+            format!("vmess://{}", STANDARD.encode(obj.to_string().as_bytes()))
+        }
+        Protocol::Shadowsocks => {
+            let raw_auth = format!("{}:{}", p.method, p.password);
+            let b64 = URL_SAFE_NO_PAD.encode(raw_auth.as_bytes());
+            let mut params = Vec::new();
+            if !p.plugin.is_empty() {
+                let plug = if p.plugin_opts.is_empty() {
+                    p.plugin.clone()
+                } else {
+                    format!("{};{}", p.plugin, p.plugin_opts)
+                };
+                params.push(format!("plugin={}", percent_encode(&plug)));
+            }
+            let q = if params.is_empty() { String::new() } else { format!("?{}", params.join("&")) };
+            format!("ss://{b64}@{endpoint}{q}{frag}")
+        }
+        Protocol::Socks | Protocol::Http => {
+            let scheme = if p.protocol == Protocol::Socks { "socks" } else { "http" };
+            let auth = if !p.credential.is_empty() {
+                if p.password.is_empty() {
+                    format!("{}@", percent_encode(&p.credential))
+                } else {
+                    format!("{}:{}@", percent_encode(&p.credential), percent_encode(&p.password))
+                }
+            } else {
+                String::new()
+            };
+            format!("{scheme}://{auth}{endpoint}{frag}")
+        }
+        Protocol::Hysteria2 => {
+            let mut params = Vec::new();
+            if !p.sni.is_empty() {
+                params.push(format!("sni={}", percent_encode(&p.sni)));
+            }
+            if !p.hy_obfs.is_empty() {
+                params.push(format!("obfs={}", percent_encode(&p.hy_obfs)));
+            }
+            if !p.hy_obfs_password.is_empty() {
+                params.push(format!("obfs-password={}", percent_encode(&p.hy_obfs_password)));
+            }
+            let q = if params.is_empty() { String::new() } else { format!("?{}", params.join("&")) };
+            format!("hysteria2://{}@{endpoint}{q}{frag}", percent_encode(&p.credential))
+        }
+        Protocol::Wireguard => {
+            let wg = p.wireguard.clone().unwrap_or_default();
+            let mut conf = String::from("[Interface]\n");
+            if !wg.secret_key.is_empty() {
+                conf.push_str(&format!("PrivateKey = {}\n", wg.secret_key));
+            }
+            if !wg.addresses.is_empty() {
+                conf.push_str(&format!("Address = {}\n", wg.addresses.join(", ")));
+            }
+            if !wg.dns.is_empty() {
+                conf.push_str(&format!("DNS = {}\n", wg.dns.join(", ")));
+            }
+            if wg.mtu > 0 {
+                conf.push_str(&format!("MTU = {}\n", wg.mtu));
+            }
+            conf.push_str("[Peer]\n");
+            if !wg.public_key.is_empty() {
+                conf.push_str(&format!("PublicKey = {}\n", wg.public_key));
+            }
+            if !wg.pre_shared_key.is_empty() {
+                conf.push_str(&format!("PresharedKey = {}\n", wg.pre_shared_key));
+            }
+            conf.push_str(&format!("Endpoint = {endpoint}\n"));
+            if !wg.allowed_ips.is_empty() {
+                conf.push_str(&format!("AllowedIPs = {}\n", wg.allowed_ips.join(", ")));
+            }
+            format!("wireguard://{}{frag}", STANDARD.encode(conf.as_bytes()))
+        }
+        Protocol::Unknown => format!("{}@{endpoint}{frag}", percent_encode(&p.credential)),
+    }
 }
 
 #[cfg(test)]

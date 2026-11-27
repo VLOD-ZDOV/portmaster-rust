@@ -9,6 +9,7 @@ Rectangle {
     property string appKey: ""
     property bool appendDns: true
     signal appendDnsToggled(bool checked)
+    signal requestRuleBuilder(string key, string mode)
 
     readonly property bool isArr: {
         var k = st.key || ""
@@ -175,6 +176,7 @@ Rectangle {
 
         // Array Editor + Presets (optType == 2 or array keys)
         ColumnLayout {
+            id: arrCol
             visible: card.isArr
             Layout.fillWidth: true
             spacing: 6
@@ -209,7 +211,7 @@ Rectangle {
                             Rectangle {
                                 height: 18; radius: 3; color: "#192638"; border.color: "#2f4769"
                                 implicitWidth: dnsTagLbl.implicitWidth + 10
-                                Label { id: dnsTagLbl; anchors.centerIn: parent; text: prettyDnsLabel(modelData); color: "#9fd0ff"; font.pixelSize: 10; font.bold: true }
+                                Label { id: dnsTagLbl; anchors.centerIn: parent; text: arrCol.prettyDnsLabel(modelData); color: "#9fd0ff"; font.pixelSize: 10; font.bold: true }
                             }
                             Label { text: modelData; color: "#d4d6e0"; font.pixelSize: 10; font.family: "monospace"; elide: Text.ElideMiddle; Layout.fillWidth: true }
                             Label {
@@ -303,6 +305,16 @@ Rectangle {
                         onClicked: arrInput.submitItem()
                     }
                 }
+                Rectangle {
+                    visible: st.key === "xray/rules" || st.key === "filter/endpoints" || st.key === "filter/serviceEndpoints" || st.key === "spn/usagePolicy" || st.key === "splittun/usagePolicy"
+                    height: 28; radius: 4; color: "#1c283a"; border.color: "#4e97fa"
+                    implicitWidth: scRbLbl.implicitWidth + 14
+                    Label { id: scRbLbl; anchors.centerIn: parent; text: pm.isRu ? "⚙ Конструктор" : "⚙ Builder"; color: "#89b7ff"; font.pixelSize: 10; font.bold: true }
+                    MouseArea {
+                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                        onClicked: card.requestRuleBuilder(st.key || "", (st.key === "xray/rules" || st.key === "spn/usagePolicy" || st.key === "splittun/usagePolicy") ? "xray" : "firewall")
+                    }
+                }
             }
 
             PmCheckBox {
@@ -340,9 +352,9 @@ Rectangle {
                             { label: pm.cfgText("qs.dns.cloudflareFallback"), vals: ["dot://cloudflare-dns.com?ip=1.1.1.1&name=Cloudflare&blockedif=zeroip", "dot://cloudflare-dns.com?ip=1.0.0.1&name=Cloudflare&blockedif=zeroip"], forceAppend: true }
                         ]
                         if (k === "xray/rules") return [
-                            { label: pm.isRu ? "RU напрямую (geoip:ru)" : "RU Direct", vals: ["direct:.ru", "direct:.xn--p1ai", "direct:geoip:ru", "direct:geosite:category-ru"] },
-                            { label: "YouTube + Discord -> Xray", vals: ["proxy:geosite:youtube", "proxy:geosite:discord"] },
-                            { label: "OpenAI / AI -> Xray", vals: ["proxy:geosite:openai", "proxy:geosite:anthropic"] }
+                            { label: pm.isRu ? "RU напрямую (geoip:ru)" : "RU Direct", vals: ["- .ru", "- .xn--p1ai", "- geoip:ru", "- geosite:category-ru"] },
+                            { label: "YouTube + Discord -> Xray", vals: ["+ geosite:youtube", "+ geosite:discord"] },
+                            { label: "OpenAI / AI -> Xray", vals: ["+ geosite:openai", "+ geosite:anthropic"] }
                         ]
                         if (k === "spn/usagePolicy" || k === "splittun/usagePolicy") return [
                             { label: pm.isRu ? "- RU домены напрямую" : "- RU domains direct", vals: ["- .ru", "- .xn--p1ai"] },

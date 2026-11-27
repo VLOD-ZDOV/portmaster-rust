@@ -236,7 +236,7 @@ async fn serve_root(Extension(state): Extension<UiState>) -> AxumResponse {
         std::env::var("PORTMASTER_UI_TYPE").as_deref(),
         Ok("rust") | Ok("rust-wasm")
     );
-    let cfg_flavor = state.config.get_as_string(CFG_UI_FLAVOR, "angular")();
+    let cfg_flavor = state.config.get_as_string(CFG_UI_FLAVOR, "qt")();
     if env_rust || cfg_flavor == "rust-wasm" {
         let dir = find_rust_ui_dir(&state.data_dir, &state.bin_dir);
         if dir.is_dir() && dir.join("index.html").is_file() {

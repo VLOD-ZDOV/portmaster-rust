@@ -58,6 +58,7 @@ class PortmasterBackend : public QObject {
     Q_PROPERTY(QString pauseUntil READ pauseUntil NOTIFY notificationsChanged)
 
     Q_PROPERTY(QVariantList activeApps READ activeApps NOTIFY appsChanged)
+    Q_PROPERTY(bool onlyNowApps READ onlyNowApps WRITE setOnlyNowApps NOTIFY appsChanged)
     Q_PROPERTY(QVariantList offlineApps READ offlineApps NOTIFY appsChanged)
     Q_PROPERTY(QVariantList allApps READ allApps NOTIFY appsChanged)
     Q_PROPERTY(QVariantMap selectedApp READ selectedApp NOTIFY selectedAppChanged)
@@ -76,13 +77,20 @@ class PortmasterBackend : public QObject {
     Q_PROPERTY(QVariantList worldCountries READ worldCountries NOTIFY worldMapReady)
     Q_PROPERTY(QVariantList mapPins READ mapPins NOTIFY xrayChanged)
     Q_PROPERTY(QVariantMap uiReport READ uiReport NOTIFY uiReportChanged)
+    Q_PROPERTY(bool uiBusy READ uiBusy NOTIFY uiReportChanged)
+    Q_PROPERTY(QVariantMap geodataHints READ geodataHints NOTIFY geodataHintsChanged)
+    Q_PROPERTY(QVariantMap editingNode READ editingNode NOTIFY editingNodeChanged)
+    Q_PROPERTY(QVariantMap adminLock READ adminLock NOTIFY adminLockChanged)
     Q_PROPERTY(int iconVersion READ iconVersion NOTIFY iconsChanged)
     Q_PROPERTY(bool hwAccel READ hwAccel NOTIFY uiReportChanged)
     Q_PROPERTY(int historyLimit READ historyLimit NOTIFY historyConfigChanged)
     Q_PROPERTY(bool historyLoading READ historyLoading NOTIFY historyConfigChanged)
     Q_PROPERTY(QVariantList connChartBins READ connChartBins NOTIFY connectionsChanged)
+    Q_PROPERTY(bool dashboardChartInternetOnly READ dashboardChartInternetOnly WRITE setDashboardChartInternetOnly NOTIFY connectionsChanged)
     Q_PROPERTY(int connAllowedTotal READ connAllowedTotal NOTIFY connectionsChanged)
     Q_PROPERTY(int connBlockedTotal READ connBlockedTotal NOTIFY connectionsChanged)
+    Q_PROPERTY(int connInetAllowedTotal READ connInetAllowedTotal NOTIFY connectionsChanged)
+    Q_PROPERTY(int connInetBlockedTotal READ connInetBlockedTotal NOTIFY connectionsChanged)
     Q_PROPERTY(int connInternetBlockedTotal READ connInternetBlockedTotal NOTIFY connectionsChanged)
     Q_PROPERTY(int connActiveTotal READ connActiveTotal NOTIFY connectionsChanged)
     Q_PROPERTY(int connTunneledTotal READ connTunneledTotal NOTIFY connectionsChanged)
@@ -123,6 +131,8 @@ public:
     QString pauseUntil() const { return m_pauseUntil; }
 
     QVariantList activeApps() const { return m_activeAppsCache; }
+    bool onlyNowApps() const { return m_onlyNowApps; }
+    Q_INVOKABLE void setOnlyNowApps(bool onlyNow);
     QVariantList offlineApps() const { return m_offlineAppsCache; }
     QVariantList allApps() const { return m_allAppsCache; }
     QVariantMap selectedApp() const { return m_selectedAppMap; }
@@ -141,13 +151,21 @@ public:
     QVariantList worldCountries() const { return m_worldCountries; }
     QVariantList mapPins() const { return m_mapPinsCache; }
     QVariantMap uiReport() const { return m_uiReportMap; }
+    bool uiBusy() const { return m_uiBusy; }
+    QVariantMap geodataHints() const { return m_geodataHints; }
+    QVariantMap editingNode() const { return m_editingNode; }
+    QVariantMap adminLock() const { return m_adminLock; }
     int iconVersion() const { return m_iconVersion; }
     bool hwAccel() const { return m_hwAccel; }
     int historyLimit() const { return m_historyLimit; }
     bool historyLoading() const { return m_historyFetching; }
     QVariantList connChartBins() const { return m_connChartBins; }
+    bool dashboardChartInternetOnly() const { return m_dashboardChartInternetOnly; }
+    Q_INVOKABLE void setDashboardChartInternetOnly(bool internetOnly);
     int connAllowedTotal() const { return m_connAllowedTotal; }
     int connBlockedTotal() const { return m_connBlockedTotal; }
+    int connInetAllowedTotal() const { return m_connInetAllowedTotal; }
+    int connInetBlockedTotal() const { return m_connInetBlockedTotal; }
     int connInternetBlockedTotal() const { return m_connInternetBlockedTotal; }
     int connActiveTotal() const { return m_connActiveTotal; }
     int connTunneledTotal() const { return m_connTunneledTotal; }
@@ -199,6 +217,12 @@ public:
     Q_INVOKABLE void deleteSubscription(const QString& id);
     Q_INVOKABLE void downloadXrayBinary();
     Q_INVOKABLE void downloadGeodata();
+    Q_INVOKABLE void fetchGeodataHints();
+    Q_INVOKABLE void openNodeEditor(const QString& nodeId);
+    Q_INVOKABLE void clearEditingNode();
+    Q_INVOKABLE void saveNodeEdit(const QString& nodeId, const QVariantMap& fields);
+    Q_INVOKABLE void deleteNode(const QString& nodeId);
+    Q_INVOKABLE void addGlobalRule(const QString& rule);
 
     Q_INVOKABLE void updateSetting(const QString& key, const QVariant& val);
     Q_INVOKABLE void resetSetting(const QString& key);
@@ -206,8 +230,14 @@ public:
     Q_INVOKABLE void moveSettingArrayItem(const QString& key, int index, int delta);
     Q_INVOKABLE void moveAppArrayItem(const QString& scopedKey, const QString& cfgKey, int index, int delta);
     Q_INVOKABLE void switchUiFlavor(const QString& flavorId);
+    Q_INVOKABLE void installUiFlavor(const QString& flavorId);
+    Q_INVOKABLE void uninstallUiFlavor(const QString& flavorId);
     Q_INVOKABLE void setKeepApiPortOpen(bool keep);
     Q_INVOKABLE void setHwAccel(bool enabled);
+    Q_INVOKABLE void refreshAdminLock();
+    Q_INVOKABLE void unlockAdmin(const QString& password);
+    Q_INVOKABLE void lockAdmin();
+    Q_INVOKABLE void configureAdminLock(const QVariantMap& payload);
     Q_INVOKABLE void exportSettings();
     Q_INVOKABLE void importSettings(const QString& rawPayload);
     Q_INVOKABLE void closeModal();
@@ -235,6 +265,9 @@ signals:
     void xrayChanged();
     void worldMapReady();
     void uiReportChanged();
+    void geodataHintsChanged();
+    void editingNodeChanged();
+    void adminLockChanged();
     void historyConfigChanged();
     void iconsChanged();
     void modalChanged();
@@ -282,6 +315,9 @@ private:
     bool m_withTray = true;
     bool m_ru = true;
     bool m_hwAccel = true;
+    bool m_onlyNowApps = false;
+    bool m_dashboardChartInternetOnly = true;
+    bool m_uiBusy = false;
     int m_historyLimit = 2000;
     bool m_historyLoaded = false;
     bool m_historyFetching = false;
@@ -310,6 +346,8 @@ private:
     QVariantList m_connChartBins;
     int m_connAllowedTotal = 0;
     int m_connBlockedTotal = 0;
+    int m_connInetAllowedTotal = 0;
+    int m_connInetBlockedTotal = 0;
     int m_connInternetBlockedTotal = 0;
     int m_connActiveTotal = 0;
     int m_connTunneledTotal = 0;
@@ -329,6 +367,9 @@ private:
     QVariantList m_worldCountries;
     QVariantList m_mapPinsCache;
     QVariantMap m_uiReportMap;
+    QVariantMap m_geodataHints;
+    QVariantMap m_editingNode;
+    QVariantMap m_adminLock;
 
     QSharedPointer<PortmasterIconStore> m_iconStore;
     QHash<QString, QString> m_desktopIcons;

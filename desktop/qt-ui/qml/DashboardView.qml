@@ -29,10 +29,12 @@ Item {
     onHoveredCountryChanged: dashMapHover.requestPaint()
 
     ScrollView {
+        id: dashScroll
         anchors.fill: parent
         contentWidth: availableWidth
         clip: true
         ScrollBar.vertical: PmScrollBar {}
+        PmWheelHelper { flickable: dashScroll.contentItem }
 
         ColumnLayout {
             width: parent.width - 48
@@ -322,27 +324,53 @@ Item {
 
                     RowLayout {
                         Layout.fillWidth: true
+                        spacing: 8
                         Label {
                             text: pm.isRu ? "График активности: Разрешённые и Заблокированные соединения" : "Activity Graph: Permitted & Blocked Connections"
                             color: "#dcdce4"; font.pixelSize: 12; font.bold: true
                         }
+                        Rectangle {
+                            height: 22; radius: 4
+                            color: pm.dashboardChartInternetOnly ? "#173252" : "#222328"
+                            border.color: pm.dashboardChartInternetOnly ? "#4e97fa" : "#343640"
+                            implicitWidth: inetOnlyLbl.implicitWidth + 14
+                            Label {
+                                id: inetOnlyLbl; anchors.centerIn: parent
+                                text: pm.isRu ? "Только интернет" : "Internet Only"
+                                color: pm.dashboardChartInternetOnly ? "#89b7ff" : "#8e8e98"
+                                font.pixelSize: 10; font.bold: pm.dashboardChartInternetOnly
+                            }
+                            MouseArea {
+                                anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                onClicked: pm.setDashboardChartInternetOnly(!pm.dashboardChartInternetOnly)
+                            }
+                        }
                         Item { Layout.fillWidth: true }
                         Rectangle { width: 8; height: 8; radius: 4; color: "#1de966" }
-                        Label { text: (pm.isRu ? "OK: " : "OK: ") + pm.connAllowedTotal; color: "#1de966"; font.pixelSize: 11; font.bold: true }
+                        Label {
+                            text: "OK: " + (pm.dashboardChartInternetOnly ? pm.connInetAllowedTotal : pm.connAllowedTotal)
+                            color: "#1de966"; font.pixelSize: 11; font.bold: true
+                        }
                         Item { width: 10 }
                         Rectangle { width: 8; height: 8; radius: 4; color: "#e01d1d" }
-                        Label { text: (pm.isRu ? "Блок: " : "Blocked: ") + pm.connBlockedTotal; color: "#f03c3c"; font.pixelSize: 11; font.bold: true }
+                        Label {
+                            text: (pm.isRu ? "Блок: " : "Blocked: ") + (pm.dashboardChartInternetOnly ? pm.connInetBlockedTotal : pm.connBlockedTotal)
+                            color: "#f03c3c"; font.pixelSize: 11; font.bold: true
+                        }
                     }
 
-                    ConnChartCanvas {
+                    Item {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        bins: pm.connChartBins
+                        ConnChartCanvas {
+                            anchors.fill: parent
+                            bins: pm.connChartBins
+                        }
+                        MouseArea {
+                            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                            onClicked: root.openMonitorPreset(pm.dashboardChartInternetOnly, "all", "")
+                        }
                     }
-                }
-                MouseArea {
-                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                    onClicked: root.openMonitorPreset(false, "all", "")
                 }
             }
 
@@ -470,15 +498,20 @@ Item {
                     function drawCountryFlat(ctx, c, w, h) {
                         var cpolys = c.polygons || []
                         for (var k = 0; k < cpolys.length; k++) {
-                            var pts = cpolys[k]
-                            if (pts.length < 6) continue
+                            var polyRings = cpolys[k]
+                            if (!polyRings || polyRings.length === 0) continue
+                            if (typeof polyRings[0] === "number") polyRings = [polyRings]
                             ctx.beginPath()
-                            ctx.moveTo(pts[0] * w, pts[1] * h)
-                            for (var j = 2; j < pts.length; j += 2) {
-                                ctx.lineTo(pts[j] * w, pts[j + 1] * h)
+                            for (var r = 0; r < polyRings.length; r++) {
+                                var pts = polyRings[r]
+                                if (!pts || pts.length < 6) continue
+                                ctx.moveTo(pts[0] * w, pts[1] * h)
+                                for (var j = 2; j < pts.length; j += 2) {
+                                    ctx.lineTo(pts[j] * w, pts[j + 1] * h)
+                                }
+                                ctx.closePath()
                             }
-                            ctx.closePath()
-                            ctx.fill()
+                            ctx.fill("evenodd")
                             ctx.stroke()
                         }
                     }
@@ -495,16 +528,21 @@ Item {
                             for (var ci = 0; ci < ccList.length; ci++) {
                                 activeSet[(ccList[ci].code || "").toUpperCase()] = true
                             }
+                            ctx.fillStyle = "#1e1e1e"
+                            ctx.strokeStyle = "#1e1e1e"
+                            ctx.lineWidth = 1.5
                             for (var i = 0; i < cs.length; i++) {
-                                var c = cs[i]
-                                var code = c.code || ""
-                                var hasConn = !!activeSet[code]
-                                var fill = hasConn ? "#1f4d36" : "#1e1e1e"
-                                var stroke = hasConn ? "#1de966" : "#1e1e1e"
-                                ctx.fillStyle = fill
-                                ctx.strokeStyle = stroke
-                                ctx.lineWidth = hasConn ? 1.1 : 1.5
-                                dashMapRect.drawCountryFlat(ctx, c, width, height)
+                                if (!activeSet[cs[i].code || ""]) {
+                                    dashMapRect.drawCountryFlat(ctx, cs[i], width, height)
+                                }
+                            }
+                            ctx.fillStyle = "#1f4d36"
+                            ctx.strokeStyle = "#1de966"
+                            ctx.lineWidth = 1.1
+                            for (var j = 0; j < cs.length; j++) {
+                                if (activeSet[cs[j].code || ""]) {
+                                    dashMapRect.drawCountryFlat(ctx, cs[j], width, height)
+                                }
                             }
                         }
                         Component.onCompleted: requestPaint()
@@ -518,13 +556,12 @@ Item {
                             ctx.clearRect(0, 0, width, height)
                             if (root.hoveredCountry === "") return
                             var cs = pm.worldCountries || []
+                            ctx.fillStyle = "#315b96"
+                            ctx.strokeStyle = "#85b5ff"
+                            ctx.lineWidth = 1.6
                             for (var i = 0; i < cs.length; i++) {
                                 if ((cs[i].code || "") === root.hoveredCountry) {
-                                    ctx.fillStyle = "#315b96"
-                                    ctx.strokeStyle = "#85b5ff"
-                                    ctx.lineWidth = 1.6
                                     dashMapRect.drawCountryFlat(ctx, cs[i], width, height)
-                                    break
                                 }
                             }
                         }

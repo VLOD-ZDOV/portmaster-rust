@@ -12,6 +12,7 @@ Item {
     property bool scopeLocal: false
     property string dirFilter: "all"     // "all" | "outbound" | "inbound"
     property string verdictFilter: "all" // "all" | "permit" | "xray" | "block"
+    property bool hideDnsNoise: false
     property string expandedId: ""
     property var cachedFiltered: []
 
@@ -50,6 +51,10 @@ Item {
                 if (verdictFilter === "xray" && !isXray) continue
                 if (verdictFilter === "permit" && isBlk) continue
             }
+            if (hideDnsNoise) {
+                var rport = c.port || 0
+                if (rport === 53 || rport === 853) continue
+            }
             out.push(c)
         }
         cachedFiltered = out
@@ -61,6 +66,7 @@ Item {
     onScopeLocalChanged: recompute()
     onDirFilterChanged: recompute()
     onVerdictFilterChanged: recompute()
+    onHideDnsNoiseChanged: recompute()
     Component.onCompleted: recompute()
     Connections {
         target: pm
@@ -94,19 +100,19 @@ Item {
                 }
             }
 
-            // History Retention Depth Selector (Replaces fixed 250 cap!)
+            // History Retention Depth Selector (500 .. 50000)
             Row {
                 spacing: 3
                 Repeater {
-                    model: [ 500, 2000, 5000 ]
+                    model: [ 500, 2000, 5000, 20000, 50000 ]
                     delegate: Rectangle {
                         height: 22; radius: 4
-                        implicitWidth: limLbl.implicitWidth + 12
+                        implicitWidth: limLbl.implicitWidth + 10
                         color: pm.historyLimit === modelData ? "#1c3354" : "#1c1c1e"
                         border.color: pm.historyLimit === modelData ? "#4e97fa" : "#2a2a2e"
                         Label {
                             id: limLbl; anchors.centerIn: parent
-                            text: modelData
+                            text: modelData >= 10000 ? (modelData / 1000) + "k" : modelData
                             color: pm.historyLimit === modelData ? "#ffffff" : "#888894"
                             font.pixelSize: 10; font.bold: pm.historyLimit === modelData
                         }
@@ -115,6 +121,23 @@ Item {
                             onClicked: pm.setHistoryLimit(modelData)
                         }
                     }
+                }
+            }
+
+            Rectangle {
+                height: 22; radius: 4
+                color: root.hideDnsNoise ? "#1c3354" : "#1c1c1e"
+                border.color: root.hideDnsNoise ? "#4e97fa" : "#2a2a2e"
+                implicitWidth: dnsHideLbl.implicitWidth + 12
+                Label {
+                    id: dnsHideLbl; anchors.centerIn: parent
+                    text: pm.isRu ? "Скрыть DNS" : "Hide DNS"
+                    color: root.hideDnsNoise ? "#89b7ff" : "#888894"
+                    font.pixelSize: 10; font.bold: root.hideDnsNoise
+                }
+                MouseArea {
+                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                    onClicked: root.hideDnsNoise = !root.hideDnsNoise
                 }
             }
 
@@ -320,6 +343,7 @@ Item {
                     spacing: 1
                     model: root.cachedFiltered
                     ScrollBar.vertical: PmScrollBar {}
+                    PmWheelHelper {}
 
                     delegate: Rectangle {
                         id: rowItem

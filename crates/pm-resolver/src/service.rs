@@ -349,6 +349,7 @@ pub(crate) struct Inner {
     pub env_resolvers: Vec<Arc<Resolver>>,
     pub mdns_resolvers: Vec<Arc<Resolver>>,
     pub dedupe: Mutex<HashMap<String, Arc<DedupeStatus>>>,
+    pub override_cache: Mutex<HashMap<Vec<String>, Vec<Arc<Resolver>>>>,
     pub cache_reset: Mutex<CacheReset>,
     pub shutdown: CancellationToken,
     pub disabled: AtomicBool,
@@ -402,6 +403,7 @@ impl ResolverService {
                     mdns_conn,
                 )],
                 dedupe: Mutex::new(HashMap::new()),
+                override_cache: Mutex::new(HashMap::new()),
                 cache_reset: Mutex::new(CacheReset::default()),
                 shutdown: CancellationToken::new(),
                 disabled: AtomicBool::new(false),
@@ -740,9 +742,41 @@ impl ResolverService {
             return (selected, PRIMARY_SOURCE_SPECIAL, true);
         }
 
-        // Global domains.
+        // Global or per-app overridden domains.
+        if !q.override_nameservers.is_empty() {
+            let custom = self.override_resolvers(&q.override_nameservers);
+            if !custom.is_empty() {
+                self.add_resolvers(&state, q, &mut selected, &custom);
+                return (selected, SERVER_SOURCE_CONFIGURED, false);
+            }
+        }
         self.add_resolvers(&state, q, &mut selected, &state.global);
         (selected, SERVER_SOURCE_CONFIGURED, false)
+    }
+
+    fn override_resolvers(&self, urls: &[String]) -> Vec<Arc<Resolver>> {
+        let key: Vec<String> = urls.iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        if key.is_empty() {
+            return Vec::new();
+        }
+        if let Some(cached) = self
+            .inner
+            .override_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&key)
+        {
+            return cached.clone();
+        }
+        let built: Vec<Arc<Resolver>> = self.configured_resolvers(&key).into_iter().map(Arc::new).collect();
+        if !built.is_empty() {
+            let mut cache = self.inner.override_cache.lock().unwrap_or_else(|e| e.into_inner());
+            if cache.len() >= 64 {
+                cache.clear();
+            }
+            cache.insert(key, built.clone());
+        }
+        built
     }
 
     fn add_resolvers(

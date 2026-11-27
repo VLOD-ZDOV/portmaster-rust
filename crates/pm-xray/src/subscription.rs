@@ -968,8 +968,37 @@ impl SubscriptionStore {
             .ok_or_else(|| Error::NodeNotFound(id.to_string()))
     }
 
+    /// Saves or updates a single node in persistent storage without altering siblings.
+    pub fn save_node(&self, node: &XrayNode) -> Result<()> {
+        let key = Key::new(XRAY_DB, &node_key(&node.subscription_id, &node.id));
+        let record = Record::from_typed(key, Meta::default(), node)?;
+        Ok(self.db.put(record)?)
+    }
+
+    /// Removes a single node by ID and clears active/last pointers if needed.
+    pub fn remove_node(&self, id: &str) -> Result<()> {
+        let node = self.get_node(id)?;
+        let key = full_key(&node_key(&node.subscription_id, &node.id));
+        self.db.delete(&key)?;
+        if self.active_node_id().as_deref() == Some(id) {
+            self.clear_active();
+        }
+        if self.last_node_id().as_deref() == Some(id) {
+            self.clear_last_node();
+        }
+        Ok(())
+    }
+
     /// Replaces all nodes of a subscription, deleting nodes that disappeared.
     pub fn replace_nodes(&self, subscription_id: &str, nodes: &[XrayNode]) -> Result<()> {
+        let existing_rules: std::collections::HashMap<String, (Vec<String>, String)> = self
+            .list_nodes_for_subscription(subscription_id)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|n| !n.routing_rules.is_empty() || !n.rule_preset.is_empty())
+            .map(|n| (n.id, (n.routing_rules, n.rule_preset)))
+            .collect();
+
         let prefix = format!("{XRAY_DB}:{NODE_PREFIX}{subscription_id}:");
         let old: Vec<String> = self
             .db
@@ -978,8 +1007,15 @@ impl SubscriptionStore {
             .map(|record| record.key.key)
             .collect();
         for node in nodes {
+            let mut node = node.clone();
+            if node.routing_rules.is_empty() && node.rule_preset.is_empty() {
+                if let Some((rules, preset)) = existing_rules.get(&node.id) {
+                    node.routing_rules = rules.clone();
+                    node.rule_preset = preset.clone();
+                }
+            }
             let key = Key::new(XRAY_DB, &node_key(&node.subscription_id, &node.id));
-            let record = Record::from_typed(key, Meta::default(), node)?;
+            let record = Record::from_typed(key, Meta::default(), &node)?;
             self.db.put_new(record)?;
         }
         let wanted: Vec<String> = nodes

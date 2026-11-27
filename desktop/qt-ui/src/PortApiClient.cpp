@@ -104,6 +104,10 @@ void PortApiClient::start() {
     m_reconnectTimer->start();
 }
 
+void PortApiClient::setAdminToken(const QString& token) {
+    m_adminToken = token.trimmed();
+}
+
 QString PortApiClient::nextOpId(const QString& prefix) {
     return QStringLiteral("%1-%2").arg(prefix).arg(++m_counter);
 }
@@ -131,8 +135,12 @@ void PortApiClient::tryConnect() {
                 keyBytes[i] = static_cast<char>(QRandomGenerator::global()->bounded(256));
             }
             const QByteArray b64Key = keyBytes.toBase64();
+            QString wsPath = QStringLiteral("/api/database/v1");
+            if (!m_adminToken.isEmpty()) {
+                wsPath += QStringLiteral("?admin_token=") + QString::fromUtf8(QUrl::toPercentEncoding(m_adminToken));
+            }
             const QByteArray req =
-                "GET /api/database/v1 HTTP/1.1\r\n"
+                "GET " + wsPath.toUtf8() + " HTTP/1.1\r\n"
                 "Host: 127.0.0.1:817\r\n"
                 "Upgrade: websocket\r\n"
                 "Connection: Upgrade\r\n"
@@ -167,7 +175,11 @@ void PortApiClient::tryConnect() {
     if (wsUrl.startsWith(QLatin1String("https://"))) wsUrl.replace(0, 8, QStringLiteral("wss://"));
     else if (wsUrl.startsWith(QLatin1String("http://"))) wsUrl.replace(0, 7, QStringLiteral("ws://"));
     m_activeTransport = QStringLiteral("TCP ") + QUrl(httpBase).authority();
-    m_tcpWs->open(QUrl(wsUrl + QStringLiteral("/api/database/v1")));
+    QString tcpWsUrl = wsUrl + QStringLiteral("/api/database/v1");
+    if (!m_adminToken.isEmpty()) {
+        tcpWsUrl += QStringLiteral("?admin_token=") + QString::fromUtf8(QUrl::toPercentEncoding(m_adminToken));
+    }
+    m_tcpWs->open(QUrl(tcpWsUrl));
 }
 
 void PortApiClient::onLocalWsReadyRead() {
@@ -427,6 +439,9 @@ void PortApiClient::httpRequest(const QString& method, const QString& path, cons
     if (!contentType.isEmpty()) {
         req.setHeader(QNetworkRequest::ContentTypeHeader, contentType);
     }
+    if (!m_adminToken.isEmpty()) {
+        req.setRawHeader("X-Portmaster-Admin-Token", m_adminToken.toUtf8());
+    }
     QNetworkReply* reply = nullptr;
     if (method == QLatin1String("GET")) reply = m_nam->get(req);
     else if (method == QLatin1String("POST")) reply = m_nam->post(req, body);
@@ -459,11 +474,15 @@ void PortApiClient::httpOverUnixSocket(const QString& sockPath, const QString& m
         if (*cbShared) (*cbShared)(code, respBody, err);
     };
 
-    connect(sock, &QLocalSocket::connected, sock, [sock, method, path, body, contentType, finished]() {
+    const QString adminTok = m_adminToken;
+    connect(sock, &QLocalSocket::connected, sock, [sock, method, path, body, contentType, adminTok, finished]() {
         if (*finished) return;
         QByteArray raw = method.toUtf8() + " " + path.toUtf8() + " HTTP/1.1\r\n"
             "Host: 127.0.0.1:817\r\n"
             "Connection: close\r\n";
+        if (!adminTok.isEmpty()) {
+            raw += "X-Portmaster-Admin-Token: " + adminTok.toUtf8() + "\r\n";
+        }
         if (!contentType.isEmpty()) {
             raw += "Content-Type: " + contentType.toUtf8() + "\r\n";
         }

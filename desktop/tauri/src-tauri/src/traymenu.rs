@@ -37,7 +37,7 @@ pub type ContextMenu = Menu<Wry>;
 
 static SPN_STATE: AtomicBool = AtomicBool::new(false);
 static SPN_USE_STATE: AtomicBool = AtomicBool::new(false);
-static ACTIVE_UI_IS_QT: AtomicBool = AtomicBool::new(false);
+pub(crate) static ACTIVE_UI_IS_QT: AtomicBool = AtomicBool::new(true);
 static ACTIVE_UI_IS_RUST: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone)]
@@ -151,7 +151,7 @@ fn get_icon(icon: IconColor) -> &'static [u8] {
     }
 }
 
-fn find_qt_binary() -> Option<std::path::PathBuf> {
+pub(crate) fn find_qt_binary() -> Option<std::path::PathBuf> {
     #[cfg(windows)]
     let name = "portmaster-qt.exe";
     #[cfg(not(windows))]
@@ -366,7 +366,29 @@ fn build_tray_menu(
     Ok(menu)
 }
 
-fn spawn_qt_gui_no_tray() -> bool {
+#[cfg(target_os = "linux")]
+pub(crate) fn spawn_qt_gui_with_tray(background: bool) -> bool {
+    if let Some(qt_bin) = find_qt_binary() {
+        let mut cmd = std::process::Command::new(&qt_bin);
+        if background {
+            cmd.arg("--background");
+        }
+        match cmd.spawn() {
+            Ok(mut child) => {
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+                return true;
+            }
+            Err(err) => {
+                error!("[tauri] failed to launch portmaster-qt ({}): {}", qt_bin.display(), err);
+            }
+        }
+    }
+    false
+}
+
+pub(crate) fn spawn_qt_gui_no_tray() -> bool {
     if let Some(qt_bin) = find_qt_binary() {
         match std::process::Command::new(&qt_bin).arg("--no-tray").spawn() {
             Ok(mut child) => {
@@ -384,7 +406,7 @@ fn spawn_qt_gui_no_tray() -> bool {
     false
 }
 
-fn open_active_ui_flavor(app: &tauri::AppHandle) {
+pub(crate) fn open_active_ui_flavor(app: &tauri::AppHandle) {
     if ACTIVE_UI_IS_QT.load(Ordering::Acquire) && spawn_qt_gui_no_tray() {
         return;
     }
@@ -756,9 +778,16 @@ pub async fn tray_handler(cli: PortAPI, app: tauri::AppHandle) {
                     if let Ok(v) = p.parse::<serde_json::Value>() {
                         let val = v.get("Value").and_then(|x| x.as_str())
                             .or_else(|| v.get("DefaultValue").and_then(|x| x.as_str()))
-                            .unwrap_or("angular");
-                        ACTIVE_UI_IS_QT.store(val == "qt", Ordering::Release);
+                            .unwrap_or("qt");
+                        let is_qt = val == "qt";
+                        ACTIVE_UI_IS_QT.store(is_qt, Ordering::Release);
                         ACTIVE_UI_IS_RUST.store(val == "rust-wasm", Ordering::Release);
+                        if is_qt {
+                            if let Some(win) = app.get_webview_window("main") {
+                                let _ = win.destroy();
+                            }
+                            crate::portapi::client::release_api_port_lease();
+                        }
                     }
                 }
             },

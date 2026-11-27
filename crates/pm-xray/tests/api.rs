@@ -215,6 +215,7 @@ fn status_and_stats_endpoints_expose_traffic() {
         port: 443,
         raw_config: "vless://00010203-0405-0607-0809-0a0b0c0d0e0f@vless.example.com:443"
             .into(),
+        ..Default::default()
     };
     xray.manager
         .connect(&node, 1080, InboundProtocol::Socks)
@@ -281,6 +282,7 @@ fn api_never_exposes_node_secrets_or_subscription_credentials() {
         address: "example.com".into(),
         port: 443,
         raw_config: "vless://uuid:password@example.com:443".into(),
+        ..Default::default()
     };
     xray.store.replace_nodes("s1", &[node]).unwrap();
 

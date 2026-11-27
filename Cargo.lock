@@ -1635,6 +1635,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "windows-service",
+ "zip",
 ]
 
 [[package]]

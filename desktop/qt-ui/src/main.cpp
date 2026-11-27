@@ -11,6 +11,7 @@
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QSettings>
+#include <QSurfaceFormat>
 #include <QTimer>
 
 #include "PortmasterBackend.h"
@@ -20,6 +21,11 @@ int main(int argc, char* argv[]) {
     const bool hwAccel = QSettings(QStringLiteral("portmaster"), QStringLiteral("qt-ui")).value(QStringLiteral("hwAccel"), true).toBool();
     if (!hwAccel) {
         QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
+    } else {
+        // Request native display VSync pacing (e.g. 165 Hz) when using GPU SceneGraph.
+        QSurfaceFormat fmt = QSurfaceFormat::defaultFormat();
+        fmt.setSwapInterval(1);
+        QSurfaceFormat::setDefaultFormat(fmt);
     }
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("portmaster-qt"));

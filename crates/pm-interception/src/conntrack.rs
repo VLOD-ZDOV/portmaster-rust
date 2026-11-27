@@ -28,9 +28,12 @@ const NLA_TYPE_MASK: u16 = 0x3fff;
 const CTA_TUPLE_ORIG: u16 = 1;
 const CTA_TUPLE_REPLY: u16 = 2;
 const CTA_MARK: u16 = 8;
+const CTA_COUNTERS_ORIG: u16 = 9;
+const CTA_COUNTERS_REPLY: u16 = 10;
 const CTA_MARK_MASK: u16 = 21;
 const CTA_TUPLE_IP: u16 = 1;
 const CTA_TUPLE_PROTO: u16 = 2;
+const CTA_COUNTERS_BYTES: u16 = 2;
 const CTA_PROTO_NUM: u16 = 1;
 const CTA_PROTO_SRC_PORT: u16 = 2;
 const CTA_PROTO_DST_PORT: u16 = 3;
@@ -79,6 +82,15 @@ impl Entry {
     pub fn is_loopback(&self) -> bool {
         self.addrs.iter().any(IpAddr::is_loopback)
     }
+}
+
+/// Per-flow byte counters returned by a conntrack table dump.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CounterEntry {
+    pub orig: ConnTuple,
+    pub reply: Option<ConnTuple>,
+    pub orig_bytes: u64,
+    pub reply_bytes: u64,
 }
 
 /// The original tuple of a connection, as Go `DeleteMarkedConnection` builds it.
@@ -164,6 +176,45 @@ impl Conntrack {
         self.send(&msg)?;
 
         let mut entries = Vec::new();
+        self.dump_messages(family, &attrs, |payload| {
+            if let Some(entry) = parse_entry(payload) {
+                // Filter again in case the kernel ignored the mark filter.
+                if entry.mark == mark {
+                    entries.push(entry);
+                }
+            }
+        })?;
+        Ok(entries)
+    }
+
+    /// Dumps byte counters (`CTA_COUNTERS_ORIG` and `CTA_COUNTERS_REPLY`) for
+    /// all active conntrack flows of the given address family.
+    pub fn dump_counters(&mut self, family: Family) -> io::Result<Vec<CounterEntry>> {
+        let mut entries = Vec::new();
+        self.dump_messages(family, &[], |payload| {
+            if let Some(entry) = parse_counter_entry(payload) {
+                if entry.orig_bytes > 0 || entry.reply_bytes > 0 {
+                    entries.push(entry);
+                }
+            }
+        })?;
+        Ok(entries)
+    }
+
+    fn dump_messages(
+        &mut self,
+        family: Family,
+        attrs: &[u8],
+        mut on_payload: impl FnMut(&[u8]),
+    ) -> io::Result<()> {
+        let msg = self.message(
+            IPCTNL_MSG_CT_GET,
+            NLM_F_REQUEST | NLM_F_DUMP,
+            family,
+            attrs,
+        );
+        self.send(&msg)?;
+
         let mut buf = vec![0u8; 1 << 16];
         loop {
             let (n, _) = recv(&self.fd, &mut buf[..], RecvFlags::empty())?;
@@ -172,18 +223,11 @@ impl Conntrack {
                 match kind {
                     NLMSG_DONE => done = true,
                     NLMSG_ERROR => check_error(payload)?,
-                    _ => {
-                        if let Some(entry) = parse_entry(payload) {
-                            // Filter again in case the kernel ignored the mark filter.
-                            if entry.mark == mark {
-                                entries.push(entry);
-                            }
-                        }
-                    }
+                    _ => on_payload(payload),
                 }
             }
             if done {
-                return Ok(entries);
+                return Ok(());
             }
         }
     }
@@ -407,6 +451,109 @@ fn tuple_addrs(tuple: &[u8], out: &mut Vec<IpAddr>) {
     }
 }
 
+fn parse_tuple(tuple: &[u8]) -> Option<ConnTuple> {
+    let mut src = None;
+    let mut dst = None;
+    let mut protocol = 0u8;
+    let mut src_port = 0u16;
+    let mut dst_port = 0u16;
+
+    for (kind, value, _) in attrs(tuple) {
+        match kind {
+            CTA_TUPLE_IP => {
+                for (ip_kind, ip, _) in attrs(value) {
+                    match ip_kind {
+                        CTA_IP_V4_SRC => {
+                            if let Ok(b) = <[u8; 4]>::try_from(ip) {
+                                src = Some(IpAddr::V4(Ipv4Addr::from(b)));
+                            }
+                        }
+                        CTA_IP_V4_DST => {
+                            if let Ok(b) = <[u8; 4]>::try_from(ip) {
+                                dst = Some(IpAddr::V4(Ipv4Addr::from(b)));
+                            }
+                        }
+                        CTA_IP_V6_SRC => {
+                            if let Ok(b) = <[u8; 16]>::try_from(ip) {
+                                src = Some(IpAddr::V6(Ipv6Addr::from(b)));
+                            }
+                        }
+                        CTA_IP_V6_DST => {
+                            if let Ok(b) = <[u8; 16]>::try_from(ip) {
+                                dst = Some(IpAddr::V6(Ipv6Addr::from(b)));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            CTA_TUPLE_PROTO => {
+                for (pk, pv, _) in attrs(value) {
+                    match pk {
+                        CTA_PROTO_NUM if !pv.is_empty() => protocol = pv[0],
+                        CTA_PROTO_SRC_PORT => {
+                            if let Ok(b) = <[u8; 2]>::try_from(pv) {
+                                src_port = u16::from_be_bytes(b);
+                            }
+                        }
+                        CTA_PROTO_DST_PORT => {
+                            if let Ok(b) = <[u8; 2]>::try_from(pv) {
+                                dst_port = u16::from_be_bytes(b);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Some(ConnTuple {
+        src: src?,
+        dst: dst?,
+        protocol,
+        src_port,
+        dst_port,
+    })
+}
+
+fn parse_counter_bytes(counter_attr: &[u8]) -> u64 {
+    for (kind, value, _) in attrs(counter_attr) {
+        if kind == CTA_COUNTERS_BYTES {
+            if let Ok(b) = <[u8; 8]>::try_from(value) {
+                return u64::from_be_bytes(b);
+            }
+        }
+    }
+    0
+}
+
+fn parse_counter_entry(payload: &[u8]) -> Option<CounterEntry> {
+    let body = payload.get(4..)?;
+    let mut orig = None;
+    let mut reply = None;
+    let mut orig_bytes = 0u64;
+    let mut reply_bytes = 0u64;
+
+    for (kind, value, _) in attrs(body) {
+        match kind {
+            CTA_TUPLE_ORIG => orig = parse_tuple(value),
+            CTA_TUPLE_REPLY => reply = parse_tuple(value),
+            CTA_COUNTERS_ORIG => orig_bytes = parse_counter_bytes(value),
+            CTA_COUNTERS_REPLY => reply_bytes = parse_counter_bytes(value),
+            _ => {}
+        }
+    }
+
+    Some(CounterEntry {
+        orig: orig?,
+        reply,
+        orig_bytes,
+        reply_bytes,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -520,6 +667,49 @@ mod tests {
         m[4..6].copy_from_slice(&NLMSG_ERROR.to_ne_bytes());
         m[8..12].copy_from_slice(&42u32.to_ne_bytes());
         assert_eq!(messages(&m), vec![(NLMSG_ERROR, 42, &m[16..])]);
+    }
+
+    #[test]
+    fn parses_conntrack_byte_counters() {
+        let mut orig_ip = Vec::new();
+        put_attr(&mut orig_ip, CTA_IP_V4_SRC, &[10, 0, 0, 2]);
+        put_attr(&mut orig_ip, CTA_IP_V4_DST, &[1, 1, 1, 1]);
+        let mut orig_proto = Vec::new();
+        put_attr(&mut orig_proto, CTA_PROTO_NUM, &[6]);
+        put_attr(&mut orig_proto, CTA_PROTO_SRC_PORT, &45000u16.to_be_bytes());
+        put_attr(&mut orig_proto, CTA_PROTO_DST_PORT, &443u16.to_be_bytes());
+        let mut orig_body = nested(CTA_TUPLE_IP, &orig_ip);
+        orig_body.extend(nested(CTA_TUPLE_PROTO, &orig_proto));
+
+        let mut reply_ip = Vec::new();
+        put_attr(&mut reply_ip, CTA_IP_V4_SRC, &[1, 1, 1, 1]);
+        put_attr(&mut reply_ip, CTA_IP_V4_DST, &[10, 0, 0, 2]);
+        let mut reply_proto = Vec::new();
+        put_attr(&mut reply_proto, CTA_PROTO_NUM, &[6]);
+        put_attr(&mut reply_proto, CTA_PROTO_SRC_PORT, &443u16.to_be_bytes());
+        put_attr(&mut reply_proto, CTA_PROTO_DST_PORT, &45000u16.to_be_bytes());
+        let mut reply_body = nested(CTA_TUPLE_IP, &reply_ip);
+        reply_body.extend(nested(CTA_TUPLE_PROTO, &reply_proto));
+
+        let mut c_orig = Vec::new();
+        put_attr(&mut c_orig, CTA_COUNTERS_BYTES, &12345u64.to_be_bytes());
+        let mut c_reply = Vec::new();
+        put_attr(&mut c_reply, CTA_COUNTERS_BYTES, &67890u64.to_be_bytes());
+
+        let mut p = vec![2, 0, 0, 0];
+        p.extend(nested(CTA_TUPLE_ORIG, &orig_body));
+        p.extend(nested(CTA_TUPLE_REPLY, &reply_body));
+        p.extend(nested(CTA_COUNTERS_ORIG, &c_orig));
+        p.extend(nested(CTA_COUNTERS_REPLY, &c_reply));
+
+        let entry = parse_counter_entry(&p).unwrap();
+        assert_eq!(entry.orig.src, "10.0.0.2".parse::<IpAddr>().unwrap());
+        assert_eq!(entry.orig.dst, "1.1.1.1".parse::<IpAddr>().unwrap());
+        assert_eq!(entry.orig.protocol, 6);
+        assert_eq!(entry.orig.src_port, 45000);
+        assert_eq!(entry.orig.dst_port, 443);
+        assert_eq!(entry.orig_bytes, 12345);
+        assert_eq!(entry.reply_bytes, 67890);
     }
 
     #[test]

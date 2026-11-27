@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use pm_config::{
-    Config, ConfigOption, CATEGORY_ANNOTATION, DISPLAY_ORDER_ANNOTATION, EXPERTISE_LEVEL_EXPERT,
+    Config, ConfigOption, CATEGORY_ANNOTATION, DISPLAY_ORDER_ANNOTATION, EXPERTISE_LEVEL_DEVELOPER,
     OPT_TYPE_STRING, RELEASE_LEVEL_STABLE,
 };
 use serde_json::{json, Value};
@@ -62,25 +62,10 @@ pub fn register_options_with(
             OPT_TYPE_STRING,
             Value::String(defaults.instance.clone()),
         )
-        .with_expertise_level(EXPERTISE_LEVEL_EXPERT)
+        .with_expertise_level(EXPERTISE_LEVEL_DEVELOPER)
         .with_release_level(RELEASE_LEVEL_STABLE)
         .with_requires_restart(true)
         .with_validation_regex("^([a-zA-Z_][a-zA-Z0-9_]*)?$")
-        .with_annotation(DISPLAY_ORDER_ANNOTATION, json!(0))
-        .with_annotation(CATEGORY_ANNOTATION, json!("Metrics")),
-    )?;
-
-    config.register(
-        ConfigOption::new(
-            "Metrics Comment Label",
-            CFG_OPTION_COMMENT_KEY,
-            "Define a metrics comment label, which is added to the info metric.",
-            OPT_TYPE_STRING,
-            Value::String(defaults.comment.clone()),
-        )
-        .with_expertise_level(EXPERTISE_LEVEL_EXPERT)
-        .with_release_level(RELEASE_LEVEL_STABLE)
-        .with_requires_restart(true)
         .with_annotation(DISPLAY_ORDER_ANNOTATION, json!(0))
         .with_annotation(CATEGORY_ANNOTATION, json!("Metrics")),
     )?;
@@ -93,7 +78,7 @@ pub fn register_options_with(
             OPT_TYPE_STRING,
             Value::String(defaults.push.clone()),
         )
-        .with_expertise_level(EXPERTISE_LEVEL_EXPERT)
+        .with_expertise_level(EXPERTISE_LEVEL_DEVELOPER)
         .with_release_level(RELEASE_LEVEL_STABLE)
         .with_requires_restart(true)
         .with_annotation(DISPLAY_ORDER_ANNOTATION, json!(0))
@@ -115,7 +100,7 @@ impl ConfigValues {
         let default_instance = default_instance();
         ConfigValues {
             instance: config.get_as_string(CFG_OPTION_INSTANCE_KEY, &default_instance)(),
-            comment: config.get_as_string(CFG_OPTION_COMMENT_KEY, "")(),
+            comment: String::new(),
             push: config.get_as_string(CFG_OPTION_PUSH_KEY, "")(),
         }
     }

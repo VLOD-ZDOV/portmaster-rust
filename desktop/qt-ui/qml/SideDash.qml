@@ -280,10 +280,27 @@ Rectangle {
             }
         }
 
-        // 4. Network Scout (Live Active Apps)
+        // 4. Network Scout (Session / Live Active Apps)
         RowLayout {
             Layout.fillWidth: true
+            spacing: 6
             Label { text: pm.t("apps.active").toUpperCase(); color: "#888888"; font.pixelSize: 10; font.bold: true; Layout.fillWidth: true }
+            Rectangle {
+                height: 18; radius: 3
+                color: pm.onlyNowApps ? "#173252" : "#1d1d21"
+                border.color: pm.onlyNowApps ? "#4e97fa" : "#2f3038"
+                implicitWidth: sdNowLbl.implicitWidth + 10
+                Label {
+                    id: sdNowLbl; anchors.centerIn: parent
+                    text: pm.isRu ? "Сейчас" : "Live"
+                    color: pm.onlyNowApps ? "#89b7ff" : "#7e808a"
+                    font.pixelSize: 9; font.bold: pm.onlyNowApps
+                }
+                MouseArea {
+                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                    onClicked: pm.setOnlyNowApps(!pm.onlyNowApps)
+                }
+            }
             Label { text: pm.activeApps.length; color: "#1de966"; font.pixelSize: 10; font.bold: true }
         }
 
@@ -304,6 +321,7 @@ Rectangle {
             cacheBuffer: 600
             spacing: 4
             ScrollBar.vertical: PmScrollBar {}
+            PmWheelHelper {}
             model: {
                 var q = root.scoutSearch
                 var out = []

@@ -17,5 +17,8 @@
         <file alias="PmSwitch.qml">qml/PmSwitch.qml</file>
         <file alias="PmCheckBox.qml">qml/PmCheckBox.qml</file>
         <file alias="PmScrollBar.qml">qml/PmScrollBar.qml</file>
+        <file alias="PmWheelHelper.qml">qml/PmWheelHelper.qml</file>
+        <file alias="RuleBuilderModal.qml">qml/RuleBuilderModal.qml</file>
+        <file alias="NodeEditorModal.qml">qml/NodeEditorModal.qml</file>
     </qresource>
 </RCC>

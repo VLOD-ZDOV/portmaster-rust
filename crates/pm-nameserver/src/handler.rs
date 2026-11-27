@@ -450,7 +450,11 @@ impl Nameserver {
             return reply;
         }
 
-        // Resolve the request.
+        // Resolve the request (applying any per-application DNS server overrides).
+        let overrides = self.deps.hook.dns_nameserver_overrides(conn);
+        if !overrides.is_empty() {
+            q.override_nameservers = overrides;
+        }
         let rr_cache: Option<RRCache>;
         match self.deps.resolver.resolve(q.clone(), &flow.cancel).await {
             Ok(cache) => rr_cache = Some(cache),

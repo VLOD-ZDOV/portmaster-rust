@@ -16,7 +16,7 @@ use crate::api_auth::{ApiAuthenticator, SystemLookup};
 use crate::cli::Options;
 
 /// Current Portmaster release version.
-pub const PORTMASTER_VERSION: &str = "2.2.39";
+pub const PORTMASTER_VERSION: &str = "2.2.40";
 /// GitHub repository for update checks.
 pub const CFG_GITHUB_RELEASE_REPO: &str = "core/updates/githubRepo";
 
@@ -472,6 +472,14 @@ impl Service {
         pm_intel::customlists::register_api(&api, Arc::clone(&custom_lists))
             .map_err(|error| anyhow::anyhow!("register customlists api: {error}"))?;
 
+        // Register optional administrator lock (off unless a password is set).
+        crate::admin_lock::AdminLock::load(&data_dir)
+            .install(&api)
+            .map_err(|error| anyhow::anyhow!("install admin lock: {error}"))?;
+
+        let xray_for_updates: Arc<std::sync::OnceLock<Arc<pm_xray::Xray>>> =
+            Arc::new(std::sync::OnceLock::new());
+
         register_update_endpoints(
             &api,
             Arc::clone(&binary_updater),
@@ -480,6 +488,7 @@ impl Service {
             Arc::clone(&filter_lists_module),
             Arc::clone(&geoip),
             api.ui_archives(),
+            Arc::clone(&xray_for_updates),
         )?;
 
         let parsed_addr: std::net::SocketAddr = listen_address
@@ -812,6 +821,7 @@ impl Service {
         xray.register_api(&api)
             .map_err(|error| anyhow::anyhow!("register xray api: {error}"))?;
         xray.start();
+        let _ = xray_for_updates.set(Arc::clone(&xray));
         crate::account_api::register_spn_and_user_profile(&runtime, &databases, Arc::clone(&xray));
 
         // Watch for external changes to `spn/enable` / `xray/*` (e.g. from UI, CLI, or tray)
@@ -1314,13 +1324,14 @@ impl Service {
             })
         };
 
-        // Intel updates: check every hour (first after 15 seconds, like Go),
-        // then apply the filter list files of the new index.
+        // Intel + Xray geodata updates: check every hour (first after 15 seconds,
+        // like Go), then apply the filter list files and due geodata rulesets.
         let intel_worker = {
             let updater = Arc::clone(&self.intel_updater);
             let module = Arc::clone(&self.filter_lists_module);
             let lists = Arc::clone(&self.filter_lists);
             let geoip = Arc::clone(&self.geoip);
+            let xray_geo = Arc::clone(&self.xray);
             tokio::spawn(async move {
                 let start = tokio::time::Instant::now() + Duration::from_secs(15);
                 let mut interval = tokio::time::interval_at(
@@ -1336,13 +1347,16 @@ impl Service {
                     let module = Arc::clone(&module);
                     let lists = Arc::clone(&lists);
                     let geoip = Arc::clone(&geoip);
+                    let xray_geo = Arc::clone(&xray_geo);
                     let result = tokio::task::spawn_blocking(move || {
-                        module.handle_resources_updated(|| {
+                        let res = module.handle_resources_updated(|| {
                             updater
                                 .update_check()
                                 .map_err(|error| error.to_string())?;
                             apply_intel_update(&updater, &lists, &geoip)
-                        })
+                        });
+                        xray_geo.maybe_update_geodata_if_due();
+                        res
                     })
                     .await;
                     match result {
@@ -1830,7 +1844,7 @@ fn register_options(config: &Config, options: &Options) -> anyhow::Result<()> {
             pm_config::OPT_TYPE_STRING,
             Value::String("stable".to_string()),
         )
-        .with_expertise_level(pm_config::EXPERTISE_LEVEL_EXPERT)
+        .with_expertise_level(pm_config::EXPERTISE_LEVEL_DEVELOPER)
         .with_release_level(pm_config::RELEASE_LEVEL_STABLE)
         .with_requires_restart(true)
         .with_annotation(pm_config::DISPLAY_ORDER_ANNOTATION, json!(-4))
@@ -1991,7 +2005,7 @@ fn register_options(config: &Config, options: &Options) -> anyhow::Result<()> {
             CFG_UI_FLAVOR,
             "Select which graphical interface Portmaster uses: angular (Classic Web), rust-wasm (Lightweight Rust WASM), or qt (Native C++/Qt Desktop).",
             pm_config::OPT_TYPE_STRING,
-            Value::String("angular".to_string()),
+            Value::String("qt".to_string()),
         )
         .with_expertise_level(pm_config::EXPERTISE_LEVEL_USER)
         .with_annotation(pm_config::DISPLAY_ORDER_ANNOTATION, json!(516))
@@ -2044,6 +2058,7 @@ fn register_update_endpoints(
     module: Arc<pm_intel::FilterListsModule>,
     geoip: Arc<pm_geoip::GeoIp>,
     archives: Option<Arc<UiArchives>>,
+    xray_slot: Arc<std::sync::OnceLock<Arc<pm_xray::Xray>>>,
 ) -> anyhow::Result<()> {
     let check_binary = Arc::clone(&binary_updater);
     let check_intel = Arc::clone(&intel_updater);
@@ -2051,6 +2066,7 @@ fn register_update_endpoints(
     let check_module = Arc::clone(&module);
     let check_geoip = Arc::clone(&geoip);
     let check_archives = archives.clone();
+    let check_xray = Arc::clone(&xray_slot);
     api.register_endpoint(
         pm_api::Endpoint::new(
             "updates/check",
@@ -2066,6 +2082,7 @@ fn register_update_endpoints(
             let module = Arc::clone(&check_module);
             let geoip = Arc::clone(&check_geoip);
             let archives = check_archives.clone();
+            let xray_slot = Arc::clone(&check_xray);
             tokio::task::spawn_blocking(move || {
                 if let Some(archives) = &archives {
                     archives.enable_upgrade_lock();
@@ -2079,6 +2096,9 @@ fn register_update_endpoints(
                         .map_err(|error| error.to_string())?;
                     apply_intel_update(&intel_updater, &lists, &geoip)
                 });
+                if let Some(xray) = xray_slot.get() {
+                    xray.maybe_update_geodata_if_due();
+                }
                 if let Some(archives) = &archives {
                     archives.disable_upgrade_lock();
                 }
@@ -2122,6 +2142,7 @@ fn register_update_endpoints(
                 let module = Arc::clone(&module);
                 let geoip = Arc::clone(&geoip);
                 let archives = archives.clone();
+                let xray_slot = Arc::clone(&xray_slot);
                 tokio::task::spawn_blocking(move || {
                     if let Some(archives) = &archives {
                         archives.enable_upgrade_lock();
@@ -2135,6 +2156,9 @@ fn register_update_endpoints(
                             .map_err(|error| error.to_string())?;
                         apply_intel_update(&intel_updater, &lists, &geoip)
                     });
+                    if let Some(xray) = xray_slot.get() {
+                        xray.maybe_update_geodata_if_due();
+                    }
                     if let Some(archives) = &archives {
                         archives.disable_upgrade_lock();
                     }

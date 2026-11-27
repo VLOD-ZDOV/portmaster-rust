@@ -286,6 +286,11 @@ impl Response {
     }
 }
 
+/// Hook checked after authentication before executing an endpoint (used for Admin Lock).
+pub type LockGuard = Arc<dyn Fn(&Request, &Endpoint) -> std::result::Result<(), Response> + Send + Sync>;
+/// Hook checked on Database WebSocket mutations (`create`, `update`, `insert`, `delete`).
+pub type WsWriteGuard = Arc<dyn Fn(Option<&str>, Option<&str>, &str) -> std::result::Result<(), String> + Send + Sync>;
+
 /// The API server state: endpoint registry, keys and authenticator.
 pub struct Api {
     endpoints: RwLock<BTreeMap<String, Arc<Endpoint>>>,
@@ -295,6 +300,8 @@ pub struct Api {
     authenticator: RwLock<Option<Arc<dyn Authenticator>>>,
     databases: RwLock<Option<Arc<pm_database::Databases>>>,
     ui_archives: RwLock<Option<Arc<ui::UiArchives>>>,
+    lock_guard: RwLock<Option<LockGuard>>,
+    ws_write_guard: RwLock<Option<WsWriteGuard>>,
     sessions: session::Sessions,
     ready: AtomicBool,
     dev_mode: AtomicBool,
@@ -311,6 +318,8 @@ impl Api {
             authenticator: RwLock::new(None),
             databases: RwLock::new(None),
             ui_archives: RwLock::new(None),
+            lock_guard: RwLock::new(None),
+            ws_write_guard: RwLock::new(None),
             sessions: session::Sessions::new(),
             ready: AtomicBool::new(false),
             dev_mode: AtomicBool::new(false),
@@ -331,6 +340,24 @@ impl Api {
 
     pub fn listen_address(&self) -> &str {
         &self.listen_address
+    }
+
+    /// Installs an optional admin-lock guard evaluated after standard API auth.
+    pub fn set_lock_guard(&self, guard: LockGuard) {
+        *self.lock_guard.write().unwrap_or_else(|e| e.into_inner()) = Some(guard);
+    }
+
+    /// Installs an optional admin-lock guard evaluated on Database WS writes.
+    pub fn set_ws_write_guard(&self, guard: WsWriteGuard) {
+        *self.ws_write_guard.write().unwrap_or_else(|e| e.into_inner()) = Some(guard);
+    }
+
+    pub fn check_ws_write(&self, admin_token: Option<&str>, peer: Option<&str>, key: &str) -> std::result::Result<(), String> {
+        let guard = self.ws_write_guard.read().unwrap_or_else(|e| e.into_inner()).clone();
+        match guard {
+            Some(g) => g(admin_token, peer, key),
+            None => Ok(()),
+        }
     }
 
     /// Registers an endpoint.
@@ -502,6 +529,13 @@ impl Api {
         match self.authorize(&mut request, &endpoint) {
             Ok(token) => request.auth = Some(token),
             Err(response) => {
+                return self.decorate(response, &request, cors_origin.as_deref());
+            }
+        }
+
+        let lock_guard = self.lock_guard.read().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(guard) = lock_guard {
+            if let Err(response) = guard(&request, &endpoint) {
                 return self.decorate(response, &request, cors_origin.as_deref());
             }
         }

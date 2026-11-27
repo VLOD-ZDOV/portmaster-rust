@@ -4,6 +4,7 @@ import QtQuick.Layouts
 
 Item {
     id: root
+    signal openGlobalRuleBuilder()
 
     property bool showSubDrawer: false
     property bool showLinkDrawer: false
@@ -99,6 +100,13 @@ Item {
                 }
 
                 Item { Layout.fillWidth: true }
+
+                Rectangle {
+                    height: 28; radius: 4; color: "#1c283a"; border.color: "#4e97fa"
+                    implicitWidth: gRbLbl.implicitWidth + 14
+                    Label { id: gRbLbl; anchors.centerIn: parent; text: pm.isRu ? "⚙ Правила Xray" : "⚙ Xray Rules"; color: "#89b7ff"; font.pixelSize: 10; font.bold: true }
+                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.openGlobalRuleBuilder() }
+                }
 
                 Rectangle {
                     height: 28; radius: 4; color: "#22242a"; border.color: "#363842"
@@ -224,6 +232,7 @@ Item {
                 property real panX: 0.0
                 property real panY: 0.0
                 property string hoveredCode: ""
+                property string hoveredHitKey: ""
                 property string hoveredName: ""
                 property int hoveredNodes: 0
 
@@ -273,9 +282,16 @@ Item {
                         if (nx < c.minX || nx > c.maxX || ny < c.minY || ny > c.maxY) continue
                         var polys = c.polygons || []
                         for (var p = 0; p < polys.length; p++) {
-                            if (polys[p].length >= 6 && pointInFlatPoly(nx, ny, polys[p])) {
-                                return c
+                            var polyRings = polys[p]
+                            if (!polyRings || polyRings.length === 0) continue
+                            if (typeof polyRings[0] === "number") polyRings = [polyRings]
+                            var hits = 0
+                            for (var r = 0; r < polyRings.length; r++) {
+                                if (polyRings[r].length >= 6 && pointInFlatPoly(nx, ny, polyRings[r])) {
+                                    hits++
+                                }
                             }
+                            if ((hits % 2) === 1) return c
                         }
                     }
                     return null
@@ -284,15 +300,20 @@ Item {
                 function drawCountryFlat(ctx, c, w, h) {
                     var cpolys = c.polygons || []
                     for (var k = 0; k < cpolys.length; k++) {
-                        var pts = cpolys[k]
-                        if (pts.length < 6) continue
+                        var polyRings = cpolys[k]
+                        if (!polyRings || polyRings.length === 0) continue
+                        if (typeof polyRings[0] === "number") polyRings = [polyRings]
                         ctx.beginPath()
-                        ctx.moveTo(pts[0] * w, pts[1] * h)
-                        for (var j = 2; j < pts.length; j += 2) {
-                            ctx.lineTo(pts[j] * w, pts[j + 1] * h)
+                        for (var r = 0; r < polyRings.length; r++) {
+                            var pts = polyRings[r]
+                            if (!pts || pts.length < 6) continue
+                            ctx.moveTo(pts[0] * w, pts[1] * h)
+                            for (var j = 2; j < pts.length; j += 2) {
+                                ctx.lineTo(pts[j] * w, pts[j + 1] * h)
+                            }
+                            ctx.closePath()
                         }
-                        ctx.closePath()
-                        ctx.fill()
+                        ctx.fill("evenodd")
                         ctx.stroke()
                     }
                 }
@@ -300,6 +321,7 @@ Item {
                 onWidthChanged: clampPan()
                 onHeightChanged: clampPan()
                 onHoveredCodeChanged: hoverCanvas.requestPaint()
+                onHoveredHitKeyChanged: hoverCanvas.requestPaint()
 
                 Item {
                     id: mapViewport
@@ -329,27 +351,35 @@ Item {
                                 }
                             }
 
-                            for (var ci = 0; ci < countries.length; ci++) {
-                                var c = countries[ci]
-                                var code = c.code || ""
-                                var isAct = !!activeCountries[code]
-                                var hasNode = !!nodeCountries[code]
-
-                                if (isAct) {
-                                    ctx.fillStyle = "#175432"
-                                    ctx.strokeStyle = "#1de966"
-                                    ctx.lineWidth = 1.2
-                                } else if (hasNode) {
-                                    ctx.fillStyle = "#2b2c32"
-                                    ctx.strokeStyle = "#2b2c32"
-                                    ctx.lineWidth = 1.5
-                                } else {
-                                    // Borderless seamless landmass matching Angular map-style.scss
-                                    ctx.fillStyle = "#1e1e1e"
-                                    ctx.strokeStyle = "#1e1e1e"
-                                    ctx.lineWidth = 1.6
+                            // 3-pass painting prevents adjacent borderless land fills from overdrawing active country borders
+                            ctx.fillStyle = "#1e1e1e"
+                            ctx.strokeStyle = "#1e1e1e"
+                            ctx.lineWidth = 1.6
+                            for (var c0 = 0; c0 < countries.length; c0++) {
+                                var code0 = countries[c0].code || ""
+                                if (!nodeCountries[code0] && !activeCountries[code0]) {
+                                    mapBox.drawCountryFlat(ctx, countries[c0], width, height)
                                 }
-                                mapBox.drawCountryFlat(ctx, c, width, height)
+                            }
+
+                            ctx.fillStyle = "#2b2c32"
+                            ctx.strokeStyle = "#3a3d48"
+                            ctx.lineWidth = 1.1
+                            for (var c1 = 0; c1 < countries.length; c1++) {
+                                var code1 = countries[c1].code || ""
+                                if (nodeCountries[code1] && !activeCountries[code1]) {
+                                    mapBox.drawCountryFlat(ctx, countries[c1], width, height)
+                                }
+                            }
+
+                            ctx.fillStyle = "#175432"
+                            ctx.strokeStyle = "#1de966"
+                            ctx.lineWidth = 1.3
+                            for (var c2 = 0; c2 < countries.length; c2++) {
+                                var code2 = countries[c2].code || ""
+                                if (activeCountries[code2]) {
+                                    mapBox.drawCountryFlat(ctx, countries[c2], width, height)
+                                }
                             }
                         }
                         Component.onCompleted: requestPaint()
@@ -364,15 +394,16 @@ Item {
                             ctx.clearRect(0, 0, width, height)
                             var cs = pm.worldCountries || []
                             if (cs.length === 0) return
-                            var hov = mapBox.hoveredCode
+                            var hovKey = mapBox.hoveredHitKey
                             var sel = root.selectedCountry
-                            if (hov === "" && sel === "") return
+                            if (hovKey === "" && sel === "") return
 
                             for (var i = 0; i < cs.length; i++) {
                                 var c = cs[i]
                                 var code = c.code || ""
+                                var hKey = c.hitKey || code
                                 var isSel = (sel !== "" && code === sel)
-                                var isHov = (hov !== "" && code === hov)
+                                var isHov = (hovKey !== "" && hKey === hovKey)
                                 if (!isSel && !isHov) continue
 
                                 ctx.fillStyle = isHov ? (mapBox.hoveredNodes > 0 ? "#315382" : "#3a3a40") : "#28364a"
@@ -409,16 +440,17 @@ Item {
                                 var ny = mouse.y / mapViewport.height
                                 var hit = mapBox.hitTestCountry(nx, ny)
                                 if (hit) {
+                                    mapBox.hoveredHitKey = hit.hitKey || hit.code || ""
                                     mapBox.hoveredCode = hit.code || ""
                                     mapBox.hoveredName = hit.name || hit.code || ""
                                     var pin = mapBox.pinInfoFor(mapBox.hoveredCode)
                                     mapBox.hoveredNodes = pin ? pin.count : 0
                                 } else {
-                                    mapBox.hoveredCode = ""; mapBox.hoveredName = ""; mapBox.hoveredNodes = 0
+                                    mapBox.hoveredHitKey = ""; mapBox.hoveredCode = ""; mapBox.hoveredName = ""; mapBox.hoveredNodes = 0
                                 }
                             }
                         }
-                        onExited: { mapBox.hoveredCode = ""; mapBox.hoveredName = ""; mapBox.hoveredNodes = 0 }
+                        onExited: { mapBox.hoveredHitKey = ""; mapBox.hoveredCode = ""; mapBox.hoveredName = ""; mapBox.hoveredNodes = 0 }
                         onClicked: function(mouse) {
                             if (dragged) return
                             var nx = mouse.x / mapViewport.width
@@ -605,6 +637,14 @@ Item {
                                         Layout.fillWidth: true; spacing: 6
                                         FlagBadge { code: modelData.country || ""; badgeWidth: 20; badgeHeight: 14 }
                                         Label { text: modelData.name || modelData.address || "Node"; color: "#ffffff"; font.pixelSize: 12; font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
+                                        Rectangle {
+                                            width: 22; height: 20; radius: 3; color: "#272933"; border.color: "#383b4a"
+                                            Label { anchors.centerIn: parent; text: "✎"; color: "#89b7ff"; font.pixelSize: 11 }
+                                            MouseArea {
+                                                anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                                onClicked: pm.openNodeEditor(modelData.id)
+                                            }
+                                        }
                                     }
                                     Label {
                                         text: (modelData.protocol || "vless").toUpperCase() + " • " + (modelData.address || "") + ":" + (modelData.port || "")
@@ -726,6 +766,7 @@ Item {
                         spacing: 6
                         model: root.filteredNodes()
                         ScrollBar.vertical: PmScrollBar {}
+                        PmWheelHelper {}
 
                         delegate: Rectangle {
                             property bool isAct: !!pm.xrayStatus.connected && pm.xrayStatus.nodeId === modelData.id
@@ -735,8 +776,13 @@ Item {
                             color: isAct ? "#142a1d" : (srvMa.containsMouse ? "#25262c" : "#1c1d22")
                             border.color: isAct ? "#1de966" : (srvMa.containsMouse ? "#4e97fa" : "#282932")
 
+                            MouseArea {
+                                id: srvMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                onClicked: isAct ? pm.toggleXrayConnect() : pm.connectNode(modelData.id)
+                            }
+
                             RowLayout {
-                                anchors.fill: parent; anchors.margins: 10; spacing: 10
+                                anchors.fill: parent; anchors.margins: 10; spacing: 8
                                 FlagBadge { code: modelData.country || ""; badgeWidth: 28; badgeHeight: 19 }
                                 ColumnLayout {
                                     Layout.fillWidth: true; spacing: 2
@@ -752,10 +798,14 @@ Item {
                                     implicitWidth: pingL.implicitWidth + 8
                                     Label { id: pingL; anchors.centerIn: parent; text: modelData.pingMs + "ms"; color: modelData.pingMs < 120 ? "#1de966" : "#e9d81d"; font.pixelSize: 9 }
                                 }
-                            }
-                            MouseArea {
-                                id: srvMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                                onClicked: isAct ? pm.toggleXrayConnect() : pm.connectNode(modelData.id)
+                                Rectangle {
+                                    width: 24; height: 24; radius: 4; color: "#252730"; border.color: "#383b4a"
+                                    Label { anchors.centerIn: parent; text: "✎"; color: "#89b7ff"; font.pixelSize: 11 }
+                                    MouseArea {
+                                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                        onClicked: pm.openNodeEditor(modelData.id)
+                                    }
+                                }
                             }
                         }
 

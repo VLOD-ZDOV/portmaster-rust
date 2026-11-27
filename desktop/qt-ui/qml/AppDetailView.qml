@@ -6,6 +6,7 @@ Item {
     id: root
     signal goBack()
     signal openNetworkSettings()
+    signal openRuleBuilder(string appKey, string settingKey, string mode)
 
     property int activeTab: 0 // 0=Connections, 1=Rules, 2=Settings, 3=Details
     property var app: pm.selectedApp
@@ -362,6 +363,7 @@ Item {
                     spacing: 4
                     model: pm.selectedAppConnections
                     ScrollBar.vertical: PmScrollBar {}
+                    PmWheelHelper {}
 
                     delegate: Rectangle {
                         width: ListView.view.width
@@ -497,6 +499,16 @@ Item {
                                     onClicked: rulePatternInput.submitRule()
                                 }
                             }
+
+                            Rectangle {
+                                height: 30; radius: 4; color: "#1c283a"; border.color: "#4e97fa"
+                                implicitWidth: rbAppLbl.implicitWidth + 16
+                                Label { id: rbAppLbl; anchors.centerIn: parent; text: pm.isRu ? "⚙ Конструктор" : "⚙ Builder"; color: "#89b7ff"; font.pixelSize: 11; font.bold: true }
+                                MouseArea {
+                                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                    onClicked: if (app.key) root.openRuleBuilder(app.key, "endpoints", "firewall")
+                                }
+                            }
                         }
 
                         // Quick Preset Rule Chips
@@ -537,6 +549,8 @@ Item {
                         clip: true
                         spacing: 4
                         model: app.rules || []
+                        ScrollBar.vertical: PmScrollBar {}
+                        PmWheelHelper {}
 
                         delegate: Rectangle {
                             width: ListView.view.width
@@ -734,8 +748,8 @@ Item {
                     Repeater {
                         model: [
                             { lvl: 0, label: pm.isRu ? "Простой" : "Simple" },
-                            { lvl: 1, label: pm.isRu ? "Продвин." : "Advanced" },
-                            { lvl: 2, label: pm.isRu ? "Разраб." : "Dev" }
+                            { lvl: 1, label: pm.isRu ? "Больше" : "More" },
+                            { lvl: 2, label: pm.isRu ? "Все" : "All" }
                         ]
                         delegate: Rectangle {
                             height: 28; radius: 4
@@ -757,12 +771,16 @@ Item {
                     spacing: 8
                     model: root.filteredAppSettings()
                     ScrollBar.vertical: PmScrollBar {}
+                    PmWheelHelper {}
 
                     delegate: SettingCard {
                         width: ListView.view.width - 10
                         st: modelData
                         isPerApp: true
                         appKey: app.key || ""
+                        onRequestRuleBuilder: function(key, mode) {
+                            root.openRuleBuilder(app.key || "", key, mode)
+                        }
                     }
 
                     Label {

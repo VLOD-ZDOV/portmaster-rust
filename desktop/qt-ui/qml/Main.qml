@@ -17,6 +17,10 @@ ApplicationWindow {
     property bool sideDashOpen: false
     property string toastBanner: ""
     property bool toastErr: false
+    property string rbTargetType: "" // "node" | "globalXray" | "appEndpoints" | "appSetting" | "globalSetting"
+    property string rbAppKey: ""
+    property string rbSettingKey: ""
+    property bool showUnlockDialog: false
 
     onClosing: function(close) {
         if (!pm.hasTray) {
@@ -39,6 +43,9 @@ ApplicationWindow {
             win.toastBanner = title + ": " + body
             win.toastErr = isErr
             toastTimer.restart()
+        }
+        function onAdminLockChanged() {
+            if (!pm.adminLock.locked) win.showUnlockDialog = false
         }
     }
 
@@ -100,22 +107,52 @@ ApplicationWindow {
                 anchors.fill: parent
                 spacing: 0
 
-                // Thin top transport / toast status bar (only shows details subtly like original)
+                // Thin top transport / toast / admin-lock status bar
                 Rectangle {
                     Layout.fillWidth: true
-                    height: 28
-                    color: "#121213"
-                    visible: win.toastBanner !== "" || !pm.connected
+                    height: 30
+                    color: !!pm.adminLock.locked ? "#241918" : "#121213"
+                    visible: win.toastBanner !== "" || !pm.connected || !!pm.adminLock.passwordSet
 
                     RowLayout {
                         anchors.fill: parent
                         anchors.leftMargin: 24
                         anchors.rightMargin: 24
+                        spacing: 10
                         Label {
-                            text: win.toastBanner !== "" ? win.toastBanner : pm.t("dash.offline")
-                            color: (win.toastErr || !pm.connected) ? "#e01d1d" : "#1de966"
+                            Layout.fillWidth: true
+                            text: win.toastBanner !== "" ? win.toastBanner
+                                  : (!pm.connected ? pm.t("dash.offline")
+                                     : (!!pm.adminLock.locked
+                                        ? (pm.isRu ? "🔒 Режим гостя — настройки защищены паролем" : "🔒 Guest Mode — Admin settings locked")
+                                        : (pm.isRu ? "🔓 Сессия администратора открыта (1 ч)" : "🔓 Admin session unlocked (1h)")))
+                            color: (win.toastErr || !pm.connected) ? "#e01d1d"
+                                   : (win.toastBanner !== "" ? "#1de966"
+                                      : (!!pm.adminLock.locked ? "#ffae66" : "#89b7ff"))
                             font.pixelSize: 11
                             font.bold: true
+                            elide: Text.ElideRight
+                        }
+                        Rectangle {
+                            visible: !!pm.adminLock.passwordSet
+                            height: 22; radius: 4
+                            color: !!pm.adminLock.locked ? "#4e97fa" : "#22242c"
+                            border.color: !!pm.adminLock.locked ? "#4e97fa" : "#3a3e4d"
+                            implicitWidth: topLockLbl.implicitWidth + 14
+                            Label {
+                                id: topLockLbl; anchors.centerIn: parent
+                                text: !!pm.adminLock.locked
+                                      ? (pm.isRu ? "Разблокировать" : "Unlock (1h)")
+                                      : (pm.isRu ? "🔒 Заблокировать" : "🔒 Lock")
+                                color: "#ffffff"; font.pixelSize: 10; font.bold: true
+                            }
+                            MouseArea {
+                                anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    if (pm.adminLock.locked) win.showUnlockDialog = true
+                                    else pm.lockAdmin()
+                                }
+                            }
                         }
                     }
                 }
@@ -196,11 +233,32 @@ ApplicationWindow {
                             settingsView.selectedSub = "network"
                             win.currentPage = "settings"
                         }
+                        onOpenRuleBuilder: function(appKey, settingKey, mode) {
+                            win.rbTargetType = (settingKey === "endpoints") ? "appEndpoints" : "appSetting"
+                            win.rbAppKey = appKey
+                            win.rbSettingKey = settingKey
+                            ruleBuilderModal.openFor(mode)
+                        }
                     }
 
-                    XrayView {}
+                    XrayView {
+                        onOpenGlobalRuleBuilder: {
+                            win.rbTargetType = "globalXray"
+                            win.rbAppKey = ""
+                            win.rbSettingKey = ""
+                            ruleBuilderModal.openFor("xray")
+                        }
+                    }
 
-                    SettingsView { id: settingsView }
+                    SettingsView {
+                        id: settingsView
+                        onOpenRuleBuilder: function(key, mode) {
+                            win.rbTargetType = "globalSetting"
+                            win.rbAppKey = ""
+                            win.rbSettingKey = key
+                            ruleBuilderModal.openFor(mode)
+                        }
+                    }
                 }
             }
         }
@@ -335,6 +393,93 @@ ApplicationWindow {
                         background: Rectangle { color: "#121213"; border.color: "#2c2c2c"; radius: 4 }
                     }
                 }
+            }
+        }
+    }
+
+    // Admin Lock Unlock Dialog Overlay
+    Rectangle {
+        anchors.fill: parent
+        color: "#cc09090b"
+        z: 940
+        visible: win.showUnlockDialog && !!pm.adminLock.locked
+        MouseArea { anchors.fill: parent; onClicked: win.showUnlockDialog = false }
+
+        Rectangle {
+            anchors.centerIn: parent
+            width: Math.min(parent.width - 60, 420)
+            implicitHeight: ulModalCol.implicitHeight + 36
+            radius: 8
+            color: "#18191e"
+            border.color: "#4e97fa"
+            MouseArea { anchors.fill: parent; onClicked: function(m) { m.accepted = true } }
+
+            ColumnLayout {
+                id: ulModalCol
+                anchors.fill: parent; anchors.margins: 18; spacing: 12
+                RowLayout {
+                    Layout.fillWidth: true
+                    Label { text: pm.isRu ? "🔒 Разблокировка администратора" : "🔒 Admin Unlock"; color: "#ffffff"; font.pixelSize: 15; font.bold: true; Layout.fillWidth: true }
+                    Rectangle {
+                        width: 24; height: 24; radius: 4; color: "#25262e"
+                        Label { anchors.centerIn: parent; text: "✕"; color: "#cacaca"; font.pixelSize: 11 }
+                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: win.showUnlockDialog = false }
+                    }
+                }
+                Label {
+                    text: pm.isRu ? "Введите пароль, чтобы открыть изменение настроек на 1 час в этой сессии." : "Enter password to unlock admin edits for 1 hour in this session."
+                    color: "#9e9ea6"; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true
+                }
+                TextField {
+                    id: mainUnlockInput
+                    Layout.fillWidth: true; height: 34
+                    echoMode: TextInput.Password
+                    placeholderText: pm.isRu ? "Пароль / PIN..." : "Password / PIN..."
+                    placeholderTextColor: "#66666e"; color: "#ffffff"; font.pixelSize: 12
+                    background: Rectangle { color: "#121214"; radius: 4; border.color: "#383b45" }
+                    onAccepted: { pm.unlockAdmin(text); text = "" }
+                }
+                RowLayout {
+                    Layout.fillWidth: true; spacing: 8
+                    Item { Layout.fillWidth: true }
+                    Rectangle {
+                        height: 30; radius: 4; color: "#25262e"; implicitWidth: ulCanLbl.implicitWidth + 18
+                        Label { id: ulCanLbl; anchors.centerIn: parent; text: pm.isRu ? "Отмена" : "Cancel"; color: "#cacaca"; font.pixelSize: 11 }
+                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: win.showUnlockDialog = false }
+                    }
+                    Rectangle {
+                        height: 30; radius: 4; color: "#4e97fa"; implicitWidth: ulGoLbl.implicitWidth + 20
+                        Label { id: ulGoLbl; anchors.centerIn: parent; text: pm.isRu ? "Открыть (1 ч)" : "Unlock (1h)"; color: "#ffffff"; font.pixelSize: 11; font.bold: true }
+                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { pm.unlockAdmin(mainUnlockInput.text); mainUnlockInput.text = "" } }
+                    }
+                }
+            }
+        }
+    }
+
+    NodeEditorModal {
+        id: nodeEditorModal
+        onOpenRuleBuilder: {
+            win.rbTargetType = "node"
+            win.rbAppKey = ""
+            win.rbSettingKey = ""
+            ruleBuilderModal.openFor("xray")
+        }
+    }
+
+    RuleBuilderModal {
+        id: ruleBuilderModal
+        onRuleCommitted: function(rule) {
+            if (win.rbTargetType === "node") {
+                nodeEditorModal.appendNodeRule(rule)
+            } else if (win.rbTargetType === "globalXray") {
+                pm.addGlobalRule(rule)
+            } else if (win.rbTargetType === "appEndpoints" && win.rbAppKey !== "") {
+                pm.addAppRule(win.rbAppKey, rule)
+            } else if (win.rbTargetType === "appSetting" && win.rbAppKey !== "" && win.rbSettingKey !== "") {
+                pm.applyAppPreset(win.rbAppKey, win.rbSettingKey, [rule], true)
+            } else if (win.rbTargetType === "globalSetting" && win.rbSettingKey !== "") {
+                pm.applyPreset(win.rbSettingKey, [rule], true)
             }
         }
     }

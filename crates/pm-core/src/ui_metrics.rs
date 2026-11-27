@@ -14,8 +14,8 @@ use pm_config::Config;
 use serde::Serialize;
 use serde_json::json;
 
-use crate::service::{CFG_KEEP_API_PORT_OPEN, CFG_UI_FLAVOR};
-use crate::ui::{find_qt_binary, find_rust_ui_dir, ApiPortController};
+use crate::service::{CFG_GITHUB_RELEASE_REPO, CFG_KEEP_API_PORT_OPEN, CFG_UI_FLAVOR};
+use crate::ui::{find_qt_binary, find_rust_ui_dir, ApiPortController, RUST_UI_ASSET_DIR};
 
 /// Known benchmark baselines measured cleanly on a Linux workstation.
 const ANGULAR_BENCHMARK_TAB_MB: f64 = 142.2;
@@ -247,7 +247,7 @@ pub fn build_flavors_report(
     port_ctrl: &ApiPortController,
     unix_socket_path: Option<&PathBuf>,
 ) -> UiFlavorsReport {
-    let active_flavor = config.get_as_string(CFG_UI_FLAVOR, "angular")();
+    let active_flavor = config.get_as_string(CFG_UI_FLAVOR, "qt")();
     let keep_api_port_open = config.get_as_bool(CFG_KEEP_API_PORT_OPEN, true)();
 
     let angular_installed = bin_dir.join("portmaster.zip").is_file()
@@ -462,5 +462,202 @@ pub fn register_ui_control_api(
         }),
     )?;
 
+    let cfg_inst = Arc::clone(&config);
+    let data_inst = data_dir.clone();
+    let bin_inst = bin_dir.clone();
+    let ctrl_inst = Arc::clone(&port_ctrl);
+    let sock_inst = unix_socket_path.clone();
+    let archives_inst = api.ui_archives();
+    api.register_endpoint(
+        Endpoint::new(
+            "ui/install",
+            "Download Optional UI Bundle",
+            "Downloads and installs optional Angular (portmaster.zip) or Rust WASM (rust-ui.zip) bundles from release assets.",
+        )
+        .with_write(PERMIT_ADMIN)
+        .with_write_method("POST")
+        .with_struct(move |request| {
+            let payload: serde_json::Value = request.body_json()?;
+            let flavor = payload.get("flavor").and_then(|v| v.as_str()).unwrap_or("").trim();
+            if !matches!(flavor, "angular" | "rust-wasm") {
+                return Err(pm_api::ApiError::WithStatus {
+                    status: 400,
+                    message: "installable flavor must be 'angular' or 'rust-wasm'".to_string(),
+                });
+            }
+            let repo = cfg_inst.get_as_string(CFG_GITHUB_RELEASE_REPO, "VLOD-ZDOV/portmaster-rust")();
+            let asset_name = if flavor == "angular" { "portmaster.zip" } else { "rust-ui.zip" };
+            install_ui_bundle_from_github(&repo, asset_name, flavor, &data_inst, &bin_inst)
+                .map_err(|msg| pm_api::ApiError::Message(msg).with_status(502))?;
+            if let Some(arch) = &archives_inst {
+                arch.close_archives();
+            }
+            let report = build_flavors_report(&cfg_inst, &data_inst, &bin_inst, &ctrl_inst, sock_inst.as_ref());
+            serde_json::to_value(report).map_err(pm_api::ApiError::Json)
+        }),
+    )?;
+
+    let cfg_uninst = Arc::clone(&config);
+    let data_uninst = data_dir.clone();
+    let bin_uninst = bin_dir.clone();
+    let ctrl_uninst = Arc::clone(&port_ctrl);
+    let sock_uninst = unix_socket_path.clone();
+    let archives_uninst = api.ui_archives();
+    api.register_endpoint(
+        Endpoint::new(
+            "ui/uninstall",
+            "Remove Optional UI Bundle",
+            "Deletes downloaded optional Angular or Rust WASM UI files and falls back to Qt if active.",
+        )
+        .with_write(PERMIT_ADMIN)
+        .with_write_method("POST")
+        .with_struct(move |request| {
+            let payload: serde_json::Value = request.body_json()?;
+            let flavor = payload.get("flavor").and_then(|v| v.as_str()).unwrap_or("").trim();
+            match flavor {
+                "angular" => {
+                    for p in [bin_uninst.join("portmaster.zip"), data_uninst.join("portmaster.zip")] {
+                        if p.is_file() {
+                            let _ = std::fs::remove_file(&p);
+                        }
+                    }
+                    let extracted = data_uninst.join("ui/modules/portmaster");
+                    if extracted.is_dir() {
+                        let _ = std::fs::remove_dir_all(&extracted);
+                    }
+                    if let Some(arch) = &archives_uninst {
+                        arch.close_archives();
+                    }
+                }
+                "rust-wasm" => {
+                    for dir in [data_uninst.join(RUST_UI_ASSET_DIR), bin_uninst.join(RUST_UI_ASSET_DIR)] {
+                        if dir.is_dir() {
+                            let _ = std::fs::remove_dir_all(&dir);
+                        }
+                    }
+                }
+                _ => {
+                    return Err(pm_api::ApiError::WithStatus {
+                        status: 400,
+                        message: "uninstallable flavor must be 'angular' or 'rust-wasm'".to_string(),
+                    });
+                }
+            }
+            if cfg_uninst.get_as_string(CFG_UI_FLAVOR, "qt")() == flavor {
+                let _ = cfg_uninst.set_config_option(CFG_UI_FLAVOR, json!("qt"));
+            }
+            let report = build_flavors_report(&cfg_uninst, &data_uninst, &bin_uninst, &ctrl_uninst, sock_uninst.as_ref());
+            serde_json::to_value(report).map_err(pm_api::ApiError::Json)
+        }),
+    )?;
+
+    Ok(())
+}
+
+fn install_ui_bundle_from_github(
+    repo: &str,
+    asset_name: &str,
+    flavor: &str,
+    data_dir: &Path,
+    bin_dir: &Path,
+) -> std::result::Result<(), String> {
+    use pm_updates::HttpClient;
+    use sha2::{Digest, Sha256};
+    use std::io::{Cursor, Read};
+
+    let repo = repo.trim().trim_matches('/');
+    if repo.is_empty() {
+        return Err("empty core/githubRepo".to_string());
+    }
+    let client = pm_updates::HttpsClient::new();
+    let release_url = format!("https://api.github.com/repos/{repo}/releases/latest");
+    let raw_meta = client.get(&release_url)?;
+    let release: serde_json::Value = serde_json::from_slice(&raw_meta)
+        .map_err(|e| format!("invalid GitHub release metadata: {e}"))?;
+    let assets = release
+        .get("assets")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "release contains no assets".to_string())?;
+    let asset = assets
+        .iter()
+        .find(|a| a.get("name").and_then(|n| n.as_str()) == Some(asset_name))
+        .ok_or_else(|| format!("asset {asset_name} not found in latest release"))?;
+    let dl_url = asset
+        .get("browser_download_url")
+        .and_then(|u| u.as_str())
+        .filter(|u| u.starts_with("https://"))
+        .ok_or_else(|| format!("missing HTTPS download URL for {asset_name}"))?;
+
+    let bytes = client.get(dl_url)?;
+    if bytes.is_empty() || bytes.len() > 96 * 1024 * 1024 {
+        return Err(format!("downloaded {asset_name} size {} is out of range", bytes.len()));
+    }
+    if let Some(digest) = asset.get("digest").and_then(|d| d.as_str()) {
+        if let Some(expected) = digest.strip_prefix("sha256:") {
+            let actual = hex::encode(Sha256::digest(&bytes));
+            if !actual.eq_ignore_ascii_case(expected.trim()) {
+                return Err(format!("SHA-256 checksum mismatch for {asset_name}"));
+            }
+        }
+    }
+
+    if flavor == "angular" {
+        let mut archive = zip::ZipArchive::new(Cursor::new(&bytes))
+            .map_err(|e| format!("downloaded portmaster.zip is invalid: {e}"))?;
+        if archive.by_name("index.html").is_err() {
+            return Err("portmaster.zip is missing index.html".to_string());
+        }
+        let target_dir = if std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(bin_dir.join(".write-probe"))
+            .is_ok()
+        {
+            let _ = std::fs::remove_file(bin_dir.join(".write-probe"));
+            bin_dir
+        } else {
+            data_dir
+        };
+        let final_path = target_dir.join("portmaster.zip");
+        let tmp_path = target_dir.join("portmaster.zip.tmp");
+        std::fs::write(&tmp_path, &bytes).map_err(|e| format!("write {asset_name}: {e}"))?;
+        std::fs::rename(&tmp_path, &final_path).map_err(|e| format!("install {asset_name}: {e}"))?;
+        return Ok(());
+    }
+
+    let mut archive = zip::ZipArchive::new(Cursor::new(&bytes))
+        .map_err(|e| format!("downloaded rust-ui.zip is invalid: {e}"))?;
+    let dest = data_dir.join(RUST_UI_ASSET_DIR);
+    let tmp_dest = data_dir.join(format!("{RUST_UI_ASSET_DIR}.tmp"));
+    if tmp_dest.exists() {
+        let _ = std::fs::remove_dir_all(&tmp_dest);
+    }
+    std::fs::create_dir_all(&tmp_dest).map_err(|e| format!("create tmp dir: {e}"))?;
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(|e| format!("read zip entry: {e}"))?;
+        let Some(rel) = entry.enclosed_name() else {
+            continue;
+        };
+        let out_path = tmp_dest.join(rel);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&out_path).map_err(|e| format!("mkdir: {e}"))?;
+        } else {
+            if let Some(parent) = out_path.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| format!("mkdir parent: {e}"))?;
+            }
+            let mut file_bytes = Vec::with_capacity(entry.size() as usize);
+            entry.read_to_end(&mut file_bytes).map_err(|e| format!("extract file: {e}"))?;
+            std::fs::write(&out_path, &file_bytes).map_err(|e| format!("write file: {e}"))?;
+        }
+    }
+    if !tmp_dest.join("index.html").is_file() {
+        let _ = std::fs::remove_dir_all(&tmp_dest);
+        return Err("rust-ui.zip did not extract index.html".to_string());
+    }
+    if dest.exists() {
+        let _ = std::fs::remove_dir_all(&dest);
+    }
+    std::fs::rename(&tmp_dest, &dest).map_err(|e| format!("install rust-ui: {e}"))?;
     Ok(())
 }

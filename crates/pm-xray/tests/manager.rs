@@ -69,6 +69,7 @@ fn node(id: &str) -> XrayNode {
         address: "example.com".into(),
         port: 443,
         raw_config: "vless://00010203-0405-0607-0809-0a0b0c0d0e0f@example.com:443".into(),
+        ..Default::default()
     }
 }
 

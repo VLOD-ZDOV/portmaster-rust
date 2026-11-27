@@ -35,7 +35,7 @@ use log::{debug, error, info};
 use portmaster::PortmasterExt;
 use tauri_plugin_log::RotationStrategy;
 use traymenu::setup_tray_menu;
-use window::{close_splash_window, create_main_window, hide_splash_window, create_debounced_window_state_saver};
+use window::{close_splash_window, hide_splash_window, create_debounced_window_state_saver};
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 
@@ -97,24 +97,54 @@ impl portmaster::Handler for WsHandler {
         // The order is important. If all current windows are destroyed tauri will exit.
         // First create the main ui window then destroy the splash screen.
 
-        // Hide splash screen. Will be closed after main window is created.
+        // Hide and close splash screen first; never spawn a hidden 400+ MB WebKit
+        // main window in background mode or when Qt native UI is active.
         if let Err(err) = hide_splash_window(&self.handle) {
             error!("failed to close splash window: {}", err);
         }
-
-        // create the main window now. It's not automatically visible by default.
-        // Rather, the angular application will show the window itself when it finished
-        // bootstrapping.
-        if let Err(err) = create_main_window(&self.handle) {
-            error!("failed to create main window: {}", err);
-        } else {
-            debug!("created main window")
-        }
-
-        // Now it is safe to destroy the splash window.
         if let Err(err) = close_splash_window(&self.handle) {
             error!("failed to close splash window: {}", err);
         }
+
+        let handle_ui = self.handle.clone();
+        let cli_ui = cli.clone();
+        let background = self.background;
+        tauri::async_runtime::spawn(async move {
+            let mut flavor = "qt".to_string();
+            if let Ok(mut rx) = cli_ui.request(portapi::types::Request::Get("config:core/uiFlavor".to_string())).await {
+                if let Some(portapi::types::Response::Ok(_, payload)) = rx.recv().await {
+                    if let Ok(v) = payload.parse::<serde_json::Value>() {
+                        flavor = v.get("Value").and_then(|x| x.as_str())
+                            .or_else(|| v.get("DefaultValue").and_then(|x| x.as_str()))
+                            .unwrap_or("qt")
+                            .to_string();
+                    }
+                }
+            }
+            traymenu::ACTIVE_UI_IS_QT.store(flavor == "qt", std::sync::atomic::Ordering::Release);
+            if flavor == "qt" && traymenu::find_qt_binary().is_some() {
+                if let Some(win) = handle_ui.get_webview_window("main") {
+                    let _ = win.destroy();
+                }
+                portapi::client::release_api_port_lease();
+                #[cfg(target_os = "linux")]
+                {
+                    if traymenu::spawn_qt_gui_with_tray(background) {
+                        info!("[tauri] qt flavor is active; handed tray and UI to portmaster-qt");
+                        handle_ui.exit(0);
+                        return;
+                    }
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    if !background {
+                        let _ = traymenu::spawn_qt_gui_no_tray();
+                    }
+                }
+            } else if !background {
+                traymenu::open_active_ui_flavor(&handle_ui);
+            }
+        });
 
         // Cancel the previous tray handler task if it exists
         let portmaster = self.handle.portmaster();

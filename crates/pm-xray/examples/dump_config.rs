@@ -23,6 +23,7 @@ fn main() {
             address: String::new(),
             port: 0,
             raw_config: raw.clone(),
+            ..Default::default()
         };
         match generate_config(&node, 1080, InboundProtocol::Socks) {
             Ok(config) => println!("{}", serde_json::to_string(&config).unwrap()),

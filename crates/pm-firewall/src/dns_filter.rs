@@ -575,4 +575,11 @@ impl FirewallHook for FirewallDnsHook {
             network.save(conn);
         }
     }
+
+    fn dns_nameserver_overrides(&self, conn: &SharedConnection) -> Vec<String> {
+        let guard = lock(conn);
+        self.profile_of(&guard)
+            .and_then(|profile| profile.dns_nameservers_override())
+            .unwrap_or_default()
+    }
 }

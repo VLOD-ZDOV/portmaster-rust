@@ -69,7 +69,7 @@ impl std::fmt::Display for Protocol {
 }
 
 /// One VPN endpoint extracted from a subscription.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct XrayNode {
     /// Stable identifier: a short hash of the subscription and share link.
     pub id: String,
@@ -94,6 +94,74 @@ pub struct XrayNode {
     pub port: u16,
     /// Original share link. May contain credentials; never log it verbatim.
     pub raw_config: String,
+    /// Optional per-node routing rules (prepended before global `xray/rules`).
+    #[serde(rename = "routingRules", alias = "routing_rules", default, skip_serializing_if = "Vec::is_empty")]
+    pub routing_rules: Vec<String>,
+    /// Optional preset applied when switching to this node (`""`, `"ru-direct"`, `"global-vpn"`, `"custom"`).
+    #[serde(rename = "rulePreset", alias = "rule_preset", default, skip_serializing_if = "String::is_empty")]
+    pub rule_preset: String,
+}
+
+/// Safe metadata exposed by `GET xray/nodes/{id}` for the node editor.
+/// Stored UUIDs/passwords are omitted; only `hasCredential` is reported.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeEditInfo {
+    pub id: String,
+    pub subscription_id: String,
+    pub name: String,
+    pub country: String,
+    pub country_name: String,
+    pub protocol: String,
+    pub address: String,
+    pub port: u16,
+    pub method: String,
+    pub network: String,
+    pub security: String,
+    pub path: String,
+    pub host: String,
+    pub sni: String,
+    pub fingerprint: String,
+    pub alpn: Vec<String>,
+    pub flow: String,
+    pub service_name: String,
+    pub header_type: String,
+    pub reality_public_key: String,
+    pub reality_short_id: String,
+    pub reality_spider_x: String,
+    pub routing_rules: Vec<String>,
+    pub rule_preset: String,
+    pub has_credential: bool,
+}
+
+/// Request body for `PUT xray/nodes/{id}`. Empty `credential`/`password` preserves
+/// existing secrets while updating editable profile/routing attributes.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateNodeRequest {
+    pub share_link: Option<String>,
+    pub name: Option<String>,
+    pub protocol: Option<String>,
+    pub address: Option<String>,
+    pub port: Option<u16>,
+    pub credential: Option<String>,
+    pub password: Option<String>,
+    pub method: Option<String>,
+    pub network: Option<String>,
+    pub security: Option<String>,
+    pub path: Option<String>,
+    pub host: Option<String>,
+    pub sni: Option<String>,
+    pub fingerprint: Option<String>,
+    pub alpn: Option<Vec<String>>,
+    pub flow: Option<String>,
+    pub service_name: Option<String>,
+    pub header_type: Option<String>,
+    pub reality_public_key: Option<String>,
+    pub reality_short_id: Option<String>,
+    pub reality_spider_x: Option<String>,
+    pub routing_rules: Option<Vec<String>>,
+    pub rule_preset: Option<String>,
 }
 
 /// A subscription, as stored in the `xray` database.

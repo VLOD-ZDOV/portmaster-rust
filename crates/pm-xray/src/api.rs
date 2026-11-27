@@ -169,6 +169,57 @@ pub fn register_api(xray: &Arc<Xray>, api: &Api) -> pm_api::Result<()> {
         }),
     )?;
 
+    // Single node inspect/edit/delete for the Node Editor & Per-Node Routing UI.
+    let node_item = Arc::clone(xray);
+    api.register_endpoint(
+        Endpoint::new(
+            "xray/nodes/{id}",
+            "Inspect, Edit or Remove Xray Node",
+            "Returns non-secret editable parameters on GET, updates fields/rules on PUT, and removes on DELETE.",
+        )
+        .with_read(PERMIT_ADMIN)
+        .with_write(PERMIT_ADMIN)
+        .with_struct(move |request| {
+            let id = request.param("id").unwrap_or_default().to_string();
+            if request.read_method {
+                let info = node_item.node_edit_info(&id).map_err(crate::Error::api)?;
+                return serde_json::to_value(info).map_err(pm_api::ApiError::Json);
+            }
+            match request.effective_method.as_str() {
+                "PUT" | "POST" => {
+                    let payload: crate::UpdateNodeRequest = request.body_json()?;
+                    let updated = node_item.update_node(&id, payload).map_err(crate::Error::api)?;
+                    let mut val = serde_json::to_value(&updated).map_err(pm_api::ApiError::Json)?;
+                    if let Some(obj) = val.as_object_mut() {
+                        obj.remove("raw_config");
+                    }
+                    Ok(val)
+                }
+                "DELETE" => {
+                    node_item.delete_node(&id).map_err(crate::Error::api)?;
+                    Ok(json!({ "removed": id }))
+                }
+                method => Err(pm_api::ApiError::WithStatus {
+                    status: 405,
+                    message: format!("method {method} is not supported"),
+                }),
+            }
+        }),
+    )?;
+
+    let geodata_hints = Arc::clone(xray);
+    api.register_endpoint(
+        Endpoint::new(
+            "xray/geodata/hints",
+            "Xray GeoData Rule Hints",
+            "Lists GeoIP country codes and GeoSite category names available for the visual rule builder.",
+        )
+        .with_read(PERMIT_USER)
+        .with_struct(move |_| {
+            serde_json::to_value(geodata_hints.geodata_hints()).map_err(pm_api::ApiError::Json)
+        }),
+    )?;
+
     // Endpoint for adding manual/direct proxy links without an HTTP subscription URL
     let manual_nodes = Arc::clone(xray);
     api.register_endpoint(

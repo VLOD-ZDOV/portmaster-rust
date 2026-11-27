@@ -4,6 +4,7 @@ import QtQuick.Layouts
 
 Item {
     id: root
+    signal openRuleBuilder(string key, string mode)
 
     property string searchQuery: ""
     property string selectedSub: "all"
@@ -78,8 +79,8 @@ Item {
                 Repeater {
                     model: [
                         { lvl: 0, label: pm.isRu ? "Простой" : "Simple" },
-                        { lvl: 1, label: pm.isRu ? "Продвин." : "Advanced" },
-                        { lvl: 2, label: pm.isRu ? "Разраб." : "Developer" }
+                        { lvl: 1, label: pm.isRu ? "Больше" : "More" },
+                        { lvl: 2, label: pm.isRu ? "Все" : "All" }
                     ]
                     delegate: Rectangle {
                         height: 30; radius: 4
@@ -175,6 +176,7 @@ Item {
                     spacing: 2
                     model: root.subsystemList()
                     ScrollBar.vertical: PmScrollBar {}
+                    PmWheelHelper {}
                     delegate: Rectangle {
                         width: ListView.view.width
                         height: 32
@@ -209,6 +211,7 @@ Item {
                 spacing: 8
                 model: root.filteredSettings()
                 ScrollBar.vertical: PmScrollBar {}
+                PmWheelHelper {}
 
                 header: ColumnLayout {
                     width: settingsListView.width - 10
@@ -332,12 +335,29 @@ Item {
                                                     elide: Text.ElideRight
                                                     Layout.fillWidth: true
                                                 }
-                                                Rectangle {
-                                                    visible: !modelData.active && !!modelData.installed
-                                                    height: 22; radius: 3; color: "#282b34"; border.color: "#4e97fa"
-                                                    implicitWidth: swLbl.implicitWidth + 14
-                                                    Label { id: swLbl; anchors.centerIn: parent; text: pm.isRu ? "Выбрать" : "Activate"; color: "#ffffff"; font.pixelSize: 10 }
-                                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: pm.switchUiFlavor(modelData.id) }
+                                                Row {
+                                                    spacing: 5
+                                                    Rectangle {
+                                                        visible: !modelData.active && !!modelData.installed
+                                                        height: 22; radius: 3; color: "#282b34"; border.color: "#4e97fa"
+                                                        implicitWidth: swLbl.implicitWidth + 12
+                                                        Label { id: swLbl; anchors.centerIn: parent; text: pm.isRu ? "Выбрать" : "Activate"; color: "#ffffff"; font.pixelSize: 10 }
+                                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: pm.switchUiFlavor(modelData.id) }
+                                                    }
+                                                    Rectangle {
+                                                        visible: !modelData.installed && modelData.id !== "qt"
+                                                        height: 22; radius: 3; color: pm.uiBusy ? "#1e2430" : "#183354"; border.color: "#4e97fa"
+                                                        implicitWidth: dlLbl.implicitWidth + 12
+                                                        Label { id: dlLbl; anchors.centerIn: parent; text: pm.uiBusy ? "..." : (pm.isRu ? "Скачать" : "Download"); color: "#89b7ff"; font.pixelSize: 10; font.bold: true }
+                                                        MouseArea { anchors.fill: parent; enabled: !pm.uiBusy; cursorShape: Qt.PointingHandCursor; onClicked: pm.installUiFlavor(modelData.id) }
+                                                    }
+                                                    Rectangle {
+                                                        visible: !!modelData.installed && modelData.id !== "qt" && !modelData.active
+                                                        height: 22; radius: 3; color: "#2e1818"; border.color: "#7a2a2a"
+                                                        implicitWidth: rmUiLbl.implicitWidth + 10
+                                                        Label { id: rmUiLbl; anchors.centerIn: parent; text: pm.isRu ? "Удалить" : "Remove"; color: "#ff8f8f"; font.pixelSize: 10 }
+                                                        MouseArea { anchors.fill: parent; enabled: !pm.uiBusy; cursorShape: Qt.PointingHandCursor; onClicked: pm.uninstallUiFlavor(modelData.id) }
+                                                    }
                                                 }
                                             }
                                         }
@@ -390,6 +410,151 @@ Item {
                                       + ((pm.uiReport.coreMemory && pm.uiReport.coreMemory.livePssMb) ? pm.uiReport.coreMemory.livePssMb.toFixed(1) : "0") + " MB PSS  ("
                                       + (pm.isRu ? "базы GeoIP 102 МБ + списки фильтрации + SQLite в ОЗУ" : "102 MB GeoIP DBs + filterlists + SQLite in RAM") + ")"
                                 color: "#787c88"; font.pixelSize: 10
+                            }
+                        }
+                    }
+
+                    // Optional Admin Password / PIN Lock Card (Session-cached 1h + Owner Filter)
+                    Rectangle {
+                        id: adminLockCard
+                        visible: parent.showUiCard
+                        Layout.fillWidth: true
+                        implicitHeight: lockCol.implicitHeight + 24
+                        radius: 6
+                        color: !!pm.adminLock.locked ? "#241918" : "#181a20"
+                        border.color: !!pm.adminLock.locked ? "#e05a1d" : (!!pm.adminLock.passwordSet ? "#2e4b73" : "#272932")
+
+                        ColumnLayout {
+                            id: lockCol
+                            anchors.fill: parent
+                            anchors.margins: 12
+                            spacing: 10
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 10
+                                Label {
+                                    text: pm.isRu ? "Защита настроек паролем (необязательно)" : "Admin Password Lock (Optional)"
+                                    color: "#ffffff"; font.pixelSize: 14; font.bold: true
+                                }
+                                Rectangle {
+                                    height: 20; radius: 4
+                                    color: !pm.adminLock.passwordSet ? "#23252c" : (!!pm.adminLock.locked ? "#6e2116" : "#134729")
+                                    border.color: !pm.adminLock.passwordSet ? "#343742" : (!!pm.adminLock.locked ? "#e05a1d" : "#1de966")
+                                    implicitWidth: lkStatL.implicitWidth + 12
+                                    Label {
+                                        id: lkStatL; anchors.centerIn: parent
+                                        text: !pm.adminLock.passwordSet
+                                              ? (pm.isRu ? "Выкл (пароль не задан)" : "Disabled (No password)")
+                                              : (!!pm.adminLock.locked
+                                                 ? (pm.isRu ? "Заблокировано (гость)" : "Locked (Guest mode)")
+                                                 : (pm.isRu ? "Открыто (сессия 1 ч)" : "Unlocked (1h session)"))
+                                        color: "#ffffff"; font.pixelSize: 10; font.bold: true
+                                    }
+                                }
+                                Item { Layout.fillWidth: true }
+                                Rectangle {
+                                    visible: !!pm.adminLock.passwordSet && !pm.adminLock.locked
+                                    height: 24; radius: 4; color: "#2c221b"; border.color: "#7a5328"
+                                    implicitWidth: lkNowL.implicitWidth + 12
+                                    Label { id: lkNowL; anchors.centerIn: parent; text: pm.isRu ? "🔒 Заблокировать" : "🔒 Lock"; color: "#ffd28a"; font.pixelSize: 10; font.bold: true }
+                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: pm.lockAdmin() }
+                                }
+                                Rectangle {
+                                    visible: !!pm.adminLock.passwordSet && !pm.adminLock.locked
+                                    height: 24; radius: 4; color: "#361818"; border.color: "#7a2a2a"
+                                    implicitWidth: clrPwL.implicitWidth + 12
+                                    Label { id: clrPwL; anchors.centerIn: parent; text: pm.isRu ? "Снять пароль" : "Remove Password"; color: "#ff8c8c"; font.pixelSize: 10 }
+                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: pm.configureAdminLock({ "newPassword": "" }) }
+                                }
+                            }
+
+                            // Unlock row if locked
+                            RowLayout {
+                                visible: !!pm.adminLock.locked
+                                Layout.fillWidth: true; spacing: 8
+                                TextField {
+                                    id: unlockSettingsPw
+                                    Layout.fillWidth: true
+                                    echoMode: TextInput.Password
+                                    placeholderText: pm.isRu ? "Введите пароль администратора для разблокировки на 1 час..." : "Enter admin password to unlock for 1 hour..."
+                                    placeholderTextColor: "#66666e"; color: "#ffffff"; font.pixelSize: 12
+                                    background: Rectangle { color: "#121214"; radius: 4; border.color: "#383b45" }
+                                    onAccepted: { pm.unlockAdmin(text); text = "" }
+                                }
+                                Rectangle {
+                                    height: 30; radius: 4; color: "#4e97fa"
+                                    implicitWidth: ulBtnL.implicitWidth + 18
+                                    Label { id: ulBtnL; anchors.centerIn: parent; text: pm.isRu ? "Разблокировать" : "Unlock"; color: "#ffffff"; font.pixelSize: 11; font.bold: true }
+                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { pm.unlockAdmin(unlockSettingsPw.text); unlockSettingsPw.text = "" } }
+                                }
+                            }
+
+                            // Set / Change password + Owner & Guest Options when unlocked (or disabled)
+                            RowLayout {
+                                visible: !pm.adminLock.locked
+                                Layout.fillWidth: true; spacing: 8
+                                TextField {
+                                    id: setAdminPwField
+                                    Layout.fillWidth: true
+                                    echoMode: TextInput.Password
+                                    placeholderText: !!pm.adminLock.passwordSet
+                                                     ? (pm.isRu ? "Новый пароль администратора..." : "New admin password...")
+                                                     : (pm.isRu ? "Задать необязательный пароль / PIN-код..." : "Set optional admin password / PIN...")
+                                    placeholderTextColor: "#66666e"; color: "#ffffff"; font.pixelSize: 12
+                                    background: Rectangle { color: "#121214"; radius: 4; border.color: "#30333c" }
+                                    onAccepted: if (text !== "") { pm.configureAdminLock({ "newPassword": text }); text = "" }
+                                }
+                                Rectangle {
+                                    height: 30; radius: 4; color: "#28364d"; border.color: "#4e97fa"
+                                    implicitWidth: svPwL.implicitWidth + 16
+                                    Label { id: svPwL; anchors.centerIn: parent; text: !!pm.adminLock.passwordSet ? (pm.isRu ? "Сменить" : "Change") : (pm.isRu ? "Задать пароль" : "Set Password"); color: "#ffffff"; font.pixelSize: 11; font.bold: true }
+                                    MouseArea {
+                                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                        onClicked: if (setAdminPwField.text !== "") { pm.configureAdminLock({ "newPassword": setAdminPwField.text }); setAdminPwField.text = "" }
+                                    }
+                                }
+                            }
+
+                            Flow {
+                                visible: !!pm.adminLock.passwordSet && !pm.adminLock.locked
+                                Layout.fillWidth: true
+                                spacing: 14
+                                RowLayout {
+                                    spacing: 8
+                                    PmSwitch {
+                                        checked: !!pm.adminLock.autoApproveOwner
+                                        onToggled: pm.configureAdminLock({ "autoApproveOwner": checked })
+                                    }
+                                    Label {
+                                        text: pm.isRu
+                                              ? ("Не спрашивать на учётке владельца" + ((pm.adminLock.createdBy || "") !== "" ? (" (" + pm.adminLock.createdBy + ")") : ""))
+                                              : ("Trust owner account" + ((pm.adminLock.createdBy || "") !== "" ? (" (" + pm.adminLock.createdBy + ")") : ""))
+                                        color: "#dcdce4"; font.pixelSize: 11
+                                    }
+                                }
+                                RowLayout {
+                                    spacing: 8
+                                    PmSwitch {
+                                        checked: !!pm.adminLock.allowPromptsWhenLocked
+                                        onToggled: pm.configureAdminLock({ "allowPromptsWhenLocked": checked })
+                                    }
+                                    Label {
+                                        text: pm.isRu ? "Разрешить запросы (Prompts) при блокировке" : "Allow interactive prompts when locked"
+                                        color: "#dcdce4"; font.pixelSize: 11
+                                    }
+                                }
+                                RowLayout {
+                                    spacing: 8
+                                    PmSwitch {
+                                        checked: !!pm.adminLock.allowXrayWhenLocked
+                                        onToggled: pm.configureAdminLock({ "allowXrayWhenLocked": checked })
+                                    }
+                                    Label {
+                                        text: pm.isRu ? "Разрешить вкл/выкл Xray при блокировке" : "Allow Xray toggle when locked"
+                                        color: "#dcdce4"; font.pixelSize: 11
+                                    }
+                                }
                             }
                         }
                     }
@@ -615,6 +780,7 @@ Item {
                     isPerApp: false
                     appendDns: root.appendDns
                     onAppendDnsToggled: function(checked) { root.appendDns = checked }
+                    onRequestRuleBuilder: function(key, mode) { root.openRuleBuilder(key, mode) }
                 }
             }
         }

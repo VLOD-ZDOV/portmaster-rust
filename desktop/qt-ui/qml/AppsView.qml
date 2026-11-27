@@ -21,7 +21,7 @@ Item {
             var p = (app.path || "").toLowerCase()
             if (n.indexOf(q) < 0 && p.indexOf(q) < 0) return false
         }
-        if (routingFilter === "active") return app.alive > 0
+        if (routingFilter === "active") return pm.onlyNowApps ? (app.alive > 0) : (app.alive > 0 || (app.sessionConns || 0) > 0)
         if (routingFilter === "offline") return app.alive <= 0
         if (routingFilter === "vpn") return app.effectiveVpn
         if (routingFilter === "blocked") return app.action === "block"
@@ -430,6 +430,7 @@ Item {
             cellHeight: 72
             model: root.cachedFilteredMain
             ScrollBar.vertical: PmScrollBar {}
+            PmWheelHelper {}
 
             header: Item {
                 width: mainGrid.width - 12
@@ -440,12 +441,33 @@ Item {
                     width: parent.width
                     spacing: 10
 
-                    Label {
-                        visible: root.cachedFilteredActive.length > 0 && root.routingFilter === "all"
-                        text: pm.t("apps.active") + " (" + root.cachedFilteredActive.length + ")"
-                        color: "#1de966"
-                        font.pixelSize: 12
-                        font.bold: true
+                    RowLayout {
+                        visible: root.routingFilter === "all" && (root.cachedFilteredActive.length > 0 || pm.onlyNowApps)
+                        Layout.fillWidth: true
+                        spacing: 10
+                        Label {
+                            text: pm.t("apps.active") + " (" + root.cachedFilteredActive.length + ")"
+                            color: "#1de966"
+                            font.pixelSize: 12
+                            font.bold: true
+                        }
+                        Rectangle {
+                            height: 22; radius: 4
+                            color: pm.onlyNowApps ? "#173252" : "#1c1c20"
+                            border.color: pm.onlyNowApps ? "#4e97fa" : "#2f3038"
+                            implicitWidth: onlyNowLbl.implicitWidth + 14
+                            Label {
+                                id: onlyNowLbl; anchors.centerIn: parent
+                                text: pm.isRu ? "Только сейчас" : "Now only"
+                                color: pm.onlyNowApps ? "#89b7ff" : "#8e8e98"
+                                font.pixelSize: 10; font.bold: pm.onlyNowApps
+                            }
+                            MouseArea {
+                                anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                onClicked: pm.setOnlyNowApps(!pm.onlyNowApps)
+                            }
+                        }
+                        Item { Layout.fillWidth: true }
                     }
 
                     Flow {

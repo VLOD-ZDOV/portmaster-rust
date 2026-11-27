@@ -1014,7 +1014,7 @@ async fn ui_flavors_dynamic_port_and_unix_socket() {
     assert!(resp.starts_with("HTTP/1.1 200"), "{resp}");
     let body = resp.split("\r\n\r\n").nth(1).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(body).unwrap();
-    assert_eq!(parsed["activeFlavor"], "angular");
+    assert_eq!(parsed["activeFlavor"], "qt");
     assert_eq!(parsed["keepApiPortOpen"], true);
     assert_eq!(parsed["apiPortListening"], true);
     let flavors = parsed["flavors"].as_array().unwrap();

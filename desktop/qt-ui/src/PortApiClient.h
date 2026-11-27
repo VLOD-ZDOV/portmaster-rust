@@ -22,6 +22,8 @@ public:
     ~PortApiClient() override;
 
     void start();
+    void setAdminToken(const QString& token);
+    QString adminToken() const { return m_adminToken; }
     QString discoveredSocketPath() const;
     QString transportLabel() const;
     bool isConnected() const { return m_wsConnected; }
@@ -71,6 +73,7 @@ private:
     QByteArray m_localFragBuf;
     quint8 m_fragOpcode = 0;
     QString m_activeTransport;
+    QString m_adminToken;
 
     quint64 m_counter = 0;
     struct SubEntry {

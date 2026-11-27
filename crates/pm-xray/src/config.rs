@@ -631,6 +631,7 @@ mod tests {
             address: String::new(),
             port: 0,
             raw_config: raw.into(),
+            ..Default::default()
         }
     }
 

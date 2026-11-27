@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use pm_config::{Config, ConfigOption};
+use pm_config::{Config, ConfigOption, PossibleValue};
 use pm_database::Databases;
 use pm_geoip::GeoIp;
 use serde_json::{json, Value};
@@ -35,8 +35,9 @@ pub use config::{InboundProtocol, DEFAULT_INBOUND_PORT};
 pub use error::{Error, Result};
 pub use manager::{ChildHandle, ProcessAdapter, SystemProcessAdapter, XrayManager};
 pub use model::{
-    AddSubscriptionRequest, ConnectRequest, NodesResponse, ProcessState, Protocol, Subscription,
-    TrafficStatus, UpdateSubscriptionRequest, XrayNode, XrayStatus,
+    AddSubscriptionRequest, ConnectRequest, NodeEditInfo, NodesResponse, ProcessState, Protocol,
+    Subscription, TrafficStatus, UpdateNodeRequest, UpdateSubscriptionRequest, XrayNode,
+    XrayStatus,
 };
 pub use stats::{
     GrpcResponse, GrpcStats, GrpcStatus, GrpcTransport, H2Transport, NoopTrafficStats, StatsError,
@@ -203,6 +204,22 @@ pub fn register_options(config: &Config) -> pm_config::Result<()> {
             Value::String("socks".to_string()),
         )
         .with_expertise_level(pm_config::EXPERTISE_LEVEL_DEVELOPER)
+        .with_annotation(
+            pm_config::DISPLAY_HINT_ANNOTATION,
+            json!(pm_config::DISPLAY_HINT_ONE_OF),
+        )
+        .with_possible_values(vec![
+            PossibleValue {
+                name: "SOCKS5".to_string(),
+                description: "SOCKS5 local proxy (TCP + UDP)".to_string(),
+                value: Value::String("socks".to_string()),
+            },
+            PossibleValue {
+                name: "HTTP".to_string(),
+                description: "HTTP proxy (TCP only)".to_string(),
+                value: Value::String("http".to_string()),
+            },
+        ])
         .with_annotation(pm_config::DISPLAY_ORDER_ANNOTATION, json!(40))
         .with_annotation(pm_config::CATEGORY_ANNOTATION, json!("Development")),
     )?;
@@ -794,8 +811,44 @@ impl Xray {
 
         let geoip_path = write_atomic("geoip.dat", &geoip_bytes)?;
         let geosite_path = write_atomic("geosite.dat", &geosite_bytes)?;
+        let ts = now().to_string();
+        let _ = std::fs::write(xray_dir.join(".geodata_updated_at"), ts.as_bytes());
         tracing::info!(%geoip_path, %geosite_path, "Xray GeoIP/GeoSite rulesets installed");
         Ok((geoip_path, geosite_path))
+    }
+
+    /// Refreshes `geoip.dat` / `geosite.dat` at most once per 24h alongside scheduled
+    /// intelligence updates when Xray is enabled and geodata files or geo rules are used.
+    pub fn maybe_update_geodata_if_due(self: &Arc<Self>) {
+        if !self.is_enabled() {
+            return;
+        }
+        let xray_dir = self.data_dir.join("xray");
+        let has_geo_files = xray_dir.join("geoip.dat").is_file() || xray_dir.join("geosite.dat").is_file();
+        let has_geo_rules = self
+            .routing_rules()
+            .iter()
+            .any(|r| r.contains("geoip:") || r.contains("geosite:"));
+        if !has_geo_files && !has_geo_rules {
+            return;
+        }
+        let stamp_path = xray_dir.join(".geodata_updated_at");
+        let last = std::fs::read_to_string(&stamp_path)
+            .ok()
+            .and_then(|s| s.trim().parse::<i64>().ok())
+            .unwrap_or(0);
+        if now().saturating_sub(last) < 86_400 {
+            return;
+        }
+        if let Err(error) = self.download_and_install_geodata() {
+            tracing::warn!(%error, "xray: scheduled geodata update failed");
+            return;
+        }
+        if self.is_connected() {
+            if let Err(error) = self.connect_last() {
+                tracing::warn!(%error, "xray: failed to reload after scheduled geodata update");
+            }
+        }
     }
 
     /// Returns the process state enriched with live traffic counters. Stats
@@ -822,6 +875,23 @@ impl Xray {
         self.manager.active_pid()
     }
 
+    /// Returns built-in routing presets for a node (`"ru-direct"`, `"bypass-ads"`, `"global-vpn"`).
+    pub fn preset_rules(preset: &str) -> Vec<String> {
+        match preset.trim().to_ascii_lowercase().as_str() {
+            "ru-direct" | "ru_direct" => vec![
+                "- geoip:ru".to_string(),
+                "- geosite:category-ru".to_string(),
+                "- geosite:category-ads-all".to_string(),
+                "+ geosite:youtube".to_string(),
+                "+ geosite:openai".to_string(),
+                "+ geosite:discord".to_string(),
+            ],
+            "bypass-ads" | "ads" => vec!["- geosite:category-ads-all".to_string()],
+            "global-vpn" | "global" => Vec::new(),
+            _ => Vec::new(),
+        }
+    }
+
     /// Returns configured Xray-internal routing rules (`xray/rules`, e.g. `geosite:`/`geoip:`).
     /// Per-app and firewall endpoint rules (`spn/usagePolicy`) are enforced by the firewall directly.
     pub fn routing_rules(&self) -> Vec<String> {
@@ -832,6 +902,228 @@ impl Xray {
             rules.insert(1, "- Localhost".to_string());
         }
         rules
+    }
+
+    /// Merges per-node routing rules + preset + global `xray/rules`, keeping `- LAN`/`- Localhost` first.
+    pub fn routing_rules_for_node(&self, node: &XrayNode) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut push_unique = |rule: String| {
+            let trimmed = rule.trim().to_string();
+            if !trimmed.is_empty() && seen.insert(trimmed.clone()) {
+                out.push(trimmed);
+            }
+        };
+        push_unique("- LAN".to_string());
+        push_unique("- Localhost".to_string());
+        for rule in &node.routing_rules {
+            push_unique(rule.clone());
+        }
+        for rule in Self::preset_rules(&node.rule_preset) {
+            push_unique(rule);
+        }
+        if node.rule_preset.trim() != "global-vpn" {
+            for rule in self.routing_rules() {
+                push_unique(rule);
+            }
+        }
+        out
+    }
+
+    /// Returns editable structural metadata for a stored node (credentials remain masked).
+    pub fn node_edit_info(&self, id: &str) -> Result<NodeEditInfo> {
+        let node = self.store.get_node(id)?;
+        let parsed = parser::parse_link(&node.raw_config)
+            .map_err(|e| crate::Error::InvalidRequest(e.to_string()))?;
+        Ok(NodeEditInfo {
+            id: node.id,
+            subscription_id: node.subscription_id,
+            name: node.name,
+            country: node.country_code,
+            country_name: node.country_name,
+            protocol: parsed.protocol.as_str().to_string(),
+            address: parsed.address,
+            port: parsed.port,
+            method: parsed.method,
+            network: parsed.network,
+            security: parsed.security,
+            path: parsed.path,
+            host: parsed.host,
+            sni: parsed.sni,
+            fingerprint: parsed.fingerprint,
+            alpn: parsed.alpn,
+            flow: parsed.flow,
+            service_name: parsed.service_name,
+            header_type: parsed.header_type,
+            reality_public_key: parsed.reality_public_key,
+            reality_short_id: parsed.reality_short_id,
+            reality_spider_x: parsed.reality_spider_x,
+            routing_rules: node.routing_rules,
+            rule_preset: node.rule_preset,
+            has_credential: !parsed.credential.is_empty() || !parsed.password.is_empty(),
+        })
+    }
+
+    /// Updates editable fields, share link, or per-node routing rules for a stored node.
+    /// Re-encodes `raw_config`, preserves existing secrets when omitted, and reconnects if active.
+    pub fn update_node(self: &Arc<Self>, id: &str, req: UpdateNodeRequest) -> Result<XrayNode> {
+        let existing = self.store.get_node(id)?;
+        let mut parsed = if let Some(link) = req.share_link.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            parser::parse_link(link).map_err(|e| crate::Error::InvalidRequest(e.to_string()))?
+        } else {
+            parser::parse_link(&existing.raw_config)
+                .map_err(|e| crate::Error::InvalidRequest(e.to_string()))?
+        };
+
+        if let Some(name) = req.name {
+            parsed.name = name.trim().to_string();
+        }
+        if let Some(proto) = req.protocol {
+            let p = Protocol::parse(&proto);
+            if p != Protocol::Unknown {
+                parsed.protocol = p;
+            }
+        }
+        if let Some(addr) = req.address {
+            let trimmed = addr.trim().to_string();
+            if trimmed.is_empty() {
+                return Err(crate::Error::InvalidRequest("address must not be empty".into()));
+            }
+            parsed.address = trimmed;
+        }
+        if let Some(port) = req.port {
+            if port == 0 {
+                return Err(crate::Error::InvalidRequest("port must be between 1 and 65535".into()));
+            }
+            parsed.port = port;
+        }
+        if let Some(cred) = req.credential.filter(|s| !s.trim().is_empty()) {
+            parsed.credential = cred.trim().to_string();
+        }
+        if let Some(pass) = req.password.filter(|s| !s.trim().is_empty()) {
+            parsed.password = pass.trim().to_string();
+        }
+        if let Some(method) = req.method {
+            parsed.method = method.trim().to_string();
+        }
+        if let Some(net) = req.network {
+            parsed.network = net.trim().to_string();
+        }
+        if let Some(sec) = req.security {
+            parsed.security = sec.trim().to_string();
+        }
+        if let Some(path) = req.path {
+            parsed.path = path.trim().to_string();
+        }
+        if let Some(host) = req.host {
+            parsed.host = host.trim().to_string();
+        }
+        if let Some(sni) = req.sni {
+            parsed.sni = sni.trim().to_string();
+        }
+        if let Some(fp) = req.fingerprint {
+            parsed.fingerprint = fp.trim().to_string();
+        }
+        if let Some(alpn) = req.alpn {
+            parsed.alpn = alpn.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        }
+        if let Some(flow) = req.flow {
+            parsed.flow = flow.trim().to_string();
+        }
+        if let Some(svc) = req.service_name {
+            parsed.service_name = svc.trim().to_string();
+        }
+        if let Some(ht) = req.header_type {
+            parsed.header_type = ht.trim().to_string();
+        }
+        if let Some(pbk) = req.reality_public_key {
+            parsed.reality_public_key = pbk.trim().to_string();
+        }
+        if let Some(sid) = req.reality_short_id {
+            parsed.reality_short_id = sid.trim().to_string();
+        }
+        if let Some(spx) = req.reality_spider_x {
+            parsed.reality_spider_x = spx.trim().to_string();
+        }
+
+        let new_link = parser::encode_share_link(&parsed);
+        let mut updated = parser::parse_profile(&new_link, &existing.subscription_id, Some(&self.geoip))
+            .map_err(|e| crate::Error::InvalidRequest(e.to_string()))?;
+        updated.id = existing.id.clone();
+        updated.routing_rules = req.routing_rules.unwrap_or(existing.routing_rules);
+        updated.rule_preset = req.rule_preset.unwrap_or(existing.rule_preset);
+
+        self.store.save_node(&updated)?;
+        if self.store.active_node_id().as_deref() == Some(id) && self.is_connected() {
+            let _ = self.connect_node(id, None);
+        }
+        Ok(updated)
+    }
+
+    /// Removes a single node by ID, disconnecting first if it is currently active.
+    pub fn delete_node(&self, id: &str) -> Result<()> {
+        if self.store.active_node_id().as_deref() == Some(id) && self.is_connected() {
+            let _ = self.disconnect();
+        }
+        self.store.remove_node(id)
+    }
+
+    /// Returns GeoIP country codes and GeoSite category hints from downloaded `.dat` files
+    /// (with curated fallback suggestions when geodata has not yet been downloaded).
+    pub fn geodata_hints(&self) -> Value {
+        let xray_dir = self.data_dir.join("xray");
+        let geoip_path = xray_dir.join("geoip.dat");
+        let geosite_path = xray_dir.join("geosite.dat");
+        let geoip_avail = geoip_path.is_file();
+        let geosite_avail = geosite_path.is_file();
+
+        let mut geoip_codes = if geoip_avail {
+            extract_dat_categories(&geoip_path, 250)
+        } else {
+            Vec::new()
+        };
+        let mut geosite_cats = if geosite_avail {
+            extract_dat_categories(&geosite_path, 400)
+        } else {
+            Vec::new()
+        };
+
+        for fallback in ["ru", "us", "de", "nl", "fi", "gb", "fr", "jp", "sg", "tr", "private"] {
+            if !geoip_codes.iter().any(|c| c.eq_ignore_ascii_case(fallback)) {
+                geoip_codes.push(fallback.to_string());
+            }
+        }
+        for fallback in [
+            "category-ads-all",
+            "category-ru",
+            "youtube",
+            "openai",
+            "google",
+            "discord",
+            "telegram",
+            "github",
+            "steam",
+            "twitch",
+            "instagram",
+            "netflix",
+        ] {
+            if !geosite_cats.iter().any(|c| c.eq_ignore_ascii_case(fallback)) {
+                geosite_cats.push(fallback.to_string());
+            }
+        }
+
+        json!({
+            "geoipAvailable": geoip_avail,
+            "geositeAvailable": geosite_avail,
+            "geoipCodes": geoip_codes,
+            "geositeCategories": geosite_cats,
+            "presets": [
+                { "id": "default", "name": "По умолчанию (глобальные правила)" },
+                { "id": "ru-direct", "name": "РФ напрямую + YouTube/AI/Discord в VPN" },
+                { "id": "bypass-ads", "name": "Блокировка рекламы (category-ads-all)" },
+                { "id": "global-vpn", "name": "Весь интернет-трафик через VPN" }
+            ]
+        })
     }
 
     /// Refreshes subscriptions and returns the number of discovered nodes.
@@ -951,7 +1243,7 @@ impl Xray {
 
         let inbound_port = inbound_port_override.unwrap_or_else(|| self.configured_inbound_port());
         tracing::info!(node = %node.name, "xray: connecting to node");
-        let rules = self.routing_rules();
+        let rules = self.routing_rules_for_node(&node);
         let custom_rules = if rules.is_empty() { None } else { Some(rules.as_slice()) };
         if let Err(error) = self.manager.connect_with_rules(
             &node,
@@ -1046,6 +1338,97 @@ impl Xray {
         self.manager.stop();
         self.reset_vpn_config();
     }
+}
+
+fn read_varint(buf: &[u8], pos: &mut usize) -> Option<usize> {
+    let mut val = 0usize;
+    let mut shift = 0u32;
+    while *pos < buf.len() {
+        let b = buf[*pos];
+        *pos += 1;
+        val |= ((b & 0x7f) as usize) << shift;
+        if (b & 0x80) == 0 {
+            return Some(val);
+        }
+        shift += 7;
+        if shift > 28 {
+            return None;
+        }
+    }
+    None
+}
+
+/// Scans an Xray protobuf `.dat` list (`GeoIPList` / `GeoSiteList`) and extracts
+/// field #1 category/country codes without loading full IP/domain tries.
+fn extract_dat_categories(path: &Path, limit: usize) -> Vec<String> {
+    let Ok(data) = std::fs::read(path) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut pos = 0usize;
+    while pos < data.len() && out.len() < limit {
+        let Some(tag) = read_varint(&data, &mut pos) else {
+            break;
+        };
+        let wire = tag & 0x7;
+        let field = tag >> 3;
+        match wire {
+            0 => {
+                if read_varint(&data, &mut pos).is_none() {
+                    break;
+                }
+            }
+            1 => {
+                if pos.checked_add(8).is_some_and(|e| e <= data.len()) {
+                    pos += 8;
+                } else {
+                    break;
+                }
+            }
+            2 => {
+                let Some(len) = read_varint(&data, &mut pos) else {
+                    break;
+                };
+                let Some(end) = pos.checked_add(len).filter(|e| *e <= data.len()) else {
+                    break;
+                };
+                if field == 1 {
+                    let msg = &data[pos..end];
+                    let mut mp = 0usize;
+                    if let Some(mtag) = read_varint(msg, &mut mp) {
+                        if mtag == 0x0a {
+                            if let Some(slen) = read_varint(msg, &mut mp) {
+                                if let Some(send) = mp.checked_add(slen).filter(|e| *e <= msg.len()) {
+                                    if let Ok(code) = std::str::from_utf8(&msg[mp..send]) {
+                                        let lower = code.trim().to_ascii_lowercase();
+                                        if !lower.is_empty()
+                                            && lower.len() <= 64
+                                            && lower.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+                                            && seen.insert(lower.clone())
+                                        {
+                                            out.push(lower);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                pos = end;
+            }
+            5 => {
+                if pos.checked_add(4).is_some_and(|e| e <= data.len()) {
+                    pos += 4;
+                } else {
+                    break;
+                }
+            }
+            _ => break,
+        }
+    }
+    out.sort();
+    out
 }
 
 #[cfg(test)]

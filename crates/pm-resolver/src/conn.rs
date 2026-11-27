@@ -16,6 +16,8 @@ pub struct Query {
     pub no_caching: bool,
     pub ignore_failing: bool,
     pub local_resolvers_only: bool,
+    /// Optional per-application nameserver URLs overriding global `dns/nameservers`.
+    pub override_nameservers: Vec<String>,
 }
 
 /// Returns a random 16-bit integer for DNS message IDs.
@@ -48,6 +50,7 @@ impl Query {
             no_caching: false,
             ignore_failing: false,
             local_resolvers_only: false,
+            override_nameservers: Vec::new(),
         }
     }
 

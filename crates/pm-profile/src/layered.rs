@@ -212,6 +212,12 @@ impl LayeredProfile {
         self.layered_string(CFG_OPTION_SPLIT_TUN_PROXY_KEY, &self.global.split_tun_proxy)
     }
 
+    /// Returns explicit per-app DNS nameserver overrides (`dns/nameservers`) when set.
+    pub fn dns_nameservers_override(&self) -> Option<Vec<String>> {
+        self.first_layer(|layer| layer.perspective.get_string_array("dns/nameservers"))
+            .filter(|list| !list.is_empty())
+    }
+
     /// Returns how many days of history are kept.
     pub fn keep_history(&self) -> i64 {
         self.first_layer(|layer| layer.perspective.get_int(CFG_OPTION_KEEP_HISTORY_KEY))

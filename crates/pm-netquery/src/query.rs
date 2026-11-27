@@ -702,8 +702,8 @@ pub fn generate_sql(req: &QueryRequest) -> Result<(String, BTreeMap<String, Para
         .collect();
 
     let mut limit = req.page_size;
-    if limit <= 0 || limit > 100 {
-        limit = 100;
+    if limit <= 0 || limit > 2000 {
+        limit = if limit > 2000 { 2000 } else { 100 };
     }
     let mut paging = format!("LIMIT {limit}");
     if req.page > 0 {
