@@ -10,6 +10,24 @@ Item {
     property bool showLinkDrawer: false
     property string nodeSearch: ""
     property string selectedCountry: "" // Clicking a country on map or sidebar opens its nodes + flag panel!
+    property var cachedWorld: []
+    property string lastWorldSig: ""
+
+    function activeWin() { return !Window.window || Window.window.visible }
+
+    function syncXrayMap(force) {
+        if (!root.visible || !activeWin()) return
+        var pins = pm.mapPins || []
+        var st = pm.xrayStatus || ({})
+        var sig = (st.connected ? "1:" : "0:") + (st.nodeId || "") + "|"
+        for (var i = 0; i < pins.length; i++) {
+            sig += (pins[i].country || "") + (pins[i].active ? "*," : ",")
+        }
+        if (!force && sig === root.lastWorldSig) return
+        root.lastWorldSig = sig
+        worldCanvas.requestPaint()
+        if (mapBox.hoveredHitKey !== "" || root.selectedCountry !== "") hoverCanvas.requestPaint()
+    }
 
     function filteredNodes(countryOverride) {
         var src = pm.xrayNodes || []
@@ -46,10 +64,15 @@ Item {
 
     Connections {
         target: pm
-        function onWorldMapReady() { worldCanvas.requestPaint(); hoverCanvas.requestPaint() }
-        function onXrayChanged() { worldCanvas.requestPaint(); hoverCanvas.requestPaint() }
+        function onWorldMapReady() {
+            root.cachedWorld = pm.worldCountries || []
+            root.syncXrayMap(true)
+            if (root.visible && root.activeWin()) hoverCanvas.requestPaint()
+        }
+        function onXrayChanged() { root.syncXrayMap(false) }
     }
-    onSelectedCountryChanged: hoverCanvas.requestPaint()
+    onVisibleChanged: if (visible) { root.syncXrayMap(true); hoverCanvas.requestPaint() }
+    onSelectedCountryChanged: if (root.visible && root.activeWin()) hoverCanvas.requestPaint()
 
     ColumnLayout {
         anchors.fill: parent
@@ -262,39 +285,9 @@ Item {
                     return null
                 }
 
-                // Packed flat [x0, y0, x1, y1, ...] point-in-polygon with O(1) bbox rejection!
-                function pointInFlatPoly(nx, ny, pts) {
-                    var inside = false
-                    var n = pts.length
-                    for (var i = 0, j = n - 2; i < n; j = i, i += 2) {
-                        var xi = pts[i], yi = pts[i + 1]
-                        var xj = pts[j], yj = pts[j + 1]
-                        var intersect = ((yi > ny) !== (yj > ny)) && (nx < (xj - xi) * (ny - yi) / ((yj - yi) || 1e-9) + xi)
-                        if (intersect) inside = !inside
-                    }
-                    return inside
-                }
-
                 function hitTestCountry(nx, ny) {
-                    var cs = pm.worldCountries || []
-                    for (var i = 0; i < cs.length; i++) {
-                        var c = cs[i]
-                        if (nx < c.minX || nx > c.maxX || ny < c.minY || ny > c.maxY) continue
-                        var polys = c.polygons || []
-                        for (var p = 0; p < polys.length; p++) {
-                            var polyRings = polys[p]
-                            if (!polyRings || polyRings.length === 0) continue
-                            if (typeof polyRings[0] === "number") polyRings = [polyRings]
-                            var hits = 0
-                            for (var r = 0; r < polyRings.length; r++) {
-                                if (polyRings[r].length >= 6 && pointInFlatPoly(nx, ny, polyRings[r])) {
-                                    hits++
-                                }
-                            }
-                            if ((hits % 2) === 1) return c
-                        }
-                    }
-                    return null
+                    var hit = pm.hitTestMapCountry(nx, ny)
+                    return (hit && (hit.hitKey || hit.code)) ? hit : null
                 }
 
                 function drawCountryFlat(ctx, c, w, h) {
@@ -320,8 +313,8 @@ Item {
 
                 onWidthChanged: clampPan()
                 onHeightChanged: clampPan()
-                onHoveredCodeChanged: hoverCanvas.requestPaint()
-                onHoveredHitKeyChanged: hoverCanvas.requestPaint()
+                onHoveredCodeChanged: if (root.visible && root.activeWin()) hoverCanvas.requestPaint()
+                onHoveredHitKeyChanged: if (root.visible && root.activeWin()) hoverCanvas.requestPaint()
 
                 Item {
                     id: mapViewport
@@ -337,7 +330,7 @@ Item {
                         onPaint: {
                             var ctx = getContext("2d")
                             ctx.clearRect(0, 0, width, height)
-                            var countries = pm.worldCountries || []
+                            var countries = (root.cachedWorld && root.cachedWorld.length > 0) ? root.cachedWorld : (pm.worldCountries || [])
                             if (countries.length === 0) return
 
                             var pins = pm.mapPins || []
@@ -392,7 +385,7 @@ Item {
                         onPaint: {
                             var ctx = getContext("2d")
                             ctx.clearRect(0, 0, width, height)
-                            var cs = pm.worldCountries || []
+                            var cs = (root.cachedWorld && root.cachedWorld.length > 0) ? root.cachedWorld : (pm.worldCountries || [])
                             if (cs.length === 0) return
                             var hovKey = mapBox.hoveredHitKey
                             var sel = root.selectedCountry

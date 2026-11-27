@@ -69,7 +69,12 @@ impl Database {
         let conn = self.lock();
         // journal_mode returns a row, so it cannot go through execute_batch.
         conn.query_row("PRAGMA history.journal_mode=WAL", [], |_| Ok(()))?;
-        conn.execute_batch("PRAGMA history.synchronous=NORMAL;")?;
+        conn.execute_batch(
+            "PRAGMA history.synchronous=NORMAL;
+             PRAGMA temp_store=MEMORY;
+             PRAGMA main.cache_size=-2000;
+             PRAGMA history.cache_size=-4000;",
+        )?;
         for db in ["main", "history"] {
             conn.execute_batch(&create_statement(db, true))?;
             conn.execute_batch(&format!(
@@ -207,7 +212,6 @@ impl Database {
     }
 
     /// Adds byte counters and logs a bandwidth sample (Go `UpdateBandwidth`).
-    /// All statements are attempted; the first error is returned.
     pub fn update_bandwidth(
         &self,
         enable_history: bool,
@@ -217,28 +221,51 @@ impl Database {
         bytes_sent: u64,
         now_unix: i64,
     ) -> Result<(), DbError> {
-        let id = format!("{process_key}-{conn_id}");
-        let (rx, tx) = (sat_i64(bytes_received), sat_i64(bytes_sent));
-        let conn = self.lock();
+        self.update_bandwidth_batch(
+            &[(enable_history, process_key, conn_id, bytes_received, bytes_sent)],
+            now_unix,
+        )
+    }
+
+    /// Applies multiple bandwidth updates inside one SQLite transaction with cached statements.
+    pub fn update_bandwidth_batch(
+        &self,
+        updates: &[(bool, &str, &str, u64, u64)],
+        now_unix: i64,
+    ) -> Result<(), DbError> {
+        if updates.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.lock();
+        let tx_guard = conn.transaction()?;
         let mut first_err: Option<rusqlite::Error> = None;
-        let dbs: &[&str] = if enable_history { &["main", "history"] } else { &["main"] };
-        for db in dbs {
-            let sql = format!(
-                "UPDATE {db}.connections SET bytes_received = (bytes_received + :bytes_received), bytes_sent = (bytes_sent + :bytes_sent) WHERE id = :id"
-            );
-            if let Err(e) = conn.execute(
-                &sql,
-                rusqlite::named_params! {":bytes_received": rx, ":bytes_sent": tx, ":id": id},
+        for &(enable_history, process_key, conn_id, bytes_received, bytes_sent) in updates {
+            let id = format!("{process_key}-{conn_id}");
+            let (rx, tx) = (sat_i64(bytes_received), sat_i64(bytes_sent));
+            let dbs: &[&str] = if enable_history { &["main", "history"] } else { &["main"] };
+            for db in dbs {
+                let sql = format!(
+                    "UPDATE {db}.connections SET bytes_received = (bytes_received + :bytes_received), bytes_sent = (bytes_sent + :bytes_sent) WHERE id = :id"
+                );
+                if let Ok(mut stmt) = tx_guard.prepare_cached(&sql) {
+                    if let Err(e) = stmt.execute(
+                        rusqlite::named_params! {":bytes_received": rx, ":bytes_sent": tx, ":id": id},
+                    ) {
+                        first_err.get_or_insert(e);
+                    }
+                }
+            }
+            if let Ok(mut stmt) = tx_guard.prepare_cached(
+                "INSERT INTO main.bandwidth (conn_id, time, incoming, outgoing) VALUES(:id, :time, :bytes_received, :bytes_sent)",
             ) {
-                first_err.get_or_insert(e);
+                if let Err(e) = stmt.execute(
+                    rusqlite::named_params! {":id": id, ":time": now_unix, ":bytes_received": rx, ":bytes_sent": tx},
+                ) {
+                    first_err.get_or_insert(e);
+                }
             }
         }
-        if let Err(e) = conn.execute(
-            "INSERT INTO main.bandwidth (conn_id, time, incoming, outgoing) VALUES(:id, :time, :bytes_received, :bytes_sent)",
-            rusqlite::named_params! {":id": id, ":time": now_unix, ":bytes_received": rx, ":bytes_sent": tx},
-        ) {
-            first_err.get_or_insert(e);
-        }
+        tx_guard.commit()?;
         first_err.map_or(Ok(()), |e| Err(e.into()))
     }
 

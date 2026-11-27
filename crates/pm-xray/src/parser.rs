@@ -73,9 +73,24 @@ pub struct ParsedProfile {
     pub encryption: String,
     /// XTLS flow on VLESS/Trojan users.
     pub flow: String,
-    /// gRPC `serviceName` and RAW `headerType` link parameters.
+    /// gRPC `serviceName` and RAW/KCP `headerType` link parameters.
     pub service_name: String,
     pub header_type: String,
+    /// XHTTP (`mode` / optional JSON `extra`), gRPC, KCP, WS, TLS verification & socket options.
+    pub xhttp_mode: String,
+    pub xhttp_extra: String,
+    pub grpc_multi_mode: bool,
+    pub grpc_authority: String,
+    pub kcp_seed: String,
+    pub ws_heartbeat_period: u16,
+    pub pinned_peer_cert: String,
+    pub verify_peer_cert_by_name: String,
+    pub ech_config_list: String,
+    pub mux_enabled: bool,
+    pub mux_concurrency: i32,
+    pub fragment_enabled: bool,
+    pub tcp_fast_open: bool,
+    pub tcp_keep_alive_interval: u16,
     /// Custom HTTP headers from a `headers={"Name":"value"}` link parameter.
     pub headers: Vec<(String, String)>,
     /// Shadowsocks plugin name and its `plugin-opts` string, when present.
@@ -261,6 +276,20 @@ fn default_profile(protocol: Protocol, name: &str) -> ParsedProfile {
         flow: String::new(),
         service_name: String::new(),
         header_type: String::new(),
+        xhttp_mode: String::new(),
+        xhttp_extra: String::new(),
+        grpc_multi_mode: false,
+        grpc_authority: String::new(),
+        kcp_seed: String::new(),
+        ws_heartbeat_period: 0,
+        pinned_peer_cert: String::new(),
+        verify_peer_cert_by_name: String::new(),
+        ech_config_list: String::new(),
+        mux_enabled: false,
+        mux_concurrency: 0,
+        fragment_enabled: false,
+        tcp_fast_open: false,
+        tcp_keep_alive_interval: 0,
         headers: Vec::new(),
         plugin: String::new(),
         plugin_opts: String::new(),
@@ -339,6 +368,61 @@ fn apply_stream_params(profile: &mut ParsedProfile, params: &BTreeMap<String, St
         .or_else(|| params.get("service-name"))
     {
         profile.service_name = service_name.clone();
+    }
+    if let Some(mode) = params.get("mode") {
+        if profile.network == "grpc" && mode.eq_ignore_ascii_case("multi") {
+            profile.grpc_multi_mode = true;
+        } else {
+            profile.xhttp_mode = mode.clone();
+        }
+    }
+    if let Some(extra) = params.get("extra") {
+        profile.xhttp_extra = extra.clone();
+    }
+    if let Some(mm) = params.get("multimode").or_else(|| params.get("grpc_multimode")) {
+        profile.grpc_multi_mode = mm == "1" || mm.eq_ignore_ascii_case("true") || mm.eq_ignore_ascii_case("multi");
+    }
+    if let Some(auth) = params.get("authority") {
+        profile.grpc_authority = auth.clone();
+    }
+    if let Some(seed) = params.get("seed") {
+        profile.kcp_seed = seed.clone();
+    }
+    if let Some(hb) = params.get("heartbeat").or_else(|| params.get("heartbeatperiod")) {
+        if let Ok(v) = hb.parse::<u16>() {
+            profile.ws_heartbeat_period = v;
+        }
+    }
+    if let Some(pcs) = params.get("pcs").or_else(|| params.get("pinnedpeercertsha256")) {
+        profile.pinned_peer_cert = pcs.clone();
+    }
+    if let Some(vcn) = params.get("vcn").or_else(|| params.get("verifypeercertbyname")) {
+        profile.verify_peer_cert_by_name = vcn.clone();
+    }
+    if let Some(ech) = params.get("ech").or_else(|| params.get("echconfiglist")) {
+        profile.ech_config_list = ech.clone();
+    }
+    if let Some(mux) = params.get("mux") {
+        profile.mux_enabled = mux == "1" || mux.eq_ignore_ascii_case("true");
+    }
+    if let Some(mc) = params.get("muxconcurrency").or_else(|| params.get("concurrency")) {
+        if let Ok(v) = mc.parse::<i32>() {
+            profile.mux_concurrency = v;
+            if v > 0 {
+                profile.mux_enabled = true;
+            }
+        }
+    }
+    if let Some(frag) = params.get("frag").or_else(|| params.get("fragment")) {
+        profile.fragment_enabled = frag == "1" || frag.eq_ignore_ascii_case("true");
+    }
+    if let Some(tfo) = params.get("tfo").or_else(|| params.get("tcpfastopen")) {
+        profile.tcp_fast_open = tfo == "1" || tfo.eq_ignore_ascii_case("true");
+    }
+    if let Some(ka) = params.get("keepalive").or_else(|| params.get("tcpkeepaliveinterval")) {
+        if let Ok(v) = ka.parse::<u16>() {
+            profile.tcp_keep_alive_interval = v;
+        }
     }
     if let Some(raw) = params.get("headers") {
         profile.headers = parse_headers(raw);
@@ -1197,6 +1281,48 @@ pub fn encode_share_link(p: &ParsedProfile) -> String {
         }
         if !p.reality_spider_x.is_empty() {
             params.push(format!("spx={}", percent_encode(&p.reality_spider_x)));
+        }
+        if !p.xhttp_mode.is_empty() {
+            params.push(format!("mode={}", percent_encode(&p.xhttp_mode)));
+        }
+        if !p.xhttp_extra.is_empty() {
+            params.push(format!("extra={}", percent_encode(&p.xhttp_extra)));
+        }
+        if p.grpc_multi_mode {
+            params.push("multiMode=true".to_string());
+        }
+        if !p.grpc_authority.is_empty() {
+            params.push(format!("authority={}", percent_encode(&p.grpc_authority)));
+        }
+        if !p.kcp_seed.is_empty() {
+            params.push(format!("seed={}", percent_encode(&p.kcp_seed)));
+        }
+        if p.ws_heartbeat_period > 0 {
+            params.push(format!("heartbeat={}", p.ws_heartbeat_period));
+        }
+        if !p.pinned_peer_cert.is_empty() {
+            params.push(format!("pcs={}", percent_encode(&p.pinned_peer_cert)));
+        }
+        if !p.verify_peer_cert_by_name.is_empty() {
+            params.push(format!("vcn={}", percent_encode(&p.verify_peer_cert_by_name)));
+        }
+        if !p.ech_config_list.is_empty() {
+            params.push(format!("ech={}", percent_encode(&p.ech_config_list)));
+        }
+        if p.mux_enabled {
+            params.push("mux=1".to_string());
+            if p.mux_concurrency > 0 {
+                params.push(format!("muxConcurrency={}", p.mux_concurrency));
+            }
+        }
+        if p.fragment_enabled {
+            params.push("frag=1".to_string());
+        }
+        if p.tcp_fast_open {
+            params.push("tfo=1".to_string());
+        }
+        if p.tcp_keep_alive_interval > 0 {
+            params.push(format!("keepalive={}", p.tcp_keep_alive_interval));
         }
     };
 

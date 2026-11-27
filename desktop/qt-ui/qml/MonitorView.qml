@@ -12,7 +12,8 @@ Item {
     property bool scopeLocal: false
     property string dirFilter: "all"     // "all" | "outbound" | "inbound"
     property string verdictFilter: "all" // "all" | "permit" | "xray" | "block"
-    property bool hideDnsNoise: false
+    property bool hideDnsNoise: true
+    property bool hideLocalhost: true
     property string expandedId: ""
     property var cachedFiltered: []
 
@@ -55,6 +56,11 @@ Item {
                 var rport = c.port || 0
                 if (rport === 53 || rport === 853) continue
             }
+            if (hideLocalhost && !scopeLocal) {
+                var scLo = (c.scope || "").toLowerCase()
+                var cip = c.ip || ""
+                if (scLo.indexOf("local") >= 0 || cip === "127.0.0.1" || cip === "::1" || cip.indexOf("127.") === 0 || cip === "::") continue
+            }
             out.push(c)
         }
         cachedFiltered = out
@@ -67,10 +73,12 @@ Item {
     onDirFilterChanged: recompute()
     onVerdictFilterChanged: recompute()
     onHideDnsNoiseChanged: recompute()
+    onHideLocalhostChanged: recompute()
+    onVisibleChanged: if (visible) recompute()
     Component.onCompleted: recompute()
     Connections {
         target: pm
-        function onConnectionsChanged() { root.recompute() }
+        function onConnectionsChanged() { if (root.visible) root.recompute() }
     }
 
     ColumnLayout {
@@ -138,6 +146,26 @@ Item {
                 MouseArea {
                     anchors.fill: parent; cursorShape: Qt.PointingHandCursor
                     onClicked: root.hideDnsNoise = !root.hideDnsNoise
+                }
+            }
+
+            Rectangle {
+                height: 22; radius: 4
+                color: root.hideLocalhost ? "#1c3354" : "#1c1c1e"
+                border.color: root.hideLocalhost ? "#4e97fa" : "#2a2a2e"
+                implicitWidth: localHideLbl.implicitWidth + 12
+                Label {
+                    id: localHideLbl; anchors.centerIn: parent
+                    text: pm.isRu ? "Скрыть локалхост" : "Hide Localhost"
+                    color: root.hideLocalhost ? "#89b7ff" : "#888894"
+                    font.pixelSize: 10; font.bold: root.hideLocalhost
+                }
+                MouseArea {
+                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        root.hideLocalhost = !root.hideLocalhost
+                        if (root.hideLocalhost && root.scopeLocal) root.scopeLocal = false
+                    }
                 }
             }
 
@@ -215,7 +243,10 @@ Item {
                 ScopeChip {
                     label: pm.t("mon.local")
                     act: root.scopeLocal
-                    onClicked: root.scopeLocal = !root.scopeLocal
+                    onClicked: {
+                        root.scopeLocal = !root.scopeLocal
+                        if (root.scopeLocal) root.hideLocalhost = false
+                    }
                 }
             }
 

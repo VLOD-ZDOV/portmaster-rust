@@ -127,19 +127,8 @@ impl portmaster::Handler for WsHandler {
                     let _ = win.destroy();
                 }
                 portapi::client::release_api_port_lease();
-                #[cfg(target_os = "linux")]
-                {
-                    if traymenu::spawn_qt_gui_with_tray(background) {
-                        info!("[tauri] qt flavor is active; handed tray and UI to portmaster-qt");
-                        handle_ui.exit(0);
-                        return;
-                    }
-                }
-                #[cfg(not(target_os = "linux"))]
-                {
-                    if !background {
-                        let _ = traymenu::spawn_qt_gui_no_tray();
-                    }
+                if !background {
+                    let _ = traymenu::spawn_qt_gui_no_tray();
                 }
             } else if !background {
                 traymenu::open_active_ui_flavor(&handle_ui);
@@ -170,8 +159,13 @@ impl portmaster::Handler for WsHandler {
         // Once we had a successful connection the splash-screen will not be shown anymore
         // since there's already a main window with the angular application.
         if !self.background && self.is_first_connect {
+            self.is_first_connect = false;
+            if traymenu::ACTIVE_UI_IS_QT.load(std::sync::atomic::Ordering::Acquire)
+                && traymenu::spawn_qt_gui_no_tray()
+            {
+                return;
+            }
             let _ = window::create_splash_window(&self.handle.clone());
-            self.is_first_connect = false
         }
     }
 }
@@ -305,7 +299,7 @@ fn main() {
             // or the splash-screen.
             let handle = app.handle().clone();
             app.listen_any("single-instance", move |_event| {
-                let _ = window::open_window(&handle);
+                traymenu::open_active_ui_flavor(&handle);
             });
 
             // Handle cli flags:

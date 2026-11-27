@@ -62,7 +62,8 @@ impl SqliteStorage {
         let _: String = conn.query_row("PRAGMA journal_mode=WAL;", [], |row| row.get(0))?;
         conn.execute_batch(
             "PRAGMA synchronous=NORMAL;
-             PRAGMA cache_size=-10000;",
+             PRAGMA cache_size=-4000;
+             PRAGMA temp_store=MEMORY;",
         )?;
         conn.busy_timeout(Duration::from_millis(10000))?;
 

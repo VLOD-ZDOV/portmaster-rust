@@ -366,28 +366,6 @@ fn build_tray_menu(
     Ok(menu)
 }
 
-#[cfg(target_os = "linux")]
-pub(crate) fn spawn_qt_gui_with_tray(background: bool) -> bool {
-    if let Some(qt_bin) = find_qt_binary() {
-        let mut cmd = std::process::Command::new(&qt_bin);
-        if background {
-            cmd.arg("--background");
-        }
-        match cmd.spawn() {
-            Ok(mut child) => {
-                std::thread::spawn(move || {
-                    let _ = child.wait();
-                });
-                return true;
-            }
-            Err(err) => {
-                error!("[tauri] failed to launch portmaster-qt ({}): {}", qt_bin.display(), err);
-            }
-        }
-    }
-    false
-}
-
 pub(crate) fn spawn_qt_gui_no_tray() -> bool {
     if let Some(qt_bin) = find_qt_binary() {
         match std::process::Command::new(&qt_bin).arg("--no-tray").spawn() {
@@ -549,7 +527,12 @@ pub fn update_icon(icon: AppIcon, system_status: SystemStatus, spn_status: Strin
         system_status_types::StateType::Error => ("Insecure", IconColor::Red),
         system_status_types::StateType::Warning => ("Insecure", IconColor::Yellow),
         _ => {
-            let color = match spn_status.as_str() {
+            let spn_flag = SPN_STATE.load(Ordering::Acquire);
+            let effective_spn_status = match (spn_status.as_str(), spn_flag) {
+                ("disabled" | "" | "unknown", true) => "connecting",
+                (other, _) => other,
+            };
+            let color = match effective_spn_status {
                 "connected" | "connecting" => IconColor::Blue,
                 _ => IconColor::Green,
             };
@@ -686,7 +669,7 @@ pub async fn tray_handler(cli: PortAPI, app: tauri::AppHandle) {
         }
     };
 
-    update_icon_color(&icon, IconColor::Blue);
+    update_icon_color(&icon, IconColor::Green);
 
     let mut system_status = SystemStatus::default();
     let mut spn_status: String = "".to_string();

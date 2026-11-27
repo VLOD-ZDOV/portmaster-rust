@@ -201,6 +201,21 @@ impl Manager {
         }
     }
 
+    /// Broadcasts an updated connection snapshot (e.g. byte counters) to runtime subscribers.
+    pub fn push_connection(&self, conn: &SharedConnection) {
+        let (model, meta) = {
+            let conn = lock(conn);
+            if !conn.data_complete {
+                return;
+            }
+            match convert_connection(&conn) {
+                Ok(model) => (model, conn.meta),
+                Err(_) => return,
+            }
+        };
+        let _ = self.push_conn_update(meta, &model);
+    }
+
     fn push_conn_update(&self, meta: Meta, model: &Conn) -> Result<(), pm_record::Error> {
         let key = Key::new(&self.registry.database_name(), &format!("{}{}", self.push_prefix, model.id));
         let record = Record::from_typed(key, meta, model)?;

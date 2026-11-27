@@ -538,6 +538,9 @@ fn parse_outbound_object(
                                         if let Some(fp) = rs.get("fingerprint").and_then(|v| v.as_str()) {
                                             params.push(format!("fp={fp}"));
                                         }
+                                        if let Some(spx) = rs.get("spiderX").and_then(|v| v.as_str()) {
+                                            params.push(format!("spx={}", url_encode(spx)));
+                                        }
                                     }
                                 } else if security == "tls" {
                                     if let Some(ts) = ss.and_then(|s| s.get("tlsSettings")) {
@@ -547,6 +550,9 @@ fn parse_outbound_object(
                                         if let Some(fp) = ts.get("fingerprint").and_then(|v| v.as_str()) {
                                             params.push(format!("fp={fp}"));
                                         }
+                                        if let Some(pcs) = ts.get("pinnedPeerCertSha256").and_then(|v| v.as_str()) {
+                                            params.push(format!("pcs={}", url_encode(pcs)));
+                                        }
                                     }
                                 }
 
@@ -555,14 +561,55 @@ fn parse_outbound_object(
                                         if let Some(path) = ws.get("path").and_then(|v| v.as_str()) {
                                             params.push(format!("path={}", url_encode(path)));
                                         }
-                                        if let Some(host) = ws.get("headers").and_then(|h| h.get("Host")).and_then(|v| v.as_str()) {
+                                        if let Some(host) = ws.get("host").and_then(|v| v.as_str())
+                                            .or_else(|| ws.get("headers").and_then(|h| h.get("Host")).and_then(|v| v.as_str()))
+                                        {
                                             params.push(format!("host={host}"));
+                                        }
+                                        if let Some(hb) = ws.get("heartbeatPeriod").and_then(|v| v.as_u64()) {
+                                            params.push(format!("heartbeat={hb}"));
                                         }
                                     }
                                 } else if network == "grpc" {
                                     if let Some(gs) = ss.and_then(|s| s.get("grpcSettings")) {
                                         if let Some(sn) = gs.get("serviceName").and_then(|v| v.as_str()) {
                                             params.push(format!("serviceName={sn}"));
+                                        }
+                                        if let Some(auth) = gs.get("authority").and_then(|v| v.as_str()) {
+                                            params.push(format!("authority={}", url_encode(auth)));
+                                        }
+                                        if gs.get("multiMode").and_then(|v| v.as_bool()) == Some(true) {
+                                            params.push("multiMode=true".to_string());
+                                        }
+                                    }
+                                } else if network == "xhttp" || network == "splithttp" {
+                                    if let Some(xs) = ss.and_then(|s| s.get("xhttpSettings")).or_else(|| ss.and_then(|s| s.get("splithttpSettings"))) {
+                                        if let Some(path) = xs.get("path").and_then(|v| v.as_str()) {
+                                            params.push(format!("path={}", url_encode(path)));
+                                        }
+                                        if let Some(host) = xs.get("host").and_then(|v| v.as_str()) {
+                                            params.push(format!("host={}", url_encode(host)));
+                                        }
+                                        if let Some(mode) = xs.get("mode").and_then(|v| v.as_str()) {
+                                            params.push(format!("mode={}", url_encode(mode)));
+                                        }
+                                    }
+                                } else if network == "httpupgrade" {
+                                    if let Some(hs) = ss.and_then(|s| s.get("httpupgradeSettings")) {
+                                        if let Some(path) = hs.get("path").and_then(|v| v.as_str()) {
+                                            params.push(format!("path={}", url_encode(path)));
+                                        }
+                                        if let Some(host) = hs.get("host").and_then(|v| v.as_str()) {
+                                            params.push(format!("host={}", url_encode(host)));
+                                        }
+                                    }
+                                } else if network == "kcp" || network == "mkcp" {
+                                    if let Some(ks) = ss.and_then(|s| s.get("kcpSettings")) {
+                                        if let Some(ht) = ks.get("header").and_then(|h| h.get("type")).and_then(|v| v.as_str()) {
+                                            params.push(format!("headerType={ht}"));
+                                        }
+                                        if let Some(seed) = ks.get("seed").and_then(|v| v.as_str()) {
+                                            params.push(format!("seed={}", url_encode(seed)));
                                         }
                                     }
                                 }

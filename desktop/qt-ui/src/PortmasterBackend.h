@@ -1,5 +1,6 @@
 #pragma once
 
+#include <deque>
 #include <QHash>
 #include <QImage>
 #include <QJsonArray>
@@ -16,6 +17,9 @@
 #include <QVariantMap>
 
 #include "PortApiClient.h"
+
+class QAction;
+class QMenu;
 
 struct PortmasterIconStore {
     QMutex mutex;
@@ -64,6 +68,12 @@ class PortmasterBackend : public QObject {
     Q_PROPERTY(QVariantMap selectedApp READ selectedApp NOTIFY selectedAppChanged)
     Q_PROPERTY(QVariantList selectedAppConnections READ selectedAppConnections NOTIFY selectedAppChanged)
     Q_PROPERTY(QVariantList selectedAppSettings READ selectedAppSettings NOTIFY selectedAppChanged)
+    Q_PROPERTY(QVariantList selectedAppChartBins READ selectedAppChartBins NOTIFY selectedAppChanged)
+    Q_PROPERTY(bool appChartInternetOnly READ appChartInternetOnly WRITE setAppChartInternetOnly NOTIFY selectedAppChanged)
+    Q_PROPERTY(int selectedAppInetAllowed READ selectedAppInetAllowed NOTIFY selectedAppChanged)
+    Q_PROPERTY(int selectedAppInetBlocked READ selectedAppInetBlocked NOTIFY selectedAppChanged)
+    Q_PROPERTY(int selectedAppAllAllowed READ selectedAppAllAllowed NOTIFY selectedAppChanged)
+    Q_PROPERTY(int selectedAppAllBlocked READ selectedAppAllBlocked NOTIFY selectedAppChanged)
 
     Q_PROPERTY(QVariantList connections READ connections NOTIFY connectionsChanged)
     Q_PROPERTY(QVariantList settingsList READ settingsList NOTIFY settingsChanged)
@@ -138,6 +148,15 @@ public:
     QVariantMap selectedApp() const { return m_selectedAppMap; }
     QVariantList selectedAppConnections() const { return m_selectedAppConns; }
     QVariantList selectedAppSettings() const { return m_selectedAppSettings; }
+    QVariantList selectedAppChartBins() const { return m_selectedAppChartBins; }
+    bool appChartInternetOnly() const { return m_appChartInternetOnly; }
+    int selectedAppInetAllowed() const { return m_selectedAppInetAllowed; }
+    int selectedAppInetBlocked() const { return m_selectedAppInetBlocked; }
+    int selectedAppAllAllowed() const { return m_selectedAppAllAllowed; }
+    int selectedAppAllBlocked() const { return m_selectedAppAllBlocked; }
+    Q_INVOKABLE void setAppChartInternetOnly(bool internetOnly);
+    Q_INVOKABLE void setUiWindowVisible(bool visible);
+    Q_INVOKABLE QVariantMap hitTestMapCountry(double nx, double ny) const;
 
     QVariantList connections() const { return m_connectionsCache; }
     QVariantList settingsList() const { return m_settingsCache; }
@@ -294,9 +313,22 @@ private:
     void rebuildSettingsCache();
     void rebuildNotificationsCache();
     void rebuildMapPins();
+    struct WorldCountryHit {
+        QString code;
+        QString hitKey;
+        QString name;
+        double minX = 0.0;
+        double maxX = 0.0;
+        double minY = 0.0;
+        double maxY = 0.0;
+        QVector<QVector<QVector<double>>> polygons;
+    };
+
     void setupTray();
     void updateTrayIcon();
+    void updateTrayMenu();
     QIcon buildShieldIcon(const QColor& c) const;
+    QIcon loadTrayShieldIcon(const QString& colorName) const;
     QJsonValue effectiveValue(const QString& key) const;
     QVariantMap buildSettingMap(const QJsonObject& option, const QJsonObject* appCfg) const;
     void loadI18nCatalog();
@@ -306,6 +338,25 @@ private:
     void processNextIconBatch();
     QString formatBytes(qint64 bytes) const;
 
+    bool m_uiWindowVisible = true;
+    bool m_appsDirty = false;
+    bool m_connsDirty = false;
+    bool m_appChartInternetOnly = false;
+    QString m_trayTheme = QStringLiteral("system");
+    QMenu* m_trayMenu = nullptr;
+    QAction* m_trayStatusAct = nullptr;
+    QAction* m_trayPauseInfoAct = nullptr;
+    QAction* m_trayResumeAct = nullptr;
+    QMenu* m_trayPauseSubmenu = nullptr;
+    QAction* m_trayPauseVpn5Act = nullptr;
+    QAction* m_trayPauseVpn15Act = nullptr;
+    QAction* m_trayPauseVpn60Act = nullptr;
+    QAction* m_trayVpnStatusAct = nullptr;
+    QAction* m_trayVpnToggleAct = nullptr;
+    QAction* m_trayVpnAllAppsAct = nullptr;
+    QAction* m_trayThemeSysAct = nullptr;
+    QAction* m_trayThemeLightAct = nullptr;
+    QAction* m_trayThemeDarkAct = nullptr;
     PortApiClient* m_api = nullptr;
     QSystemTrayIcon* m_tray = nullptr;
     QTimer* m_appsTimer = nullptr;
@@ -329,7 +380,15 @@ private:
     QMap<QString, QJsonObject> m_profiles;
     QMap<QString, QJsonObject> m_settings;
     QMap<QString, QJsonObject> m_notifications;
-    QVector<QJsonObject> m_connections;
+    std::deque<QJsonObject> m_connections;
+    qint64 m_connHeadSeq = 0;
+    QHash<QString, qint64> m_connSeqById;
+    QVector<WorldCountryHit> m_worldHitIndex;
+    QByteArray m_lastXrayStatusBytes;
+    QByteArray m_lastXrayNodesBytes;
+    QByteArray m_lastXraySubsBytes;
+    QByteArray m_lastUiReportBytes;
+    QByteArray m_lastAdminLockBytes;
 
     QString m_selectedProfileKey;
     bool m_paused = false;
@@ -342,6 +401,11 @@ private:
     QVariantMap m_selectedAppMap;
     QVariantList m_selectedAppConns;
     QVariantList m_selectedAppSettings;
+    QVariantList m_selectedAppChartBins;
+    int m_selectedAppInetAllowed = 0;
+    int m_selectedAppInetBlocked = 0;
+    int m_selectedAppAllAllowed = 0;
+    int m_selectedAppAllBlocked = 0;
     QVariantList m_connectionsCache;
     QVariantList m_connChartBins;
     int m_connAllowedTotal = 0;

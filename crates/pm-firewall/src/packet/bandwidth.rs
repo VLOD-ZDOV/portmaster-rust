@@ -23,19 +23,15 @@ pub struct BandwidthUpdate {
 }
 
 impl HandlerCore {
-    /// Applies a bandwidth update to the connection and forwards the delta to
-    /// the sink. Connections that are locked are skipped, like in Go.
-    pub fn update_bandwidth(&self, update: &BandwidthUpdate) {
+    fn apply_bandwidth_update(&self, update: &BandwidthUpdate) -> Option<(bool, String, String, String, u64, u64)> {
         if update.bytes_received == 0 && update.bytes_sent == 0 {
-            return;
+            return None;
         }
-        let Some(shared) = self.network.get_connection(&update.conn_id) else {
-            return;
-        };
+        let shared = self.network.get_connection(&update.conn_id)?;
         let mut conn = match shared.try_lock() {
             Ok(conn) => conn,
             Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
-            Err(TryLockError::WouldBlock) => return,
+            Err(TryLockError::WouldBlock) => return None,
         };
 
         let (bytes_in, bytes_out) = match update.method {
@@ -56,25 +52,70 @@ impl HandlerCore {
             }
         };
 
-        let (Some(sink), true) = (&self.bandwidth, conn.bandwidth_enabled) else {
-            return;
-        };
-        let Some(process) = &conn.process else {
-            return;
-        };
+        if !conn.bandwidth_enabled {
+            return None;
+        }
+        let process = conn.process.as_ref()?;
         let profile = format!(
             "{}/{}",
             conn.process_context.source, conn.process_context.profile
         );
-        if let Err(error) = sink.update_bandwidth(
+        Some((
             conn.history_enabled,
+            profile,
+            process.key().to_string(),
+            conn.id.clone(),
+            bytes_in,
+            bytes_out,
+        ))
+    }
+
+    /// Applies a bandwidth update to the connection and forwards the delta to
+    /// the sink. Connections that are locked are skipped, like in Go.
+    pub fn update_bandwidth(&self, update: &BandwidthUpdate) {
+        let Some(sink) = &self.bandwidth else {
+            // Still update in-memory counters if no sink is attached.
+            let _ = self.apply_bandwidth_update(update);
+            return;
+        };
+        let Some((history_enabled, profile, process_key, conn_id, bytes_in, bytes_out)) =
+            self.apply_bandwidth_update(update)
+        else {
+            return;
+        };
+        if let Err(error) = sink.update_bandwidth(
+            history_enabled,
             &profile,
-            process.key(),
-            &conn.id,
+            &process_key,
+            &conn_id,
             bytes_in,
             bytes_out,
         ) {
             tracing::error!("filter: failed to persist bandwidth data: {error}");
+        }
+    }
+
+    /// Applies multiple bandwidth updates and flushes deltas to the sink in one batch.
+    pub fn update_bandwidth_batch(&self, updates: &[BandwidthUpdate]) {
+        if updates.is_empty() {
+            return;
+        }
+        let Some(sink) = &self.bandwidth else {
+            for u in updates {
+                let _ = self.apply_bandwidth_update(u);
+            }
+            return;
+        };
+        let mut batched = Vec::with_capacity(updates.len());
+        for u in updates {
+            if let Some(entry) = self.apply_bandwidth_update(u) {
+                batched.push(entry);
+            }
+        }
+        if !batched.is_empty() {
+            if let Err(error) = sink.update_bandwidth_batch(&batched) {
+                tracing::error!("filter: failed to persist bandwidth batch: {error}");
+            }
         }
     }
 }

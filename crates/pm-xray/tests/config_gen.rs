@@ -149,3 +149,25 @@ fn config_generates_reality_settings_with_public_key() {
     assert_eq!(reality["publicKey"], "wfp4jyEksrozyS739zqIsNXySoqeEVtaQlVmeNeLp28");
     assert_eq!(reality["shortId"], "1234abcd");
 }
+
+#[test]
+fn config_generates_xhttp_kcp_mux_and_fragment_options() {
+    let raw = "vless://00010203-0405-0607-0809-0a0b0c0d0e0f@xh.example.com:443?type=xhttp&security=tls&sni=xh.example.com&host=cdn.example.com&path=%2Fxh&mode=packet-up&extra=%7B%22scMaxEachPostBytes%22%3A1000000%7D&mux=1&muxConcurrency=12&frag=1&tfo=1&keepalive=15#XHTTP";
+    let config = generate_config(&node(raw), 1080, InboundProtocol::Socks).unwrap();
+    let outbound = &config["outbounds"][0];
+    assert_eq!(outbound["streamSettings"]["network"], "xhttp");
+    assert_eq!(outbound["streamSettings"]["xhttpSettings"]["mode"], "packet-up");
+    assert_eq!(outbound["streamSettings"]["xhttpSettings"]["scMaxEachPostBytes"], 1000000);
+    assert_eq!(outbound["streamSettings"]["sockopt"]["dialerProxy"], "frag");
+    assert_eq!(outbound["streamSettings"]["sockopt"]["tcpFastOpen"], true);
+    assert_eq!(outbound["streamSettings"]["sockopt"]["tcpKeepAliveInterval"], 15);
+    assert_eq!(outbound["mux"]["enabled"], true);
+    assert_eq!(outbound["mux"]["concurrency"], 12);
+    assert_eq!(config["outbounds"][1]["tag"], "frag");
+    assert_eq!(config["outbounds"][1]["settings"]["fragment"]["packets"], "tlshello");
+
+    let kcp_raw = "vless://00010203-0405-0607-0809-0a0b0c0d0e0f@kcp.example.com:4000?type=kcp&headerType=wechat-video&seed=myseed#KCP";
+    let kcp_cfg = generate_config(&node(kcp_raw), 1080, InboundProtocol::Socks).unwrap();
+    assert_eq!(kcp_cfg["outbounds"][0]["streamSettings"]["kcpSettings"]["header"]["type"], "wechat-video");
+    assert_eq!(kcp_cfg["outbounds"][0]["streamSettings"]["kcpSettings"]["seed"], "myseed");
+}

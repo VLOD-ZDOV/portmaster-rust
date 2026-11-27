@@ -7,6 +7,8 @@
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QQmlApplicationEngine>
+#include <QLocalServer>
+#include <QLocalSocket>
 #include <QQmlContext>
 #include <QQuickStyle>
 #include <QQuickWindow>
@@ -70,6 +72,31 @@ int main(int argc, char* argv[]) {
 
     PortmasterBackend backend(background, !noTray);
     if (!selfcheck) {
+        static const QLatin1String kIpcName("portmaster-qt-gui");
+        QLocalSocket probe;
+        probe.connectToServer(kIpcName);
+        if (probe.waitForConnected(120)) {
+            if (!background) {
+                probe.write("RAISE\n");
+                probe.waitForBytesWritten(120);
+            }
+            return 0;
+        }
+        QLocalServer::removeServer(kIpcName);
+        auto* ipcServer = new QLocalServer(&app);
+        ipcServer->listen(kIpcName);
+        QObject::connect(ipcServer, &QLocalServer::newConnection, &backend, [ipcServer, &backend]() {
+            while (auto* sock = ipcServer->nextPendingConnection()) {
+                QObject::connect(sock, &QLocalSocket::readyRead, sock, [sock, &backend]() {
+                    if (sock->readAll().contains("RAISE")) {
+                        emit backend.showWindowRequested();
+                    }
+                    sock->deleteLater();
+                });
+            }
+        });
+    }
+    if (!selfcheck) {
         QObject::connect(&ipcServer, &QLocalServer::newConnection, &backend, [&ipcServer, &backend]() {
             while (auto* conn = ipcServer.nextPendingConnection()) {
                 conn->readAll();
@@ -90,6 +117,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (selfcheck) {
+        backend.setUiWindowVisible(true);
         QTimer::singleShot(2500, &app, [&backend, &app]() {
             int boolOpts = 0;
             for (const auto& sv : backend.settingsList()) {
@@ -129,6 +157,7 @@ int main(int argc, char* argv[]) {
                 {QStringLiteral("hwAccel"), backend.hwAccel()},
                 {QStringLiteral("historyLimit"), backend.historyLimit()},
                 {QStringLiteral("connChartBins"), backend.connChartBins().size()},
+                {QStringLiteral("selectedAppChartBins"), backend.selectedAppChartBins().size()},
                 {QStringLiteral("connAllowedTotal"), backend.connAllowedTotal()},
                 {QStringLiteral("connBlockedTotal"), backend.connBlockedTotal()},
             };

@@ -11,6 +11,20 @@ Item {
     signal openSettingSub(string sub)
 
     property string hoveredCountry: ""
+    property var cachedWorld: []
+    property string lastDashMapSig: ""
+
+    function activeWin() { return !Window.window || Window.window.visible }
+
+    function syncDashMap(force) {
+        if (!root.visible || !activeWin()) return
+        var ccList = pm.connCountriesSummary || []
+        var sig = ""
+        for (var i = 0; i < ccList.length; i++) sig += (ccList[i].code || "") + ","
+        if (!force && sig === root.lastDashMapSig) return
+        root.lastDashMapSig = sig
+        dashMapCanvas.requestPaint()
+    }
 
     function boolSetting(key, fallback) {
         var list = pm.settingsList || []
@@ -22,11 +36,15 @@ Item {
 
     Connections {
         target: pm
-        function onWorldMapReady() { dashMapCanvas.requestPaint() }
-        function onConnectionsChanged() { dashMapCanvas.requestPaint() }
-        function onXrayChanged() { dashMapCanvas.requestPaint() }
+        function onWorldMapReady() {
+            root.cachedWorld = pm.worldCountries || []
+            root.syncDashMap(true)
+        }
+        function onConnectionsChanged() { root.syncDashMap(false) }
+        function onXrayChanged() { root.syncDashMap(false) }
     }
-    onHoveredCountryChanged: dashMapHover.requestPaint()
+    onVisibleChanged: if (visible) { root.syncDashMap(true); if (root.hoveredCountry !== "") dashMapHover.requestPaint() }
+    onHoveredCountryChanged: if (root.visible && activeWin()) dashMapHover.requestPaint()
 
     ScrollView {
         id: dashScroll
@@ -522,7 +540,7 @@ Item {
                         onPaint: {
                             var ctx = getContext("2d")
                             ctx.clearRect(0, 0, width, height)
-                            var cs = pm.worldCountries || []
+                            var cs = (root.cachedWorld && root.cachedWorld.length > 0) ? root.cachedWorld : (pm.worldCountries || [])
                             var ccList = pm.connCountriesSummary || []
                             var activeSet = {}
                             for (var ci = 0; ci < ccList.length; ci++) {
@@ -555,7 +573,7 @@ Item {
                             var ctx = getContext("2d")
                             ctx.clearRect(0, 0, width, height)
                             if (root.hoveredCountry === "") return
-                            var cs = pm.worldCountries || []
+                            var cs = (root.cachedWorld && root.cachedWorld.length > 0) ? root.cachedWorld : (pm.worldCountries || [])
                             ctx.fillStyle = "#315b96"
                             ctx.strokeStyle = "#85b5ff"
                             ctx.lineWidth = 1.6

@@ -5,9 +5,11 @@ Canvas {
     property var bins: pm.connChartBins || []
     property bool compact: false
 
-    onBinsChanged: requestPaint()
-    onWidthChanged: requestPaint()
-    onHeightChanged: requestPaint()
+    property bool activePaint: visible && (!Window.window || Window.window.visible)
+    onBinsChanged: if (activePaint) requestPaint()
+    onWidthChanged: if (activePaint) requestPaint()
+    onHeightChanged: if (activePaint) requestPaint()
+    onActivePaintChanged: if (activePaint) requestPaint()
 
     onPaint: {
         var ctx = getContext("2d")

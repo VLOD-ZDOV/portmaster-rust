@@ -8,6 +8,7 @@
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
+#include <QGuiApplication>
 #include <QIcon>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -21,6 +22,9 @@
 #include <QRegularExpression>
 #include <QSettings>
 #include <QStandardPaths>
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+#include <QStyleHints>
+#endif
 #include <QTextStream>
 #include <QUrl>
 #include <QtMath>
@@ -421,7 +425,7 @@ PortmasterBackend::PortmasterBackend(bool startBackground, bool withTray, QObjec
     });
 
     m_appsTickTimer->setSingleShot(true);
-    m_appsTickTimer->setInterval(1000);
+    m_appsTickTimer->setInterval(2500);
     connect(m_appsTickTimer, &QTimer::timeout, this, [this]() {
         rebuildAppsCache();
         if (!m_selectedProfileKey.isEmpty()) rebuildSelectedAppCache();
@@ -829,49 +833,175 @@ QIcon PortmasterBackend::buildShieldIcon(const QColor& c) const {
     return QIcon(pm);
 }
 
+QIcon PortmasterBackend::loadTrayShieldIcon(const QString& colorName) const {
+    bool useDarkGlyph = false;
+    if (m_trayTheme == QLatin1String("light")) {
+        useDarkGlyph = true;
+    } else if (m_trayTheme == QLatin1String("dark")) {
+        useDarkGlyph = false;
+    } else {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+        if (const auto* hints = QGuiApplication::styleHints()) {
+            useDarkGlyph = (hints->colorScheme() == Qt::ColorScheme::Light);
+        }
+#endif
+    }
+    const QString variant = useDarkGlyph ? QStringLiteral("dark") : QStringLiteral("light");
+    const QString resPath = QStringLiteral(":/qt/qml/Portmaster/icons/pm_%1_%2_64.png").arg(variant, colorName);
+    QIcon icon(resPath);
+    if (!icon.isNull()) return icon;
+    if (colorName == QLatin1String("blue")) return buildShieldIcon(QColor(0x4e, 0x97, 0xfa));
+    if (colorName == QLatin1String("green")) return buildShieldIcon(QColor(0x1d, 0xe9, 0x66));
+    if (colorName == QLatin1String("yellow")) return buildShieldIcon(QColor(0xe9, 0xd8, 0x1d));
+    return buildShieldIcon(QColor(0xd1, 0x2e, 0x2e));
+}
+
 void PortmasterBackend::setupTray() {
     if (!QSystemTrayIcon::isSystemTrayAvailable()) return;
-    m_tray = new QSystemTrayIcon(buildShieldIcon(QColor(0xd1, 0x2e, 0x2e)), this);
-    auto* menu = new QMenu();
-    auto* showAct = menu->addAction(m_ru ? QStringLiteral("Открыть Portmaster") : QStringLiteral("Show Portmaster"));
+    QSettings uiPrefs(QStringLiteral("portmaster"), QStringLiteral("qt-ui"));
+    m_trayTheme = uiPrefs.value(QStringLiteral("trayIconTheme"), QStringLiteral("system")).toString();
+
+    m_tray = new QSystemTrayIcon(loadTrayShieldIcon(QStringLiteral("red")), this);
+    m_trayMenu = new QMenu();
+
+    m_trayStatusAct = m_trayMenu->addAction(QStringLiteral("Status: unknown"));
+    m_trayStatusAct->setEnabled(false);
+    m_trayMenu->addSeparator();
+
+    m_trayPauseInfoAct = m_trayMenu->addAction(QStringLiteral("Portmaster is paused"));
+    m_trayPauseInfoAct->setEnabled(false);
+    m_trayPauseInfoAct->setVisible(false);
+    m_trayResumeAct = m_trayMenu->addAction(QStringLiteral("Resume now"));
+    connect(m_trayResumeAct, &QAction::triggered, this, &PortmasterBackend::resumeProtection);
+    m_trayResumeAct->setVisible(false);
+
+    m_trayPauseSubmenu = m_trayMenu->addMenu(QStringLiteral("Pause"));
+    m_trayPauseVpn5Act = m_trayPauseSubmenu->addAction(QStringLiteral("Pause Xray VPN for 5 minutes"));
+    connect(m_trayPauseVpn5Act, &QAction::triggered, this, [this]() { pauseProtection(5, true); });
+    m_trayPauseVpn15Act = m_trayPauseSubmenu->addAction(QStringLiteral("Pause Xray VPN for 15 minutes"));
+    connect(m_trayPauseVpn15Act, &QAction::triggered, this, [this]() { pauseProtection(15, true); });
+    m_trayPauseVpn60Act = m_trayPauseSubmenu->addAction(QStringLiteral("Pause Xray VPN for 1 hour"));
+    connect(m_trayPauseVpn60Act, &QAction::triggered, this, [this]() { pauseProtection(60, true); });
+    m_trayPauseSubmenu->addSeparator();
+    connect(m_trayPauseSubmenu->addAction(QStringLiteral("Pause for 5 minutes")), &QAction::triggered, this, [this]() { pauseProtection(5, false); });
+    connect(m_trayPauseSubmenu->addAction(QStringLiteral("Pause for 15 minutes")), &QAction::triggered, this, [this]() { pauseProtection(15, false); });
+    connect(m_trayPauseSubmenu->addAction(QStringLiteral("Pause for 1 hour")), &QAction::triggered, this, [this]() { pauseProtection(60, false); });
+    m_trayMenu->addSeparator();
+
+    m_trayVpnStatusAct = m_trayMenu->addAction(QStringLiteral("Xray VPN: Disconnected"));
+    m_trayVpnStatusAct->setEnabled(false);
+    m_trayVpnToggleAct = m_trayMenu->addAction(QStringLiteral("Connect Xray VPN"));
+    connect(m_trayVpnToggleAct, &QAction::triggered, this, &PortmasterBackend::toggleXrayConnect);
+    m_trayVpnAllAppsAct = m_trayMenu->addAction(QStringLiteral("Route All Apps via Xray VPN"));
+    m_trayVpnAllAppsAct->setCheckable(true);
+    connect(m_trayVpnAllAppsAct, &QAction::triggered, this, &PortmasterBackend::toggleGlobalVpn);
+    m_trayMenu->addSeparator();
+
+    auto* themeMenu = m_trayMenu->addMenu(QStringLiteral("Icon Theme"));
+    m_trayThemeSysAct = themeMenu->addAction(QStringLiteral("System"));
+    m_trayThemeLightAct = themeMenu->addAction(QStringLiteral("Light"));
+    m_trayThemeDarkAct = themeMenu->addAction(QStringLiteral("Dark"));
+    for (auto* a : {m_trayThemeSysAct, m_trayThemeLightAct, m_trayThemeDarkAct}) a->setCheckable(true);
+    auto setTheme = [this](const QString& th) {
+        m_trayTheme = th;
+        QSettings prefs(QStringLiteral("portmaster"), QStringLiteral("qt-ui"));
+        prefs.setValue(QStringLiteral("trayIconTheme"), th);
+        updateTrayIcon();
+    };
+    connect(m_trayThemeSysAct, &QAction::triggered, this, [setTheme]() { setTheme(QStringLiteral("system")); });
+    connect(m_trayThemeLightAct, &QAction::triggered, this, [setTheme]() { setTheme(QStringLiteral("light")); });
+    connect(m_trayThemeDarkAct, &QAction::triggered, this, [setTheme]() { setTheme(QStringLiteral("dark")); });
+    m_trayMenu->addSeparator();
+
+    auto* showAct = m_trayMenu->addAction(QStringLiteral("Open Portmaster"));
     connect(showAct, &QAction::triggered, this, &PortmasterBackend::showWindowRequested);
-    auto* vpnAct = menu->addAction(m_ru ? QStringLiteral("Вкл / Выкл Xray VPN") : QStringLiteral("Toggle Xray VPN"));
-    connect(vpnAct, &QAction::triggered, this, &PortmasterBackend::toggleXrayConnect);
-
-    auto* pauseMenu = menu->addMenu(m_ru ? QStringLiteral("Пауза защиты") : QStringLiteral("Pause Protection"));
-    auto* p5 = pauseMenu->addAction(m_ru ? QStringLiteral("5 минут") : QStringLiteral("5 minutes"));
-    connect(p5, &QAction::triggered, this, [this]() { pauseProtection(5, false); });
-    auto* p15 = pauseMenu->addAction(m_ru ? QStringLiteral("15 минут") : QStringLiteral("15 minutes"));
-    connect(p15, &QAction::triggered, this, [this]() { pauseProtection(15, false); });
-    auto* p60 = pauseMenu->addAction(m_ru ? QStringLiteral("1 час") : QStringLiteral("1 hour"));
-    connect(p60, &QAction::triggered, this, [this]() { pauseProtection(60, false); });
-    auto* resAct = menu->addAction(m_ru ? QStringLiteral("Возобновить защиту") : QStringLiteral("Resume Protection"));
-    connect(resAct, &QAction::triggered, this, &PortmasterBackend::resumeProtection);
-
-    menu->addSeparator();
-    auto* openBrowserAct = menu->addAction(m_ru ? QStringLiteral("Открыть Web UI в браузере") : QStringLiteral("Open Web UI in Browser"));
+    auto* openBrowserAct = m_trayMenu->addAction(QStringLiteral("Open in Web Browser"));
     connect(openBrowserAct, &QAction::triggered, this, [this]() {
         m_api->httpPost(QStringLiteral("/api/v1/core/api-port"), "{\"lease\":\"open\"}", QStringLiteral("application/json"), nullptr);
         QDesktopServices::openUrl(QUrl(QStringLiteral("http://127.0.0.1:817")));
     });
-    auto* quitAct = menu->addAction(m_ru ? QStringLiteral("Выход (Qt Tray)") : QStringLiteral("Quit Tray UI"));
+    m_trayMenu->addSeparator();
+
+    auto* quitAct = m_trayMenu->addAction(QStringLiteral("Exit UI"));
     connect(quitAct, &QAction::triggered, qApp, &QApplication::quit);
-    m_tray->setContextMenu(menu);
+    auto* shutAct = m_trayMenu->addAction(QStringLiteral("Shut Down Portmaster"));
+    connect(shutAct, &QAction::triggered, this, &PortmasterBackend::shutdownCore);
+
+    m_tray->setContextMenu(m_trayMenu);
     connect(m_tray, &QSystemTrayIcon::activated, this, [this](QSystemTrayIcon::ActivationReason r) {
         if (r == QSystemTrayIcon::Trigger || r == QSystemTrayIcon::DoubleClick) {
             emit showWindowRequested();
         }
     });
+    updateTrayMenu();
     m_tray->show();
+}
+
+void PortmasterBackend::updateTrayMenu() {
+    if (!m_tray || !m_trayMenu) return;
+    const bool conn = m_api->isConnected();
+    const bool xrayConn = m_xrayStatusMap.value(QStringLiteral("connected")).toBool();
+    const bool xrayEnabled = effectiveValue(QStringLiteral("spn/enable")).toBool(false);
+    const bool xrayConnecting = !xrayConn && xrayEnabled;
+
+    if (m_trayStatusAct) {
+        if (!conn) {
+            m_trayStatusAct->setText(QStringLiteral("Status: unknown"));
+        } else if (m_paused) {
+            m_trayStatusAct->setText(QStringLiteral("Status: Secured (PAUSED)"));
+        } else {
+            m_trayStatusAct->setText(QStringLiteral("Status: Secured"));
+        }
+    }
+    const bool anyPaused = m_paused || m_vpnPaused;
+    if (m_trayPauseInfoAct) {
+        if (m_paused && m_vpnPaused) m_trayPauseInfoAct->setText(QStringLiteral("Portmaster and Xray VPN are paused"));
+        else if (m_paused) m_trayPauseInfoAct->setText(QStringLiteral("Portmaster is paused"));
+        else if (m_vpnPaused) m_trayPauseInfoAct->setText(QStringLiteral("Xray VPN is paused"));
+        m_trayPauseInfoAct->setVisible(anyPaused);
+    }
+    if (m_trayResumeAct) m_trayResumeAct->setVisible(anyPaused);
+
+    const bool vpnPauseAvail = (xrayConn || xrayConnecting || m_vpnPaused) && !m_paused;
+    for (auto* a : {m_trayPauseVpn5Act, m_trayPauseVpn15Act, m_trayPauseVpn60Act}) {
+        if (a) a->setVisible(vpnPauseAvail);
+    }
+
+    if (m_trayVpnStatusAct && m_trayVpnToggleAct) {
+        if (xrayConn) {
+            const QString node = m_xrayStatusMap.value(QStringLiteral("nodeName")).toString();
+            m_trayVpnStatusAct->setText(node.isEmpty() ? QStringLiteral("Xray VPN: Connected") : QStringLiteral("Xray VPN: Connected (%1)").arg(node));
+            m_trayVpnToggleAct->setText(QStringLiteral("Disconnect Xray VPN"));
+        } else if (xrayConnecting) {
+            m_trayVpnStatusAct->setText(QStringLiteral("Xray VPN: Connecting..."));
+            m_trayVpnToggleAct->setText(QStringLiteral("Cancel Xray VPN"));
+        } else {
+            m_trayVpnStatusAct->setText(QStringLiteral("Xray VPN: Disconnected"));
+            m_trayVpnToggleAct->setText(QStringLiteral("Connect Xray VPN"));
+        }
+    }
+    if (m_trayVpnAllAppsAct) {
+        m_trayVpnAllAppsAct->setChecked(globalVpn());
+    }
+    if (m_trayThemeSysAct) m_trayThemeSysAct->setChecked(m_trayTheme == QLatin1String("system"));
+    if (m_trayThemeLightAct) m_trayThemeLightAct->setChecked(m_trayTheme == QLatin1String("light"));
+    if (m_trayThemeDarkAct) m_trayThemeDarkAct->setChecked(m_trayTheme == QLatin1String("dark"));
 }
 
 void PortmasterBackend::updateTrayIcon() {
     if (!m_tray) return;
-    QColor c(0xd1, 0x2e, 0x2e);
+    QString colorName = QStringLiteral("red");
     if (m_api->isConnected()) {
-        c = m_paused ? QColor(0xe9, 0xd8, 0x1d) : QColor(0x1d, 0xe9, 0x66);
+        if (m_paused) {
+            colorName = QStringLiteral("yellow");
+        } else {
+            const bool xrayConn = m_xrayStatusMap.value(QStringLiteral("connected")).toBool();
+            const bool xrayEnabled = effectiveValue(QStringLiteral("spn/enable")).toBool(false);
+            colorName = (xrayConn || xrayEnabled) ? QStringLiteral("blue") : QStringLiteral("green");
+        }
     }
-    m_tray->setIcon(buildShieldIcon(c));
+    m_tray->setIcon(loadTrayShieldIcon(colorName));
+    updateTrayMenu();
 }
 
 void PortmasterBackend::onConnectionChanged(bool connected, const QString&) {
@@ -936,18 +1066,28 @@ void PortmasterBackend::startSubscriptions() {
         QJsonObject obj = normalizeConn(val.toObject());
         obj.insert(QStringLiteral("_session"), true);
         const QString id = obj.value(QStringLiteral("id")).toString();
-        bool found = false;
-        for (int i = 0; i < m_connections.size(); ++i) {
-            if (m_connections[i].value(QStringLiteral("id")).toString() == id) {
-                m_connections[i] = obj;
-                found = true;
-                break;
+        if (!id.isEmpty()) {
+            auto it = m_connSeqById.constFind(id);
+            if (it != m_connSeqById.cend()) {
+                const qint64 idx = m_connHeadSeq - it.value();
+                if (idx >= 0 && static_cast<size_t>(idx) < m_connections.size()) {
+                    m_connections[static_cast<size_t>(idx)] = std::move(obj);
+                    scheduleConnsRebuild();
+                    return;
+                }
             }
         }
-        if (!found) {
-            m_connections.prepend(obj);
-            const int cap = qMax(500, m_historyLimit);
-            if (m_connections.size() > cap) m_connections.resize(cap);
+        ++m_connHeadSeq;
+        m_connections.push_front(std::move(obj));
+        if (!id.isEmpty()) m_connSeqById.insert(id, m_connHeadSeq);
+        const size_t cap = static_cast<size_t>(qMax(500, m_historyLimit));
+        while (m_connections.size() > cap) {
+            const qint64 tailSeq = m_connHeadSeq - static_cast<qint64>(m_connections.size() - 1);
+            const QString tailId = m_connections.back().value(QStringLiteral("id")).toString();
+            if (!tailId.isEmpty() && m_connSeqById.value(tailId) == tailSeq) {
+                m_connSeqById.remove(tailId);
+            }
+            m_connections.pop_back();
         }
         scheduleConnsRebuild();
     });
@@ -964,11 +1104,15 @@ void PortmasterBackend::startSubscriptions() {
 
 void PortmasterBackend::refreshHttpData() {
     if (!m_api->isConnected()) return;
+    const bool uiVis = m_uiWindowVisible;
+    const bool needTrayStatus = hasTray();
+    if (!uiVis && !needTrayStatus) return;
 
     // Poll /api/v1/ui/flavors and auth/geodata every ~15s (5 x 3s) to avoid frequent scans.
-    if ((m_uiPollTick % 5) == 0) {
+    if (uiVis && (m_uiPollTick % 5) == 0) {
         m_api->httpGet(QStringLiteral("/api/v1/ui/flavors"), [this](int code, const QByteArray& body, const QString&) {
-            if (code == 200) {
+            if (code == 200 && body != m_lastUiReportBytes) {
+                m_lastUiReportBytes = body;
                 m_uiReportMap = QJsonDocument::fromJson(body).object().toVariantMap();
                 emit uiReportChanged();
             }
@@ -979,37 +1123,48 @@ void PortmasterBackend::refreshHttpData() {
     ++m_uiPollTick;
 
     m_api->httpGet(QStringLiteral("/api/v1/xray/status"), [this](int code, const QByteArray& body, const QString&) {
-        if (code == 200) {
+        if (code == 200 && body != m_lastXrayStatusBytes) {
+            m_lastXrayStatusBytes = body;
             QVariantMap st = QJsonDocument::fromJson(body).object().toVariantMap();
             if (!st.contains(QStringLiteral("nodeName"))) st.insert(QStringLiteral("nodeName"), st.value(QStringLiteral("node_name")));
             if (!st.contains(QStringLiteral("exitCountry"))) st.insert(QStringLiteral("exitCountry"), st.value(QStringLiteral("country")));
             if (!st.contains(QStringLiteral("inboundAddress"))) st.insert(QStringLiteral("inboundAddress"), st.value(QStringLiteral("inbound_address")));
-            m_xrayStatusMap = st;
+            m_xrayStatusMap = std::move(st);
             rebuildMapPins();
             emit xrayChanged();
             updateTrayIcon();
         }
     });
+    if (!uiVis) return;
+
     m_api->httpGet(QStringLiteral("/api/v1/xray/nodes"), [this](int code, const QByteArray& body, const QString&) {
-        if (code == 200) {
-            m_xrayNodesList.clear();
-            for (const auto& v : QJsonDocument::fromJson(body).array()) {
-                if (v.isObject()) m_xrayNodesList.append(v.toObject().toVariantMap());
+        if (code == 200 && body != m_lastXrayNodesBytes) {
+            m_lastXrayNodesBytes = body;
+            QVariantList out;
+            const QJsonArray arr = QJsonDocument::fromJson(body).array();
+            out.reserve(arr.size());
+            for (const auto& v : arr) {
+                if (v.isObject()) out.append(v.toObject().toVariantMap());
             }
+            m_xrayNodesList = std::move(out);
             rebuildMapPins();
             emit xrayChanged();
         }
     });
     m_api->httpGet(QStringLiteral("/api/v1/xray/subscriptions"), [this](int code, const QByteArray& body, const QString&) {
-        if (code == 200) {
-            m_xraySubsList.clear();
-            for (const auto& v : QJsonDocument::fromJson(body).array()) {
+        if (code == 200 && body != m_lastXraySubsBytes) {
+            m_lastXraySubsBytes = body;
+            QVariantList out;
+            const QJsonArray arr = QJsonDocument::fromJson(body).array();
+            out.reserve(arr.size());
+            for (const auto& v : arr) {
                 if (v.isObject()) {
                     QVariantMap m = v.toObject().toVariantMap();
                     m.insert(QStringLiteral("name"), QUrl::fromPercentEncoding(m.value(QStringLiteral("name")).toString().toUtf8()));
-                    m_xraySubsList.append(m);
+                    out.append(std::move(m));
                 }
             }
+            m_xraySubsList = std::move(out);
             emit xrayChanged();
         }
     });
@@ -1068,7 +1223,7 @@ void PortmasterBackend::fetchHistoryPage(int gen, const QString& db, int page, i
                     acc.append(std::move(norm));
                 }
             }
-            if (!arr.isEmpty() && (page == 0 || acc.size() % 2000 < 1000)) {
+            if (!arr.isEmpty() && page == 0) {
                 self->mergeDbConnections(acc);
             }
             if (arr.size() >= 1000 && acc.size() < targetLimit) {
@@ -1088,21 +1243,21 @@ void PortmasterBackend::fetchHistoryPage(int gen, const QString& db, int page, i
 
 void PortmasterBackend::mergeDbConnections(const QVector<QJsonObject>& rows) {
     QHash<QString, int> idxById;
-    idxById.reserve(m_connections.size() + rows.size());
-    for (int i = 0; i < m_connections.size(); ++i) {
+    idxById.reserve(static_cast<int>(m_connections.size()) + rows.size());
+    for (size_t i = 0; i < m_connections.size(); ++i) {
         const QString id = m_connections[i].value(QStringLiteral("id")).toString();
-        if (!id.isEmpty()) idxById.insert(id, i);
+        if (!id.isEmpty()) idxById.insert(id, static_cast<int>(i));
     }
     for (const auto& r : rows) {
         const QString id = r.value(QStringLiteral("id")).toString();
         if (id.isEmpty()) {
-            m_connections.append(r);
+            m_connections.push_back(r);
             continue;
         }
         auto it = idxById.constFind(id);
         if (it == idxById.constEnd()) {
-            idxById.insert(id, m_connections.size());
-            m_connections.append(r);
+            idxById.insert(id, static_cast<int>(m_connections.size()));
+            m_connections.push_back(r);
         }
     }
     std::stable_sort(m_connections.begin(), m_connections.end(), [](const QJsonObject& a, const QJsonObject& b) {
@@ -1111,9 +1266,16 @@ void PortmasterBackend::mergeDbConnections(const QVector<QJsonObject>& rows) {
         return ta > tb;
     });
     const int cap = qMax(250, m_historyLimit);
-    if (m_connections.size() > cap) {
-        m_connections.resize(cap);
-        m_connections.squeeze();
+    if (m_connections.size() > static_cast<size_t>(cap)) {
+        m_connections.resize(static_cast<size_t>(cap));
+        m_connections.shrink_to_fit();
+    }
+    m_connSeqById.clear();
+    m_connHeadSeq = static_cast<qint64>(m_connections.size());
+    m_connSeqById.reserve(static_cast<int>(m_connections.size()));
+    for (size_t i = 0; i < m_connections.size(); ++i) {
+        const QString id = m_connections[i].value(QStringLiteral("id")).toString();
+        if (!id.isEmpty()) m_connSeqById.insert(id, m_connHeadSeq - static_cast<qint64>(i));
     }
     rebuildConnectionsCache();
     scheduleAppsTickRebuild();
@@ -1239,9 +1401,76 @@ void PortmasterBackend::fetchWorldMap() {
         m_worldPolygons.clear();
         m_worldPolygons.squeeze();
         m_worldCountries = countries;
+        m_worldHitIndex.clear();
+        m_worldHitIndex.reserve(countries.size());
+        for (const QVariant& cv : countries) {
+            const QVariantMap cm = cv.toMap();
+            WorldCountryHit entry;
+            entry.code = cm.value(QStringLiteral("code")).toString();
+            entry.hitKey = cm.value(QStringLiteral("hitKey")).toString();
+            entry.name = cm.value(QStringLiteral("name")).toString();
+            entry.minX = cm.value(QStringLiteral("minX")).toDouble();
+            entry.maxX = cm.value(QStringLiteral("maxX")).toDouble();
+            entry.minY = cm.value(QStringLiteral("minY")).toDouble();
+            entry.maxY = cm.value(QStringLiteral("maxY")).toDouble();
+            const QVariantList polys = cm.value(QStringLiteral("polygons")).toList();
+            entry.polygons.reserve(polys.size());
+            for (const QVariant& pv : polys) {
+                const QVariantList ringList = pv.toList();
+                QVector<QVector<double>> rings;
+                if (!ringList.isEmpty() && ringList.first().metaType().id() != QMetaType::QVariantList) {
+                    QVector<double> pts;
+                    pts.reserve(ringList.size());
+                    for (const QVariant& x : ringList) pts.append(x.toDouble());
+                    rings.append(std::move(pts));
+                } else {
+                    rings.reserve(ringList.size());
+                    for (const QVariant& rv : ringList) {
+                        const QVariantList ptsList = rv.toList();
+                        QVector<double> pts;
+                        pts.reserve(ptsList.size());
+                        for (const QVariant& x : ptsList) pts.append(x.toDouble());
+                        rings.append(std::move(pts));
+                    }
+                }
+                entry.polygons.append(std::move(rings));
+            }
+            m_worldHitIndex.append(std::move(entry));
+        }
         m_worldLoaded = true;
         emit worldMapReady();
     });
+}
+
+QVariantMap PortmasterBackend::hitTestMapCountry(double nx, double ny) const {
+    for (const auto& c : m_worldHitIndex) {
+        if (nx < c.minX || nx > c.maxX || ny < c.minY || ny > c.maxY) continue;
+        for (const auto& polyRings : c.polygons) {
+            int hits = 0;
+            for (const auto& pts : polyRings) {
+                const int n = pts.size();
+                if (n < 6) continue;
+                bool inside = false;
+                for (int i = 0, j = n - 2; i < n; j = i, i += 2) {
+                    const double xi = pts[i], yi = pts[i + 1];
+                    const double xj = pts[j], yj = pts[j + 1];
+                    const double dy = yj - yi;
+                    const bool intersect = ((yi > ny) != (yj > ny)) &&
+                        (nx < (xj - xi) * (ny - yi) / (std::abs(dy) < 1e-12 ? 1e-12 : dy) + xi);
+                    if (intersect) inside = !inside;
+                }
+                if (inside) ++hits;
+            }
+            if ((hits % 2) == 1) {
+                return QVariantMap{
+                    {QStringLiteral("code"), c.code},
+                    {QStringLiteral("hitKey"), c.hitKey},
+                    {QStringLiteral("name"), c.name},
+                };
+            }
+        }
+    }
+    return QVariantMap{};
 }
 
 void PortmasterBackend::rebuildMapPins() {
@@ -1299,7 +1528,36 @@ void PortmasterBackend::setDashboardChartInternetOnly(bool internetOnly) {
     rebuildConnectionsCache();
 }
 
+void PortmasterBackend::setAppChartInternetOnly(bool internetOnly) {
+    if (m_appChartInternetOnly == internetOnly) return;
+    m_appChartInternetOnly = internetOnly;
+    if (!m_selectedProfileKey.isEmpty()) rebuildSelectedAppCache();
+}
+
+void PortmasterBackend::setUiWindowVisible(bool visible) {
+    if (m_uiWindowVisible == visible) return;
+    m_uiWindowVisible = visible;
+    if (visible) {
+        if (m_appsDirty) {
+            m_appsDirty = false;
+            rebuildAppsCache();
+        }
+        if (m_connsDirty) {
+            m_connsDirty = false;
+            rebuildConnectionsCache();
+        }
+        if (m_api->isConnected()) {
+            refreshHttpData();
+        }
+    }
+}
+
 void PortmasterBackend::rebuildAppsCache() {
+    if (!m_uiWindowVisible) {
+        m_appsDirty = true;
+        return;
+    }
+    m_appsDirty = false;
     bool gVpn = globalVpn();
     bool gSplit = globalSplit();
     m_activeAppsCache.clear();
@@ -1465,6 +1723,11 @@ void PortmasterBackend::selectApp(const QString& scopedKey) {
 void PortmasterBackend::rebuildSelectedAppCache() {
     m_selectedAppConns.clear();
     m_selectedAppSettings.clear();
+    m_selectedAppChartBins.clear();
+    m_selectedAppInetAllowed = 0;
+    m_selectedAppInetBlocked = 0;
+    m_selectedAppAllAllowed = 0;
+    m_selectedAppAllBlocked = 0;
     if (!m_profiles.contains(m_selectedProfileKey)) {
         m_selectedAppMap.clear();
         emit selectedAppChanged();
@@ -1489,6 +1752,10 @@ void PortmasterBackend::rebuildSelectedAppCache() {
     QJsonValue stVal = readProfileCfg(cfg, QStringLiteral("splittun/use"));
     qint64 rx = 0, tx = 0;
     int alive = 0, blocked = 0;
+    constexpr int kAppBins = 36;
+    struct AppChartSample { qint64 ts; bool blocked; bool internet; };
+    QVector<AppChartSample> chartSamples;
+    chartSamples.reserve(256);
     for (const auto& c : m_connections) {
         QString cp = c.value(QStringLiteral("profile")).toString();
         if (cp == id || cp.endsWith('/' + id) || (!name.isEmpty() && c.value(QStringLiteral("profile_name")).toString().compare(name, Qt::CaseInsensitive) == 0)) {
@@ -1497,7 +1764,16 @@ void PortmasterBackend::rebuildSelectedAppCache() {
             rx += crx; tx += ctx;
             if (c.value(QStringLiteral("active")).toBool()) ++alive;
             QString vd = c.value(QStringLiteral("verdict")).toString().toLower();
+            const bool isBlk = (vd == QLatin1String("block") || vd == QLatin1String("drop") || vd == QLatin1String("failed"));
             if (vd == QLatin1String("block") || vd == QLatin1String("drop")) ++blocked;
+            const QString sc = c.value(QStringLiteral("scope")).toString().toLower();
+            const bool isInet = sc.contains(QLatin1String("internet"));
+            if (isBlk) { ++m_selectedAppAllBlocked; if (isInet) ++m_selectedAppInetBlocked; }
+            else       { ++m_selectedAppAllAllowed; if (isInet) ++m_selectedAppInetAllowed; }
+            if (chartSamples.size() < 1500) {
+                const qint64 ts = static_cast<qint64>(c.value(QStringLiteral("started_ts")).toDouble(0));
+                chartSamples.append({ts, isBlk, isInet});
+            }
             m_selectedAppConns.append(QVariantMap{
                 {QStringLiteral("id"), c.value(QStringLiteral("id")).toString()},
                 {QStringLiteral("domain"), c.value(QStringLiteral("domain")).toString().isEmpty() ? c.value(QStringLiteral("remote_ip")).toString() : c.value(QStringLiteral("domain")).toString()},
@@ -1511,6 +1787,43 @@ void PortmasterBackend::rebuildSelectedAppCache() {
                 {QStringLiteral("bytes"), formatBytes(crx + ctx)},
             });
         }
+    }
+
+    QVector<int> okBins(kAppBins, 0);
+    QVector<int> blkBins(kAppBins, 0);
+    qint64 minTs = 0, maxTs = 0;
+    bool haveTs = false;
+    int filteredCount = 0;
+    for (const auto& s : chartSamples) {
+        if (m_appChartInternetOnly && !s.internet) continue;
+        ++filteredCount;
+        if (s.ts > 0) {
+            if (!haveTs) { minTs = maxTs = s.ts; haveTs = true; }
+            else { if (s.ts < minTs) minTs = s.ts; if (s.ts > maxTs) maxTs = s.ts; }
+        }
+    }
+    const qint64 span = qMax<qint64>(36, maxTs - minTs);
+    int sampleIdx = 0;
+    for (const auto& s : chartSamples) {
+        if (m_appChartInternetOnly && !s.internet) continue;
+        int bin = 0;
+        if (haveTs && s.ts > 0) {
+            bin = static_cast<int>(((s.ts - minTs) * (kAppBins - 1)) / span);
+        } else {
+            bin = static_cast<int>((sampleIdx * kAppBins) / qMax(1, filteredCount));
+        }
+        bin = qBound(0, bin, kAppBins - 1);
+        if (s.blocked) ++blkBins[bin];
+        else           ++okBins[bin];
+        ++sampleIdx;
+    }
+    m_selectedAppChartBins.reserve(kAppBins);
+    for (int i = 0; i < kAppBins; ++i) {
+        m_selectedAppChartBins.append(QVariantMap{
+            {QStringLiteral("allowed"), okBins[i]},
+            {QStringLiteral("blocked"), blkBins[i]},
+            {QStringLiteral("total"), okBins[i] + blkBins[i]},
+        });
     }
 
     int customSettingsCount = 0;
@@ -1574,8 +1887,13 @@ void PortmasterBackend::rebuildSelectedAppCache() {
 }
 
 void PortmasterBackend::rebuildConnectionsCache() {
+    if (!m_uiWindowVisible) {
+        m_connsDirty = true;
+        return;
+    }
+    m_connsDirty = false;
     m_connectionsCache.clear();
-    const int limit = qMin(qMax(500, m_historyLimit), m_connections.size());
+    const int limit = qMin(qMax(500, m_historyLimit), static_cast<int>(m_connections.size()));
     m_connectionsCache.reserve(limit);
 
     int allowedTotal = 0;
@@ -1685,7 +2003,7 @@ void PortmasterBackend::rebuildConnectionsCache() {
     if (winEnd <= winStart) winStart = winEnd - 600;
     const double span = static_cast<double>(winEnd - winStart);
 
-    const int chartSampleMax = qMin(m_connections.size(), 1500);
+    const int chartSampleMax = qMin(static_cast<int>(m_connections.size()), 1500);
     for (int i = 0; i < chartSampleMax; ++i) {
         const auto& c = m_connections[i];
         if (m_dashboardChartInternetOnly) {
@@ -1842,6 +2160,7 @@ void PortmasterBackend::rebuildSettingsCache() {
     }
     sortSettingsByOrder(m_settingsCache);
     emit settingsChanged();
+    updateTrayMenu();
 }
 
 void PortmasterBackend::rebuildNotificationsCache() {
@@ -1872,6 +2191,7 @@ void PortmasterBackend::rebuildNotificationsCache() {
         else m_alertsCache.append(item);
     }
     emit notificationsChanged();
+    updateTrayIcon();
 }
 
 void PortmasterBackend::setAppAction(const QString& scopedKey, const QString& action) {
@@ -2040,6 +2360,8 @@ void PortmasterBackend::clearHistory() {
     m_api->httpPost(QStringLiteral("/api/v1/netquery/history/clear"), "{}", QStringLiteral("application/json"), [this](int code, const QByteArray&, const QString&) {
         if (code >= 200 && code < 300) {
             m_connections.clear();
+            m_connSeqById.clear();
+            m_connHeadSeq = 0;
             m_historyLoaded = true;
             rebuildConnectionsCache();
             scheduleAppsTickRebuild();
@@ -2054,9 +2376,17 @@ void PortmasterBackend::setHistoryLimit(int limit) {
     QSettings qs(QStringLiteral("portmaster"), QStringLiteral("qt-ui"));
     qs.setValue(QStringLiteral("historyLimit"), m_historyLimit);
     emit historyConfigChanged();
-    if (m_connections.size() > m_historyLimit) {
-        m_connections.resize(m_historyLimit);
-        m_connections.squeeze();
+    if (static_cast<int>(m_connections.size()) > m_historyLimit) {
+        m_connections.resize(static_cast<size_t>(m_historyLimit));
+        m_connections.shrink_to_fit();
+        m_connSeqById.clear();
+        m_connHeadSeq = static_cast<qint64>(m_connections.size());
+        m_connSeqById.reserve(static_cast<int>(m_connections.size()));
+        for (size_t i = 0; i < m_connections.size(); ++i) {
+            QString cid = m_connections[i].value(QStringLiteral("ID")).toString();
+            if (cid.isEmpty()) cid = m_connections[i].value(QStringLiteral("id")).toString();
+            if (!cid.isEmpty()) m_connSeqById.insert(cid, m_connHeadSeq - static_cast<qint64>(i));
+        }
         rebuildConnectionsCache();
     } else {
         loadHistoryFromDb(true);
@@ -2300,7 +2630,8 @@ void PortmasterBackend::uninstallUiFlavor(const QString& flavorId) {
 
 void PortmasterBackend::refreshAdminLock() {
     m_api->httpGet(QStringLiteral("/api/v1/auth/status"), [this](int code, const QByteArray& body, const QString&) {
-        if (code == 200) {
+        if (code == 200 && body != m_lastAdminLockBytes) {
+            m_lastAdminLockBytes = body;
             m_adminLock = QJsonDocument::fromJson(body).object().toVariantMap();
             emit adminLockChanged();
         }
@@ -2325,6 +2656,7 @@ void PortmasterBackend::lockAdmin() {
     m_api->setAdminToken(QString());
     m_api->httpPost(QStringLiteral("/api/v1/auth/lock"), "{}", QStringLiteral("application/json"), [this](int code, const QByteArray& body, const QString&) {
         if (code == 200) {
+            m_lastAdminLockBytes = body;
             m_adminLock = QJsonDocument::fromJson(body).object().toVariantMap();
             emit adminLockChanged();
         } else {
@@ -2340,6 +2672,7 @@ void PortmasterBackend::configureAdminLock(const QVariantMap& payload) {
         if (code == 200) {
             const QString tok = obj.value(QStringLiteral("token")).toString();
             m_api->setAdminToken(tok);
+            m_lastAdminLockBytes.clear();
             m_adminLock = obj.toVariantMap();
             emit adminLockChanged();
             emit toastMessage(QStringLiteral("Admin Lock"),

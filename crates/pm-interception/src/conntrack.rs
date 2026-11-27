@@ -17,11 +17,11 @@ use crate::marks::Mark;
 const NFNL_SUBSYS_CTNETLINK: u16 = 1;
 const IPCTNL_MSG_CT_GET: u16 = 1;
 const IPCTNL_MSG_CT_DELETE: u16 = 2;
-const NLM_F_REQUEST: u16 = 0x1;
+pub(crate) const NLM_F_REQUEST: u16 = 0x1;
 const NLM_F_ACK: u16 = 0x4;
-const NLM_F_DUMP: u16 = 0x300;
-const NLMSG_ERROR: u16 = 2;
-const NLMSG_DONE: u16 = 3;
+pub(crate) const NLM_F_DUMP: u16 = 0x300;
+pub(crate) const NLMSG_ERROR: u16 = 2;
+pub(crate) const NLMSG_DONE: u16 = 3;
 const NLA_F_NESTED: u16 = 0x8000;
 const NLA_TYPE_MASK: u16 = 0x3fff;
 
@@ -60,7 +60,7 @@ pub enum Family {
 }
 
 impl Family {
-    fn af(self) -> u8 {
+    pub(crate) fn af(self) -> u8 {
         match self {
             Family::V4 => 2,
             Family::V6 => 10,
@@ -148,6 +148,7 @@ impl ConnTuple {
 pub struct Conntrack {
     fd: OwnedFd,
     seq: u32,
+    rx_buf: Vec<u8>,
 }
 
 impl Conntrack {
@@ -159,7 +160,11 @@ impl Conntrack {
             Some(rustix::net::netlink::NETFILTER),
         )?;
         bind(&fd, &SocketAddrNetlink::new(0, 0))?;
-        Ok(Conntrack { fd, seq: 0 })
+        Ok(Conntrack {
+            fd,
+            seq: 0,
+            rx_buf: vec![0u8; 1 << 16],
+        })
     }
 
     /// Dumps entries whose mark equals `mark`.
@@ -191,14 +196,23 @@ impl Conntrack {
     /// all active conntrack flows of the given address family.
     pub fn dump_counters(&mut self, family: Family) -> io::Result<Vec<CounterEntry>> {
         let mut entries = Vec::new();
+        self.dump_counters_into(family, &mut entries)?;
+        Ok(entries)
+    }
+
+    /// Appends active conntrack byte counters into a reusable caller buffer.
+    pub fn dump_counters_into(
+        &mut self,
+        family: Family,
+        entries: &mut Vec<CounterEntry>,
+    ) -> io::Result<()> {
         self.dump_messages(family, &[], |payload| {
             if let Some(entry) = parse_counter_entry(payload) {
                 if entry.orig_bytes > 0 || entry.reply_bytes > 0 {
                     entries.push(entry);
                 }
             }
-        })?;
-        Ok(entries)
+        })
     }
 
     fn dump_messages(
@@ -215,11 +229,13 @@ impl Conntrack {
         );
         self.send(&msg)?;
 
-        let mut buf = vec![0u8; 1 << 16];
+        if self.rx_buf.len() < (1 << 16) {
+            self.rx_buf.resize(1 << 16, 0);
+        }
         loop {
-            let (n, _) = recv(&self.fd, &mut buf[..], RecvFlags::empty())?;
+            let (n, _) = recv(&self.fd, &mut self.rx_buf[..], RecvFlags::empty())?;
             let mut done = false;
-            for (kind, _seq, payload) in messages(&buf[..n]) {
+            for (kind, _seq, payload) in messages(&self.rx_buf[..n]) {
                 match kind {
                     NLMSG_DONE => done = true,
                     NLMSG_ERROR => check_error(payload)?,
@@ -351,7 +367,7 @@ fn put_attr(out: &mut Vec<u8>, kind: u16, value: &[u8]) {
 }
 
 /// Iterates netlink messages: (type, sequence number, payload after the 16-byte header).
-fn messages(mut buf: &[u8]) -> Vec<(u16, u32, &[u8])> {
+pub(crate) fn messages(mut buf: &[u8]) -> Vec<(u16, u32, &[u8])> {
     let mut out = Vec::new();
     while buf.len() >= 16 {
         let len = u32::from_ne_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
@@ -367,7 +383,7 @@ fn messages(mut buf: &[u8]) -> Vec<(u16, u32, &[u8])> {
 }
 
 /// Iterates attributes: (type without flags, value, raw attribute bytes).
-fn attrs(mut buf: &[u8]) -> Vec<(u16, &[u8], &[u8])> {
+pub(crate) fn attrs(mut buf: &[u8]) -> Vec<(u16, &[u8], &[u8])> {
     let mut out = Vec::new();
     while buf.len() >= 4 {
         let len = usize::from(u16::from_ne_bytes([buf[0], buf[1]]));
@@ -381,7 +397,7 @@ fn attrs(mut buf: &[u8]) -> Vec<(u16, &[u8], &[u8])> {
     out
 }
 
-fn check_error(payload: &[u8]) -> io::Result<()> {
+pub(crate) fn check_error(payload: &[u8]) -> io::Result<()> {
     let code = payload
         .get(..4)
         .map(|b| i32::from_ne_bytes([b[0], b[1], b[2], b[3]]))
@@ -637,6 +653,7 @@ mod tests {
             )
             .unwrap(),
             seq: 0,
+            rx_buf: Vec::new(),
         };
         let mut a = Vec::new();
         put_attr(&mut a, CTA_MARK, &1710u32.to_be_bytes());

@@ -123,6 +123,23 @@ pub trait BandwidthSink: Send + Sync {
         bytes_received: u64,
         bytes_sent: u64,
     ) -> Result<(), String>;
+
+    fn update_bandwidth_batch(
+        &self,
+        updates: &[(bool, String, String, String, u64, u64)],
+    ) -> Result<(), String> {
+        for (history_enabled, profile, process_key, conn_id, bytes_received, bytes_sent) in updates {
+            self.update_bandwidth(
+                *history_enabled,
+                profile,
+                process_key,
+                conn_id,
+                *bytes_received,
+                *bytes_sent,
+            )?;
+        }
+        Ok(())
+    }
 }
 
 /// Conntrack operations of the verdict reset (Go `nfq.DeleteMarkedConnection`

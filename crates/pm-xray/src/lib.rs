@@ -952,9 +952,24 @@ impl Xray {
             sni: parsed.sni,
             fingerprint: parsed.fingerprint,
             alpn: parsed.alpn,
+            encryption: parsed.encryption,
             flow: parsed.flow,
             service_name: parsed.service_name,
             header_type: parsed.header_type,
+            xhttp_mode: parsed.xhttp_mode,
+            xhttp_extra: parsed.xhttp_extra,
+            grpc_multi_mode: parsed.grpc_multi_mode,
+            grpc_authority: parsed.grpc_authority,
+            kcp_seed: parsed.kcp_seed,
+            ws_heartbeat_period: parsed.ws_heartbeat_period,
+            pinned_peer_cert: parsed.pinned_peer_cert,
+            verify_peer_cert_by_name: parsed.verify_peer_cert_by_name,
+            ech_config_list: parsed.ech_config_list,
+            mux_enabled: parsed.mux_enabled,
+            mux_concurrency: parsed.mux_concurrency,
+            fragment_enabled: parsed.fragment_enabled,
+            tcp_fast_open: parsed.tcp_fast_open,
+            tcp_keep_alive_interval: parsed.tcp_keep_alive_interval,
             reality_public_key: parsed.reality_public_key,
             reality_short_id: parsed.reality_short_id,
             reality_spider_x: parsed.reality_spider_x,
@@ -1027,6 +1042,9 @@ impl Xray {
         if let Some(alpn) = req.alpn {
             parsed.alpn = alpn.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
         }
+        if let Some(enc) = req.encryption {
+            parsed.encryption = enc.trim().to_string();
+        }
         if let Some(flow) = req.flow {
             parsed.flow = flow.trim().to_string();
         }
@@ -1035,6 +1053,48 @@ impl Xray {
         }
         if let Some(ht) = req.header_type {
             parsed.header_type = ht.trim().to_string();
+        }
+        if let Some(xm) = req.xhttp_mode {
+            parsed.xhttp_mode = xm.trim().to_string();
+        }
+        if let Some(xe) = req.xhttp_extra {
+            parsed.xhttp_extra = xe.trim().to_string();
+        }
+        if let Some(mm) = req.grpc_multi_mode {
+            parsed.grpc_multi_mode = mm;
+        }
+        if let Some(ga) = req.grpc_authority {
+            parsed.grpc_authority = ga.trim().to_string();
+        }
+        if let Some(seed) = req.kcp_seed {
+            parsed.kcp_seed = seed.trim().to_string();
+        }
+        if let Some(hb) = req.ws_heartbeat_period {
+            parsed.ws_heartbeat_period = hb;
+        }
+        if let Some(pcs) = req.pinned_peer_cert {
+            parsed.pinned_peer_cert = pcs.trim().to_string();
+        }
+        if let Some(vcn) = req.verify_peer_cert_by_name {
+            parsed.verify_peer_cert_by_name = vcn.trim().to_string();
+        }
+        if let Some(ech) = req.ech_config_list {
+            parsed.ech_config_list = ech.trim().to_string();
+        }
+        if let Some(mux) = req.mux_enabled {
+            parsed.mux_enabled = mux;
+        }
+        if let Some(mc) = req.mux_concurrency {
+            parsed.mux_concurrency = mc;
+        }
+        if let Some(frag) = req.fragment_enabled {
+            parsed.fragment_enabled = frag;
+        }
+        if let Some(tfo) = req.tcp_fast_open {
+            parsed.tcp_fast_open = tfo;
+        }
+        if let Some(ka) = req.tcp_keep_alive_interval {
+            parsed.tcp_keep_alive_interval = ka;
         }
         if let Some(pbk) = req.reality_public_key {
             parsed.reality_public_key = pbk.trim().to_string();

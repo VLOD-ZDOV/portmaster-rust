@@ -103,6 +103,14 @@ fn stream_settings(profile: &ParsedProfile) -> Value {
         }
         if !profile.hy_pin.is_empty() {
             tls.insert("pinnedPeerCertSha256".into(), json!(profile.hy_pin));
+        } else if !profile.pinned_peer_cert.is_empty() {
+            tls.insert("pinnedPeerCertSha256".into(), json!(profile.pinned_peer_cert));
+        }
+        if !profile.verify_peer_cert_by_name.is_empty() {
+            tls.insert("verifyPeerCertByName".into(), json!(profile.verify_peer_cert_by_name));
+        }
+        if !profile.ech_config_list.is_empty() {
+            tls.insert("echConfigList".into(), json!(profile.ech_config_list));
         }
         stream.insert("tlsSettings".into(), Value::Object(tls));
     }
@@ -119,6 +127,9 @@ fn stream_settings(profile: &ParsedProfile) -> Value {
             if !profile.headers.is_empty() {
                 ws.insert("headers".into(), headers_value(&profile.headers));
             }
+            if profile.ws_heartbeat_period > 0 {
+                ws.insert("heartbeatPeriod".into(), json!(profile.ws_heartbeat_period));
+            }
             stream.insert("wsSettings".into(), Value::Object(ws));
         }
         "grpc" => {
@@ -130,6 +141,12 @@ fn stream_settings(profile: &ParsedProfile) -> Value {
             };
             if !service.is_empty() {
                 grpc.insert("serviceName".into(), json!(service));
+            }
+            if !profile.grpc_authority.is_empty() {
+                grpc.insert("authority".into(), json!(profile.grpc_authority));
+            }
+            if profile.grpc_multi_mode {
+                grpc.insert("multiMode".into(), json!(true));
             }
             stream.insert("grpcSettings".into(), Value::Object(grpc));
         }
@@ -154,10 +171,29 @@ fn stream_settings(profile: &ParsedProfile) -> Value {
             if !profile.host.is_empty() {
                 xhttp.insert("host".into(), json!(profile.host));
             }
+            if !profile.xhttp_mode.is_empty() {
+                xhttp.insert("mode".into(), json!(profile.xhttp_mode));
+            }
             if !profile.headers.is_empty() {
                 xhttp.insert("headers".into(), headers_value(&profile.headers));
             }
+            if !profile.xhttp_extra.is_empty() {
+                if let Ok(Value::Object(extra_map)) = serde_json::from_str::<Value>(&profile.xhttp_extra) {
+                    for (k, v) in extra_map {
+                        xhttp.insert(k, v);
+                    }
+                }
+            }
             stream.insert("xhttpSettings".into(), Value::Object(xhttp));
+        }
+        "kcp" => {
+            let mut kcp = Map::new();
+            let htype = if profile.header_type.is_empty() { "none" } else { profile.header_type.as_str() };
+            kcp.insert("header".into(), json!({ "type": htype }));
+            if !profile.kcp_seed.is_empty() {
+                kcp.insert("seed".into(), json!(profile.kcp_seed));
+            }
+            stream.insert("kcpSettings".into(), Value::Object(kcp));
         }
         "raw" => {
             // xray-rs accepts only an absent/`none` RAW header type. Other
@@ -170,6 +206,20 @@ fn stream_settings(profile: &ParsedProfile) -> Value {
             }
         }
         _ => {}
+    }
+
+    if profile.fragment_enabled || profile.tcp_fast_open || profile.tcp_keep_alive_interval > 0 {
+        let mut sockopt = Map::new();
+        if profile.tcp_fast_open {
+            sockopt.insert("tcpFastOpen".into(), json!(true));
+        }
+        if profile.tcp_keep_alive_interval > 0 {
+            sockopt.insert("tcpKeepAliveInterval".into(), json!(profile.tcp_keep_alive_interval));
+        }
+        if profile.fragment_enabled && profile.protocol != Protocol::Wireguard {
+            sockopt.insert("dialerProxy".into(), json!("frag"));
+        }
+        stream.insert("sockopt".into(), Value::Object(sockopt));
     }
 
     if profile.protocol == Protocol::Hysteria2 {
@@ -434,12 +484,34 @@ pub fn generate_config_full(
     // finalmask there, and this generator needs neither).
     if !is_wireguard {
         outbound.insert("streamSettings".into(), stream_settings(&profile));
+        if profile.mux_enabled {
+            let conc = if profile.mux_concurrency > 0 { profile.mux_concurrency } else { 8 };
+            outbound.insert("mux".into(), json!({
+                "enabled": true,
+                "concurrency": conc,
+                "xudpConcurrency": 16,
+                "xudpProxyUDP443": "reject",
+            }));
+        }
     }
     if is_wireguard {
         outbounds.push(json!({ "tag": "direct", "protocol": "freedom", "settings": {} }));
         outbounds.push(Value::Object(outbound));
     } else {
         outbounds.push(Value::Object(outbound));
+        if profile.fragment_enabled {
+            outbounds.push(json!({
+                "tag": "frag",
+                "protocol": "freedom",
+                "settings": {
+                    "fragment": {
+                        "packets": "tlshello",
+                        "length": "100-200",
+                        "interval": "10-20",
+                    }
+                }
+            }));
+        }
         outbounds.push(json!({ "tag": "direct", "protocol": "freedom", "settings": {} }));
     }
     outbounds.push(json!({ "tag": "block", "protocol": "blackhole", "settings": {} }));

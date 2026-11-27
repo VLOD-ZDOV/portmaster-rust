@@ -350,11 +350,74 @@ Item {
             Layout.fillHeight: true
             currentIndex: root.activeTab
 
-            // TAB 0: APP CONNECTIONS
-            Rectangle {
-                color: "#18181a"
-                radius: 6
-                border.color: "#26262a"
+            // TAB 0: APP CONNECTIONS + ACTIVITY GRAPH
+            ColumnLayout {
+                spacing: 10
+
+                // Per-App Activity Graph Card (Green Allowed / Red Blocked)
+                Rectangle {
+                    Layout.fillWidth: true
+                    height: 122
+                    radius: 6
+                    color: "#18181a"
+                    border.color: "#26262a"
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 10
+                        spacing: 6
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+                            Label {
+                                text: pm.isRu ? "График соединений приложения" : "App Connections Graph"
+                                color: "#dcdce4"; font.pixelSize: 12; font.bold: true
+                            }
+                            Rectangle {
+                                height: 22; radius: 4
+                                color: pm.appChartInternetOnly ? "#173252" : "#222328"
+                                border.color: pm.appChartInternetOnly ? "#4e97fa" : "#343640"
+                                implicitWidth: appInetLbl.implicitWidth + 14
+                                Label {
+                                    id: appInetLbl; anchors.centerIn: parent
+                                    text: pm.isRu ? "Только интернет" : "Internet Only"
+                                    color: pm.appChartInternetOnly ? "#89b7ff" : "#8e8e98"
+                                    font.pixelSize: 10; font.bold: pm.appChartInternetOnly
+                                }
+                                MouseArea {
+                                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                    onClicked: pm.setAppChartInternetOnly(!pm.appChartInternetOnly)
+                                }
+                            }
+                            Item { Layout.fillWidth: true }
+                            Rectangle { width: 8; height: 8; radius: 4; color: "#1de966" }
+                            Label {
+                                text: "OK: " + (pm.appChartInternetOnly ? pm.selectedAppInetAllowed : pm.selectedAppAllAllowed)
+                                color: "#1de966"; font.pixelSize: 11; font.bold: true
+                            }
+                            Item { width: 8 }
+                            Rectangle { width: 8; height: 8; radius: 4; color: "#e01d1d" }
+                            Label {
+                                text: (pm.isRu ? "Блок: " : "Blocked: ") + (pm.appChartInternetOnly ? pm.selectedAppInetBlocked : pm.selectedAppAllBlocked)
+                                color: "#f03c3c"; font.pixelSize: 11; font.bold: true
+                            }
+                        }
+
+                        ConnChartCanvas {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            bins: pm.selectedAppChartBins
+                        }
+                    }
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    color: "#18181a"
+                    radius: 6
+                    border.color: "#26262a"
 
                     ListView {
                     anchors.fill: parent
@@ -429,6 +492,7 @@ Item {
                         color: "#76767e"; font.pixelSize: 13
                     }
                 }
+            }
             }
 
             // TAB 1: RULES & ROUTING

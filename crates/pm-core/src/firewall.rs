@@ -1004,6 +1004,19 @@ impl BandwidthSink for NetqueryBandwidth {
             )
             .map_err(|error| error.to_string())
     }
+
+    fn update_bandwidth_batch(
+        &self,
+        updates: &[(bool, String, String, String, u64, u64)],
+    ) -> Result<(), String> {
+        let borrowed: Vec<(bool, &str, &str, u64, u64)> = updates
+            .iter()
+            .map(|(h, _, pkey, cid, rx, tx)| (*h, pkey.as_str(), cid.as_str(), *rx, *tx))
+            .collect();
+        self.db
+            .update_bandwidth_batch(&borrowed, pm_database::now())
+            .map_err(|error| error.to_string())
+    }
 }
 
 /// Dependencies of the firewall, supplied by the core service.
@@ -1305,8 +1318,7 @@ impl Firewall {
                         let Some(update) = update else { return };
                         // Subscription keys are `tree/<pid>/<scope>/<id>`,
                         // while the connection store is keyed by the bare id.
-                        let parts = update.key.key.split('/').collect::<Vec<_>>();
-                        let Some(conn_id) = (parts.len() >= 4).then(|| parts[3]) else {
+                        let Some(conn_id) = update.key.key.split('/').nth(3) else {
                             continue;
                         };
                         let Some(conn) = network.get_connection(conn_id) else {
@@ -1390,9 +1402,9 @@ impl Firewall {
         }
 
         // Enable kernel per-connection byte accounting so ctnetlink reports
-        // bytes_sent / bytes_received even for CONNMARK fast-tracked flows.
-        if let Err(error) = std::fs::write("/proc/sys/net/netfilter/nf_conntrack_acct", b"1") {
-            tracing::debug!(%error, "filter: could not enable /proc/sys/net/netfilter/nf_conntrack_acct");
+        // UDP/ICMP and CONNMARK fast-tracked flow bytes (TCP also uses NETLINK_SOCK_DIAG).
+        if let Err(error) = std::fs::write("/proc/sys/net/netfilter/nf_conntrack_acct", b"1\n") {
+            tracing::warn!(%error, "filter: could not write nf_conntrack_acct=1; using NETLINK_SOCK_DIAG for TCP counters");
         }
 
         let (tx, mut rx) = mpsc::channel::<pm_interception::queue::QueuedPacket>(16384);
@@ -1508,6 +1520,8 @@ impl Firewall {
         let bandwidth_tracker = {
             let network = Arc::clone(&self.network);
             let handler = Arc::clone(&self.handler);
+            let netquery = Arc::clone(&self.netquery);
+            let poller = Arc::new(Mutex::new(BandwidthPoller::default()));
             let cancel_bw = cancel.clone();
             tokio::spawn(async move {
                 let mut interval = tokio::time::interval(Duration::from_secs(2));
@@ -1517,8 +1531,12 @@ impl Firewall {
                         _ = interval.tick() => {
                             let network = Arc::clone(&network);
                             let handler = Arc::clone(&handler);
+                            let netquery = Arc::clone(&netquery);
+                            let poller = Arc::clone(&poller);
                             let _ = tokio::task::spawn_blocking(move || {
-                                poll_conntrack_bandwidth(&network, &handler, ipv6);
+                                if let Ok(mut p) = poller.try_lock() {
+                                    poll_linux_bandwidth(&mut p, &network, &handler, &netquery, ipv6);
+                                }
                             })
                             .await;
                         }
@@ -1732,36 +1750,66 @@ impl Firewall {
 }
 
 #[cfg(target_os = "linux")]
-fn poll_conntrack_bandwidth(network: &Network, handler: &PacketHandler, ipv6: bool) {
-    use pm_interception::conntrack::{Conntrack, Family};
-    use pm_network::canonical_ip;
-    use std::collections::HashMap;
+#[derive(Default)]
+struct BandwidthPoller {
+    ct: Option<pm_interception::conntrack::Conntrack>,
+    diag: Option<pm_interception::sockdiag::SockDiag>,
+    ct_entries: Vec<pm_interception::conntrack::CounterEntry>,
+    sock_entries: Vec<pm_interception::sockdiag::TcpCounter>,
+    ct_table: std::collections::HashMap<(u8, IpAddr, u16, IpAddr, u16), (u64, u64)>,
+    sock_table: std::collections::HashMap<(IpAddr, u16, IpAddr, u16), (u64, u64)>,
+    updates: Vec<BandwidthUpdate>,
+    dirty: Vec<pm_network::SharedConnection>,
+}
 
-    let Ok(mut ct) = Conntrack::open() else {
-        return;
-    };
-    let mut table: HashMap<(u8, IpAddr, u16, IpAddr, u16), (u64, u64)> = HashMap::new();
-    for family in if ipv6 {
+#[cfg(target_os = "linux")]
+fn poll_linux_bandwidth(
+    p: &mut BandwidthPoller,
+    network: &Network,
+    handler: &PacketHandler,
+    netquery: &pm_netquery::Manager,
+    ipv6: bool,
+) {
+    use pm_interception::conntrack::{Conntrack, Family};
+    use pm_interception::sockdiag::SockDiag;
+    use pm_network::canonical_ip;
+
+    if p.ct.is_none() {
+        p.ct = Conntrack::open().ok();
+    }
+    if p.diag.is_none() {
+        p.diag = SockDiag::open().ok();
+    }
+
+    let families = if ipv6 {
         &[Family::V4, Family::V6][..]
     } else {
         &[Family::V4][..]
-    } {
-        if let Ok(entries) = ct.dump_counters(*family) {
-            for e in entries {
-                table.insert(
-                    (
-                        e.orig.protocol,
-                        canonical_ip(e.orig.src),
-                        e.orig.src_port,
-                        canonical_ip(e.orig.dst),
-                        e.orig.dst_port,
-                    ),
-                    (e.orig_bytes, e.reply_bytes),
-                );
-                if let Some(reply) = e.reply {
-                    // Store reverse-direction lookup (reply.dst -> reply.src) for SNAT flows
-                    // if the socket originally bound before NAT rewriting.
-                    table.entry((
+    };
+
+    p.ct_entries.clear();
+    p.ct_table.clear();
+    if let Some(ct) = p.ct.as_mut() {
+        for &family in families {
+            if ct.dump_counters_into(family, &mut p.ct_entries).is_err() {
+                p.ct = None;
+                break;
+            }
+        }
+        for e in &p.ct_entries {
+            p.ct_table.insert(
+                (
+                    e.orig.protocol,
+                    canonical_ip(e.orig.src),
+                    e.orig.src_port,
+                    canonical_ip(e.orig.dst),
+                    e.orig.dst_port,
+                ),
+                (e.orig_bytes, e.reply_bytes),
+            );
+            if let Some(reply) = e.reply {
+                p.ct_table
+                    .entry((
                         reply.protocol,
                         canonical_ip(reply.dst),
                         reply.dst_port,
@@ -1769,14 +1817,38 @@ fn poll_conntrack_bandwidth(network: &Network, handler: &PacketHandler, ipv6: bo
                         reply.src_port,
                     ))
                     .or_insert((e.orig_bytes, e.reply_bytes));
-                }
             }
         }
     }
-    if table.is_empty() {
+
+    p.sock_entries.clear();
+    p.sock_table.clear();
+    if let Some(diag) = p.diag.as_mut() {
+        for &family in families {
+            if diag.dump_tcp_counters_into(family, &mut p.sock_entries).is_err() {
+                p.diag = None;
+                break;
+            }
+        }
+        for s in &p.sock_entries {
+            let key = (
+                canonical_ip(s.local),
+                s.local_port,
+                canonical_ip(s.remote),
+                s.remote_port,
+            );
+            let slot = p.sock_table.entry(key).or_insert((0, 0));
+            slot.0 = slot.0.max(s.bytes_received);
+            slot.1 = slot.1.max(s.bytes_sent);
+        }
+    }
+
+    if p.ct_table.is_empty() && p.sock_table.is_empty() {
         return;
     }
 
+    p.updates.clear();
+    p.dirty.clear();
     for shared in network.get_all_connections() {
         let Ok(conn) = shared.try_lock() else {
             continue;
@@ -1798,29 +1870,56 @@ fn poll_conntrack_bandwidth(network: &Network, handler: &PacketHandler, ipv6: bo
         let inbound = conn.inbound;
         let prev_rx = conn.bytes_received;
         let prev_tx = conn.bytes_sent;
+
+        let (ct_rx, ct_tx) = if !p.ct_table.is_empty() {
+            let ct_key = if inbound {
+                (proto, remote_ip, remote_port, local_ip, local_port)
+            } else {
+                (proto, local_ip, local_port, remote_ip, remote_port)
+            };
+            if let Some(&(orig_bytes, reply_bytes)) = p.ct_table.get(&ct_key) {
+                if inbound {
+                    (orig_bytes, reply_bytes)
+                } else {
+                    (reply_bytes, orig_bytes)
+                }
+            } else {
+                (0, 0)
+            }
+        } else {
+            (0, 0)
+        };
+
+        let (sock_rx, sock_tx) = if proto == 6 && !p.sock_table.is_empty() {
+            p.sock_table
+                .get(&(local_ip, local_port, remote_ip, remote_port))
+                .copied()
+                .unwrap_or((0, 0))
+        } else {
+            (0, 0)
+        };
+
+        let bytes_received = ct_rx.max(sock_rx);
+        let bytes_sent = ct_tx.max(sock_tx);
+        if bytes_received <= prev_rx && bytes_sent <= prev_tx {
+            continue;
+        }
         let conn_id = conn.id.clone();
         drop(conn);
 
-        let key = if inbound {
-            (proto, remote_ip, remote_port, local_ip, local_port)
-        } else {
-            (proto, local_ip, local_port, remote_ip, remote_port)
-        };
-        let Some(&(orig_bytes, reply_bytes)) = table.get(&key) else {
-            continue;
-        };
-        let (bytes_received, bytes_sent) = if inbound {
-            (orig_bytes, reply_bytes)
-        } else {
-            (reply_bytes, orig_bytes)
-        };
-        if bytes_received > prev_rx || bytes_sent > prev_tx {
-            handler.update_bandwidth(&BandwidthUpdate {
-                conn_id,
-                bytes_received,
-                bytes_sent,
-                method: BandwidthMethod::Absolute,
-            });
+        p.updates.push(BandwidthUpdate {
+            conn_id,
+            bytes_received,
+            bytes_sent,
+            method: BandwidthMethod::Absolute,
+        });
+        p.dirty.push(shared);
+    }
+
+    if !p.updates.is_empty() {
+        handler.update_bandwidth_batch(&p.updates);
+        for shared in &p.dirty {
+            netquery.push_connection(shared);
         }
     }
 }

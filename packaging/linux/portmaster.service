@@ -20,13 +20,15 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 PIDFile=/var/lib/portmaster/core-lock.pid
 Environment=LOGLEVEL=info
+Environment=MALLOC_ARENA_MAX=2
+Environment=PORTMASTER_ARGS=
 EnvironmentFile=-/etc/default/portmaster
 ProtectSystem=true
 ReadWritePaths=/usr/lib/portmaster
 RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
 RestrictNamespaces=yes
 ProtectHome=read-only
-ProtectKernelTunables=yes
+ProtectKernelTunables=no
 ProtectKernelLogs=yes
 ProtectControlGroups=yes
 PrivateDevices=yes

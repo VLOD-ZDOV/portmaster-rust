@@ -15,6 +15,8 @@ pub mod packet;
 
 #[cfg(target_os = "linux")]
 pub mod conntrack;
+#[cfg(target_os = "linux")]
+pub mod sockdiag;
 #[cfg(not(target_os = "linux"))]
 #[path = "conntrack_unsupported.rs"]
 pub mod conntrack;

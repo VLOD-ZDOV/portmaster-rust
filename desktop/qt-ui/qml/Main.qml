@@ -22,6 +22,9 @@ ApplicationWindow {
     property string rbSettingKey: ""
     property bool showUnlockDialog: false
 
+    onVisibleChanged: pm.setUiWindowVisible(visible)
+    Component.onCompleted: pm.setUiWindowVisible(visible)
+
     onClosing: function(close) {
         if (!pm.hasTray) {
             close.accepted = true
@@ -283,7 +286,7 @@ ApplicationWindow {
                 height: 80
                 property real angle: 0
                 NumberAnimation on angle {
-                    from: 0; to: 360; duration: 3500; loops: Animation.Infinite; running: !pm.connected
+                    from: 0; to: 360; duration: 3500; loops: Animation.Infinite; running: !pm.connected && win.visible
                 }
                 onAngleChanged: requestPaint()
                 onPaint: {

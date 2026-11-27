@@ -96,7 +96,11 @@ fn run_interactive(options: cli::Options) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    let worker_threads = std::thread::available_parallelism()
+        .map_or(4, |n| n.get().clamp(2, 6));
     let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(worker_threads)
+        .max_blocking_threads(32)
         .enable_all()
         .build()
     {

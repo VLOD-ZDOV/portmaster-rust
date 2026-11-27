@@ -290,7 +290,7 @@ pub fn register_spn_and_user_profile(
         tokio::spawn(async move {
             let mut last: Option<Vec<u8>> = None;
             loop {
-                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                 let record = spn_status_record(&xray);
                 if last.as_deref() == Some(record.data.as_slice()) {
                     continue;

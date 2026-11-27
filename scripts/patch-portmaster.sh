@@ -298,12 +298,13 @@ LockPersonality=yes
 NoNewPrivileges=yes
 PrivateTmp=yes
 Environment=LOGLEVEL=info
+Environment=MALLOC_ARENA_MAX=2
 ProtectSystem=true
 ReadWritePaths=${INSTALL_DIR}
 RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
 RestrictNamespaces=yes
 ProtectHome=read-only
-ProtectKernelTunables=yes
+ProtectKernelTunables=no
 ProtectKernelLogs=yes
 ProtectControlGroups=yes
 PrivateDevices=yes
@@ -359,6 +360,8 @@ if [[ "${TARGET_CORE}" == "rs" ]]; then
 [Service]
 ExecStart=
 ExecStart=${TARGET_BIN_PATH}
+Environment=MALLOC_ARENA_MAX=2
+ProtectKernelTunables=no
 RestartForceExitStatus=23
 RestartSec=1
 EOF
