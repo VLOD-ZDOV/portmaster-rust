@@ -6,7 +6,7 @@
 //! only the decision logic, so it can be driven by a fake probe in tests.
 //! [`RealProbe`] is the production adapter used by the core.
 
-use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
+use std::net::{IpAddr, ToSocketAddrs};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -357,6 +357,7 @@ impl Probe for RealProbe {
     fn send_system_integration_packet(&self) -> Result<(), PacketSendError> {
         #[cfg(target_os = "linux")]
         {
+            use std::net::SocketAddr;
             use socket2::{Domain, Protocol, SockAddr, Socket, Type};
             let socket = Socket::new(
                 Domain::IPV4,

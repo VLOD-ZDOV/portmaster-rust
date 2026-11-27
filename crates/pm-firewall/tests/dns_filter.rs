@@ -148,8 +148,15 @@ struct Fx {
 }
 
 fn fx(profile: Value) -> Fx {
+    fx_binary("", None, profile)
+}
+
+fn fx_binary(linked_path: &str, global_endpoints: Option<Value>, profile: Value) -> Fx {
     let config = Config::new();
     register_options(&config).unwrap();
+    if let Some(ep) = global_endpoints {
+        config.set_config_option("filter/endpoints", ep).unwrap();
+    }
     let global = Arc::new(GlobalProfileConfig::new(&config));
     global.refresh().unwrap();
     let databases = Arc::new(Databases::without_disk());
@@ -173,6 +180,7 @@ fn fx(profile: Value) -> Fx {
     let local = Arc::new(Profile::new(Profile {
         source: SOURCE_LOCAL.to_string(),
         id: "p1".to_string(),
+        linked_path: linked_path.to_string(),
         config: profile.as_object().cloned().unwrap_or_else(Map::new),
         ..Profile::default()
     }));
@@ -496,4 +504,103 @@ fn unidentified_profiles_save_globally() {
     assert_eq!(ip_info_profile_scope("_unidentified"), "global");
     assert_eq!(ip_info_profile_scope("_system-resolver"), "global");
     assert_eq!(ip_info_profile_scope("abc"), "abc");
+}
+
+#[test]
+fn binary_specific_domain_permit_keeps_dns_records_despite_block_internet() {
+    let fx_a = fx_binary(
+        "/usr/bin/app-a",
+        Some(json!(["+ .global-only.example"])),
+        json!({
+            "filter": {
+                "defaultAction": "permit",
+                "blockInternet": true,
+                "endpoints": ["+ .allowed.example"]
+            }
+        }),
+    );
+
+    // Allowed domain for app-a keeps its global A record and is not blocked by response filter.
+    let conn_allowed = dns_conn(&fx_a, "api.allowed.example.");
+    let rr_allowed = response(
+        "api.allowed.example.",
+        IpScope::Global,
+        vec![a("api.allowed.example.", "93.184.216.34")],
+    );
+    let out_allowed = run_filter(&fx_a, &conn_allowed, rr_allowed, false);
+    assert_eq!(out_allowed.answer.len(), 1);
+    assert!(!out_allowed.filtered);
+    assert_eq!(conn_allowed.lock().unwrap().verdict, Verdict::Undecided);
+
+    // End-to-end hook (filter_connection then filter_resolved_dns) decides Verdict::Accept and keeps the A record.
+    let conn_hook = dns_conn(&fx_a, "api.allowed.example.");
+    let q_hook = Query::new("api.allowed.example.", RecordType::A);
+    let rr_hook = response(
+        "api.allowed.example.",
+        IpScope::Global,
+        vec![a("api.allowed.example.", "93.184.216.34")],
+    );
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(fx_a.hook.filter_connection(&conn_hook));
+    assert_eq!(conn_hook.lock().unwrap().verdict, Verdict::Accept);
+    let (out_hook, _) = rt.block_on(fx_a.hook.filter_resolved_dns(&conn_hook, &q_hook, rr_hook));
+    assert_eq!(out_hook.unwrap().answer.len(), 1);
+    assert_eq!(conn_hook.lock().unwrap().verdict, Verdict::Accept);
+
+    // Unpermitted domain for app-a still gets stripped and blocked.
+    let conn_other = dns_conn(&fx_a, "other.example.");
+    let rr_other = response(
+        "other.example.",
+        IpScope::Global,
+        vec![a("other.example.", "93.184.216.34")],
+    );
+    let out_other = run_filter(&fx_a, &conn_other, rr_other, false);
+    assert!(out_other.answer.is_empty());
+    assert!(out_other.filtered);
+    assert_eq!(conn_other.lock().unwrap().verdict, Verdict::Block);
+
+    // Global endpoint permit does NOT unlock DNS records for another binary.
+    let fx_b = fx_binary(
+        "/usr/bin/app-b",
+        Some(json!(["+ .global-only.example"])),
+        json!({
+            "filter": {
+                "defaultAction": "permit",
+                "blockInternet": true
+            }
+        }),
+    );
+    let conn_b = dns_conn(&fx_b, "sub.global-only.example.");
+    let rr_b = response(
+        "sub.global-only.example.",
+        IpScope::Global,
+        vec![a("sub.global-only.example.", "93.184.216.34")],
+    );
+    let out_b = run_filter(&fx_b, &conn_b, rr_b, false);
+    assert!(out_b.answer.is_empty());
+    assert!(out_b.filtered);
+    assert_eq!(conn_b.lock().unwrap().verdict, Verdict::Block);
+
+    // Non-binary profile (e.g. empty linked_path / unidentified) must NEVER override blockInternet.
+    let fx_unidentified = fx_binary(
+        "",
+        None,
+        json!({
+            "filter": {
+                "defaultAction": "permit",
+                "blockInternet": true,
+                "endpoints": ["+ .allowed.example"]
+            }
+        }),
+    );
+    let conn_unid = dns_conn(&fx_unidentified, "api.allowed.example.");
+    let rr_unid = response(
+        "api.allowed.example.",
+        IpScope::Global,
+        vec![a("api.allowed.example.", "93.184.216.34")],
+    );
+    let out_unid = run_filter(&fx_unidentified, &conn_unid, rr_unid, false);
+    assert!(out_unid.answer.is_empty());
+    assert!(out_unid.filtered);
+    assert_eq!(conn_unid.lock().unwrap().verdict, Verdict::Block);
 }

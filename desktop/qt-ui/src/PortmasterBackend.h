@@ -41,6 +41,8 @@ struct ConnRecord {
     int port = 0;
     qint64 rx = 0;
     qint64 tx = 0;
+    qint64 accountedLiveRx = 0;
+    qint64 accountedLiveTx = 0;
     qint64 startedTs = 0;
     bool tunneled = false;
     bool active = false;
@@ -432,6 +434,7 @@ private:
     void rebuildAppsCache();
     void rebuildSelectedAppCache();
     void rebuildConnectionsCache();
+    void rebuildChartBinsOnly();
     void rebuildSettingsCache();
     void rebuildNotificationsCache();
     void rebuildMapPins();
@@ -487,6 +490,7 @@ private:
     QTimer* m_appsTickTimer = nullptr;
     QTimer* m_settingsTimer = nullptr;
     QTimer* m_connsTimer = nullptr;
+    QTimer* m_chartTickTimer = nullptr;
     bool m_withTray = true;
     bool m_ru = true;
     bool m_hwAccel = true;
@@ -508,6 +512,8 @@ private:
     ConnectionListModel* m_connModel = nullptr;
     qint64 m_connHeadSeq = 0;
     QHash<QString, qint64> m_connSeqById;
+    QHash<qint64, QPair<qint64, qint64>> m_liveBwBins;
+    QHash<qint64, QPair<qint64, qint64>> m_liveInetBwBins;
     QVector<WorldCountryHit> m_worldHitIndex;
     QByteArray m_lastXrayStatusBytes;
     QByteArray m_lastXrayNodesBytes;

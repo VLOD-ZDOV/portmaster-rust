@@ -80,6 +80,16 @@ pub fn filter_dns_section(
     resolver_scope: IpScope,
     sys_resolver: bool,
 ) -> FilteredSection {
+    filter_dns_section_with_override(entries, p, resolver_scope, sys_resolver, false)
+}
+
+fn filter_dns_section_with_override(
+    entries: Vec<Record>,
+    p: &LayeredProfile,
+    resolver_scope: IpScope,
+    sys_resolver: bool,
+    allow_internet_override: bool,
+) -> FilteredSection {
     let mut out = FilteredSection {
         good: Vec::with_capacity(entries.len()),
         ..FilteredSection::default()
@@ -110,7 +120,7 @@ pub fn filter_dns_section(
         }
 
         if p.remove_blocked_dns() && !sys_resolver {
-            let key = if p.block_scope_internet() && scope.is_global() {
+            let key = if p.block_scope_internet() && !allow_internet_override && scope.is_global() {
                 Some((CFG_OPTION_BLOCK_SCOPE_INTERNET_KEY, "Internet"))
             } else if p.block_scope_lan() && scope.is_lan() {
                 Some((CFG_OPTION_BLOCK_SCOPE_LAN_KEY, "LAN"))
@@ -156,17 +166,24 @@ pub fn filter_dns_response(
         return rr_cache;
     }
 
+    let binary_allows_internet = if sys_resolver {
+        false
+    } else {
+        crate::deciders::local_binary_permits_connection(conn, p)
+    };
+
     let resolver_scope = rr_cache
         .resolver
         .as_ref()
         .map(|r| r.ip_scope)
         .unwrap_or_default();
 
-    let section = filter_dns_section(
+    let section = filter_dns_section_with_override(
         std::mem::take(&mut rr_cache.answer),
         p,
         resolver_scope,
         sys_resolver,
+        binary_allows_internet,
     );
     rr_cache.answer = section.good;
     rr_cache.filtered_entries.extend(section.filtered);
@@ -174,11 +191,12 @@ pub fn filter_dns_response(
     let intervening_option_key = section.intervening_option_key;
 
     // Don't count the valid IPs in the extra section.
-    let extra = filter_dns_section(
+    let extra = filter_dns_section_with_override(
         std::mem::take(&mut rr_cache.extra),
         p,
         resolver_scope,
         sys_resolver,
+        binary_allows_internet,
     );
     rr_cache.extra = extra.good;
     rr_cache.filtered_entries.extend(extra.filtered);

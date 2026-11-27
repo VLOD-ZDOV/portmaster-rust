@@ -120,6 +120,20 @@ impl Endpoints {
         (EpResult::NoMatch, None)
     }
 
+    /// Returns whether the first matching rule explicitly permits `entity` via a
+    /// specific non-wildcard endpoint (domain, IP, CIDR, etc.), excluding `*`
+    /// and scope rules so global scope blocks cannot be bypassed by wildcards.
+    pub fn match_specific_permit(&self, entity: &mut Entity) -> bool {
+        for ep in &self.0 {
+            let (result, _) = ep.matches(entity);
+            if result != EpResult::NoMatch {
+                return result == EpResult::Permitted
+                    && !matches!(ep.kind, EndpointKind::Any | EndpointKind::Scope(_));
+            }
+        }
+        false
+    }
+
     /// Evaluates every rule against all entities before moving on to the
     /// next rule, like Go `MatchMulti`.
     pub fn match_multi(&self, entities: &mut [&mut Entity]) -> (EpResult, Option<Reason>) {

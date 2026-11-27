@@ -1166,3 +1166,105 @@ fn local_endpoint_accessors_ignore_global_rules() {
     let p = fx.profile(json!({}));
     assert!(!p.local_endpoints().is_set());
 }
+
+#[test]
+fn binary_specific_domain_permit_overrides_block_internet_only_for_that_binary() {
+    let fx = fx();
+    let env = TestEnv::default();
+
+    // Global permit must never unlock Internet access for another binary.
+    fx.config
+        .set_config_option("filter/endpoints", json!(["+ .allowed.example"]))
+        .unwrap();
+    fx.global.refresh().unwrap();
+
+    let local_a = Arc::new(Profile::new(Profile {
+        id: "app-a".to_string(),
+        source: SOURCE_LOCAL.to_string(),
+        linked_path: "/usr/bin/app-a".to_string(),
+        config: json!({
+            "filter": {
+                "blockInternet": true,
+                "endpoints": ["+ .allowed.example"]
+            }
+        })
+        .as_object()
+        .cloned()
+        .unwrap(),
+        ..Profile::default()
+    }));
+    let p_a = LayeredProfile::new(local_a, &fx.config, &fx.global);
+
+    let mut c_allowed = fx.conn("sub.allowed.example.", Some("8.8.8.8"), 443);
+    decide_on_connection(&mut c_allowed, Some(&p_a), &env);
+    assert_eq!(c_allowed.verdict, Verdict::Accept);
+
+    let mut c_other = fx.conn("other.example.", Some("8.8.8.8"), 443);
+    decide_on_connection(&mut c_other, Some(&p_a), &env);
+    assert_eq!(c_other.verdict, Verdict::Block);
+    assert_eq!(c_other.reason.option_key, CFG_OPTION_BLOCK_SCOPE_INTERNET_KEY);
+
+    // Explicit deny ahead of "+ .allowed.example" still blocks.
+    let local_denied = Arc::new(Profile::new(Profile {
+        id: "app-a-deny".to_string(),
+        source: SOURCE_LOCAL.to_string(),
+        linked_path: "/usr/bin/app-a".to_string(),
+        config: json!({
+            "filter": {
+                "blockInternet": true,
+                "endpoints": ["- blocked.allowed.example", "+ .allowed.example"]
+            }
+        })
+        .as_object()
+        .cloned()
+        .unwrap(),
+        ..Profile::default()
+    }));
+    let p_denied = LayeredProfile::new(local_denied, &fx.config, &fx.global);
+    let mut c_denied = fx.conn("blocked.allowed.example.", Some("8.8.8.8"), 443);
+    decide_on_connection(&mut c_denied, Some(&p_denied), &env);
+    assert_eq!(c_denied.verdict, Verdict::Block);
+
+    // Second binary without a local permit stays blocked despite global "+ .allowed.example".
+    let local_b = Arc::new(Profile::new(Profile {
+        id: "app-b".to_string(),
+        source: SOURCE_LOCAL.to_string(),
+        linked_path: "/usr/bin/app-b".to_string(),
+        config: json!({
+            "filter": {
+                "blockInternet": true
+            }
+        })
+        .as_object()
+        .cloned()
+        .unwrap(),
+        ..Profile::default()
+    }));
+    let p_b = LayeredProfile::new(local_b, &fx.config, &fx.global);
+    let mut c_b = fx.conn("sub.allowed.example.", Some("8.8.8.8"), 443);
+    decide_on_connection(&mut c_b, Some(&p_b), &env);
+    assert_eq!(c_b.verdict, Verdict::Block);
+    assert_eq!(c_b.reason.option_key, CFG_OPTION_BLOCK_SCOPE_INTERNET_KEY);
+
+    // Wildcard "+ *" in the binary profile must not bypass blockInternet.
+    let local_wild = Arc::new(Profile::new(Profile {
+        id: "app-wild".to_string(),
+        source: SOURCE_LOCAL.to_string(),
+        linked_path: "/usr/bin/app-wild".to_string(),
+        config: json!({
+            "filter": {
+                "blockInternet": true,
+                "endpoints": ["+ *"]
+            }
+        })
+        .as_object()
+        .cloned()
+        .unwrap(),
+        ..Profile::default()
+    }));
+    let p_wild = LayeredProfile::new(local_wild, &fx.config, &fx.global);
+    let mut c_wild = fx.conn("other.example.", Some("8.8.8.8"), 443);
+    decide_on_connection(&mut c_wild, Some(&p_wild), &env);
+    assert_eq!(c_wild.verdict, Verdict::Block);
+    assert_eq!(c_wild.reason.option_key, CFG_OPTION_BLOCK_SCOPE_INTERNET_KEY);
+}

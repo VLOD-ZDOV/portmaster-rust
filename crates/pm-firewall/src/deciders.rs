@@ -233,6 +233,39 @@ pub fn check_connectivity_domain(
     false
 }
 
+/// Returns whether `conn` belongs to an identified binary whose own local profile
+/// explicitly allows the target endpoint via a non-wildcard `+` rule.
+pub(crate) fn local_binary_permits_connection(
+    conn: &mut Connection,
+    p: &LayeredProfile,
+) -> bool {
+    let Some(process) = conn.process.as_deref() else {
+        return false;
+    };
+    if process.pid < 0 || is_system_resolver(process) {
+        return false;
+    }
+    let local = p.local_profile();
+    if local.source != pm_profile::SOURCE_LOCAL || pm_profile::is_special_profile_id(&local.id) {
+        return false;
+    }
+    if local.linked_path.is_empty()
+        && local.presentation_path.is_empty()
+        && local.fingerprints.is_empty()
+    {
+        return false;
+    }
+    let Some(entity) = conn.entity.as_mut() else {
+        return false;
+    };
+    let endpoints = if conn.inbound {
+        p.local_service_endpoints()
+    } else {
+        p.local_endpoints()
+    };
+    endpoints.match_specific_permit(entity)
+}
+
 pub fn check_connection_scope(
     conn: &mut Connection,
     p: &LayeredProfile,
@@ -243,7 +276,10 @@ pub fn check_connection_scope(
     if conn.conn_type == ConnectionType::Dns {
         // DNS is expected to resolve to LAN or Internet addresses.
         // Localhost queries are immediately responded to by the nameserver.
-        if p.block_scope_internet() && p.block_scope_lan() {
+        if p.block_scope_internet()
+            && p.block_scope_lan()
+            && !local_binary_permits_connection(conn, p)
+        {
             conn.block(
                 "Internet and LAN access blocked",
                 CFG_OPTION_BLOCK_SCOPE_INTERNET_KEY,
@@ -253,13 +289,13 @@ pub fn check_connection_scope(
         return false;
     }
 
-    let Some(entity) = &conn.entity else {
+    let Some(ip_scope) = conn.entity.as_ref().map(|entity| entity.ip_scope) else {
         return false;
     };
     // Check if the network scope is permitted.
-    match entity.ip_scope {
+    match ip_scope {
         IpScope::Global | IpScope::GlobalMulticast => {
-            if p.block_scope_internet() {
+            if p.block_scope_internet() && !local_binary_permits_connection(conn, p) {
                 conn.deny("Internet access blocked", CFG_OPTION_BLOCK_SCOPE_INTERNET_KEY);
                 return true;
             }

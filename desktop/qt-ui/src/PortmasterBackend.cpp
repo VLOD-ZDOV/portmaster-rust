@@ -9,6 +9,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QHostAddress>
 #include <QIcon>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -26,6 +27,7 @@
 #include <QStyleHints>
 #endif
 #include <QTextStream>
+#include <QTimeZone>
 #include <QUrl>
 #include <QtMath>
 #include <cmath>
@@ -382,7 +384,11 @@ ConnRecord normalizeConnRecord(const QJsonObject& raw, bool session) {
     if (stVal.isString()) {
         QDateTime dt = QDateTime::fromString(stVal.toString(), Qt::ISODateWithMs);
         if (!dt.isValid()) dt = QDateTime::fromString(stVal.toString(), Qt::ISODate);
-        if (dt.isValid()) startedTs = dt.toSecsSinceEpoch();
+        if (dt.isValid()) {
+            // SQLite history rows without a Z/+offset suffix are stored in UTC.
+            if (dt.timeSpec() == Qt::LocalTime) dt.setTimeZone(QTimeZone::utc());
+            startedTs = dt.toSecsSinceEpoch();
+        }
     } else if (stVal.isDouble()) {
         qint64 rawTs = static_cast<qint64>(stVal.toDouble(0));
         startedTs = (rawTs > 100000000000LL) ? (rawTs / 1000) : rawTs;
@@ -429,16 +435,22 @@ struct ChartSample {
 QVariantList buildChartBinsHelper(const QVector<ChartSample>& samples,
                                   bool internetOnly,
                                   bool preferRecentWindow,
-                                  qint64 nowSec) {
+                                  qint64 nowSec,
+                                  const QHash<qint64, QPair<qint64, qint64>>* liveBwBins = nullptr) {
     constexpr int kBins = 36;
+    constexpr qint64 kLiveStepSec = 20; // Fixed 20s wall-clock buckets (36 * 20s = 12 min) prevent edge jitter.
     QVector<int> okBins(kBins, 0);
     QVector<int> blkBins(kBins, 0);
     QVector<qint64> rxBins(kBins, 0);
     QVector<qint64> txBins(kBins, 0);
 
+    const qint64 curLiveBucket = (nowSec / kLiveStepSec) * kLiveStepSec;
+    const qint64 liveWinEnd = curLiveBucket + kLiveStepSec;
+    const qint64 liveWinStart = liveWinEnd - kBins * kLiveStepSec;
+
     qint64 minTs = 0;
     qint64 maxTs = 0;
-    int recentCount = 0;
+    bool hasRecent = false;
     int filteredCount = 0;
     bool haveTs = false;
     for (const auto& s : samples) {
@@ -452,24 +464,36 @@ QVariantList buildChartBinsHelper(const QVector<ChartSample>& samples,
                 if (s.ts < minTs) minTs = s.ts;
                 if (s.ts > maxTs) maxTs = s.ts;
             }
-            if (s.ts >= nowSec - 600) ++recentCount;
+            if (s.ts >= liveWinStart) hasRecent = true;
+        }
+    }
+    if (liveBwBins && !hasRecent) {
+        for (auto it = liveBwBins->cbegin(); it != liveBwBins->cend(); ++it) {
+            if (it.key() >= liveWinStart && (it.value().first > 0 || it.value().second > 0)) {
+                hasRecent = true;
+                break;
+            }
         }
     }
 
-    qint64 winEnd = nowSec;
-    qint64 winStart = nowSec - 600;
+    qint64 stepSec = kLiveStepSec;
+    qint64 winEnd = liveWinEnd;
+    qint64 winStart = liveWinStart;
     if (preferRecentWindow) {
-        winEnd = (recentCount >= 3) ? nowSec : (maxTs > 0 ? maxTs : nowSec);
-        winStart = (recentCount >= 3) ? (nowSec - 600) : (minTs > 0 ? qMax(minTs, winEnd - 3600) : (winEnd - 600));
-        if (winEnd <= winStart) winStart = winEnd - 600;
+        if (!hasRecent && haveTs) {
+            stepSec = 60;
+            winEnd = ((maxTs / stepSec) + 1) * stepSec;
+            winStart = winEnd - kBins * stepSec;
+        }
     } else if (haveTs) {
-        winEnd = maxTs;
-        winStart = (maxTs - minTs >= 36) ? minTs : (maxTs - 360);
-        if (winEnd <= winStart) winStart = winEnd - 60;
+        const qint64 span = qMax<qint64>(1, maxTs - minTs);
+        stepSec = qMax<qint64>(kLiveStepSec, ((span / kBins) / 10 + 1) * 10);
+        if (stepSec > 20 && stepSec < 60) stepSec = 60;
+        winEnd = ((maxTs / stepSec) + 1) * stepSec;
+        winStart = winEnd - kBins * stepSec;
     }
 
-    const qint64 spanSec = qMax<qint64>(36, winEnd - winStart);
-    const double span = static_cast<double>(spanSec);
+    const qint64 spanSec = kBins * stepSec;
     const QString tsFmt = (spanSec <= 180)
         ? QStringLiteral("HH:mm:ss")
         : (spanSec > 36 * 3600 ? QStringLiteral("MM-dd HH:mm") : QStringLiteral("HH:mm"));
@@ -479,16 +503,14 @@ QVariantList buildChartBinsHelper(const QVector<ChartSample>& samples,
         if (internetOnly && !s.internet) continue;
         int bin = -1;
         if (haveTs && s.ts > 0) {
-            if (preferRecentWindow && (s.ts < winStart || s.ts > winEnd + 10)) {
+            if (s.ts < winStart || s.ts > winEnd + stepSec) {
                 ++sampleIdx;
                 continue;
             }
-            const double norm = qBound(0.0, (static_cast<double>(s.ts) - winStart) / span, 0.9999);
-            bin = static_cast<int>(norm * kBins);
+            bin = qBound(0, static_cast<int>((s.ts - winStart) / stepSec), kBins - 1);
         } else {
             bin = qBound(0, kBins - 1 - (sampleIdx * kBins) / qMax(1, filteredCount), kBins - 1);
         }
-        bin = qBound(0, bin, kBins - 1);
         if (s.blocked) ++blkBins[bin];
         else ++okBins[bin];
         rxBins[bin] += s.rx;
@@ -496,10 +518,20 @@ QVariantList buildChartBinsHelper(const QVector<ChartSample>& samples,
         ++sampleIdx;
     }
 
+    if (liveBwBins) {
+        for (auto it = liveBwBins->cbegin(); it != liveBwBins->cend(); ++it) {
+            const qint64 bt = it.key();
+            if (bt < winStart || bt >= winEnd) continue;
+            const int bin = qBound(0, static_cast<int>((bt - winStart) / stepSec), kBins - 1);
+            rxBins[bin] += it.value().first;
+            txBins[bin] += it.value().second;
+        }
+    }
+
     QVariantList out;
     out.reserve(kBins);
     for (int i = 0; i < kBins; ++i) {
-        const qint64 binTs = winStart + qRound64((static_cast<double>(i) / qMax(1, kBins - 1)) * span);
+        const qint64 binTs = winStart + static_cast<qint64>(i) * stepSec;
         out.append(QVariantMap{
             {QStringLiteral("allowed"), okBins[i]},
             {QStringLiteral("blocked"), blkBins[i]},
@@ -727,6 +759,7 @@ PortmasterBackend::PortmasterBackend(bool startBackground, bool withTray, bool d
       m_appsTickTimer(new QTimer(this)),
       m_settingsTimer(new QTimer(this)),
       m_connsTimer(new QTimer(this)),
+      m_chartTickTimer(new QTimer(this)),
       m_connModel(new ConnectionListModel(&m_connections, this)),
       m_withTray(withTray),
       m_iconStore(QSharedPointer<PortmasterIconStore>::create()),
@@ -792,11 +825,17 @@ PortmasterBackend::PortmasterBackend(bool startBackground, bool withTray, bool d
         scheduleAppsTickRebuild();
     });
 
+    m_chartTickTimer->setInterval(10000);
+    connect(m_chartTickTimer, &QTimer::timeout, this, [this]() {
+        rebuildChartBinsOnly();
+    });
+
     if (m_withTray) setupTray();
     if (m_demoMode) {
         loadDemoData();
         return;
     }
+    m_chartTickTimer->start();
     connect(m_api, &PortApiClient::connectionChanged, this, &PortmasterBackend::onConnectionChanged);
     m_api->start();
 
@@ -813,6 +852,7 @@ PortmasterBackend::~PortmasterBackend() {
     if (m_appsTickTimer) m_appsTickTimer->stop();
     if (m_settingsTimer) m_settingsTimer->stop();
     if (m_connsTimer) m_connsTimer->stop();
+    if (m_chartTickTimer) m_chartTickTimer->stop();
 }
 
 QQuickImageProvider* PortmasterBackend::createIconProvider() const {
@@ -1419,6 +1459,33 @@ void PortmasterBackend::startSubscriptions() {
             if (it != m_connSeqById.cend()) {
                 const qint64 idx = m_connHeadSeq - it.value();
                 if (idx >= 0 && static_cast<size_t>(idx) < m_connections.size()) {
+                    const ConnRecord& prev = m_connections[static_cast<size_t>(idx)];
+                    const qint64 drx = qMax<qint64>(0, rec.rx - prev.rx);
+                    const qint64 dtx = qMax<qint64>(0, rec.tx - prev.tx);
+                    rec.accountedLiveRx = qMin(rec.rx, prev.accountedLiveRx + drx);
+                    rec.accountedLiveTx = qMin(rec.tx, prev.accountedLiveTx + dtx);
+                    if (drx > 0 || dtx > 0) {
+                        const qint64 bucketTs = (QDateTime::currentSecsSinceEpoch() / 20) * 20;
+                        auto& slot = m_liveBwBins[bucketTs];
+                        slot.first += drx;
+                        slot.second += dtx;
+                        if (rec.scope.contains(QLatin1String("internet"))) {
+                            auto& islot = m_liveInetBwBins[bucketTs];
+                            islot.first += drx;
+                            islot.second += dtx;
+                        }
+                        if (m_liveBwBins.size() > 400) {
+                            const qint64 cutoff = bucketTs - 7200;
+                            for (auto bit = m_liveBwBins.begin(); bit != m_liveBwBins.end();) {
+                                if (bit.key() < cutoff) bit = m_liveBwBins.erase(bit);
+                                else ++bit;
+                            }
+                            for (auto bit = m_liveInetBwBins.begin(); bit != m_liveInetBwBins.end();) {
+                                if (bit.key() < cutoff) bit = m_liveInetBwBins.erase(bit);
+                                else ++bit;
+                            }
+                        }
+                    }
                     m_connections[static_cast<size_t>(idx)] = std::move(rec);
                     scheduleConnsRebuild();
                     return;
@@ -1907,6 +1974,8 @@ void PortmasterBackend::setUiWindowVisible(bool visible) {
         if (m_connsDirty) {
             m_connsDirty = false;
             rebuildConnectionsCache();
+        } else if (!m_demoMode) {
+            rebuildChartBinsOnly();
         }
         if (!m_demoMode && m_api->isConnected()) {
             refreshHttpData();
@@ -2283,8 +2352,10 @@ void PortmasterBackend::rebuildConnectionsCache() {
             countryCounts[cc] += 1;
         }
 
-        if (chartSamples.size() < 1500) {
-            chartSamples.append({c.startedTs, isBlk, isInet, rx, tx});
+        if (chartSamples.size() < 5000) {
+            const qint64 baseRx = qMax<qint64>(0, rx - c.accountedLiveRx);
+            const qint64 baseTx = qMax<qint64>(0, tx - c.accountedLiveTx);
+            chartSamples.append({c.startedTs, isBlk, isInet, baseRx, baseTx});
         }
     }
 
@@ -2300,7 +2371,8 @@ void PortmasterBackend::rebuildConnectionsCache() {
     m_connInetRxStr = formatBytes(inetRx);
     m_connInetTxStr = formatBytes(inetTx);
 
-    m_connChartBins = buildChartBinsHelper(chartSamples, m_dashboardChartInternetOnly, true, nowSec);
+    const auto& liveBw = m_dashboardChartInternetOnly ? m_liveInetBwBins : m_liveBwBins;
+    m_connChartBins = buildChartBinsHelper(chartSamples, m_dashboardChartInternetOnly, true, nowSec, &liveBw);
 
     QVector<QPair<QString, int>> cList;
     cList.reserve(countryCounts.size());
@@ -2353,6 +2425,26 @@ void PortmasterBackend::rebuildConnectionsCache() {
 
     m_connModel->syncFrom(limit);
     emit connectionsChanged();
+}
+
+void PortmasterBackend::rebuildChartBinsOnly() {
+    if (!m_uiWindowVisible || m_demoMode) return;
+    const qint64 nowSec = QDateTime::currentSecsSinceEpoch();
+    QVector<ChartSample> chartSamples;
+    chartSamples.reserve(qMin(static_cast<int>(m_connections.size()), 5000));
+    for (const auto& c : m_connections) {
+        if (chartSamples.size() >= 5000) break;
+        const QString& vd = c.verdict;
+        const bool isBlk = (vd == QLatin1String("block") || vd == QLatin1String("drop") || vd == QLatin1String("failed"));
+        const bool isInet = c.scope.contains(QLatin1String("internet"));
+        const qint64 baseRx = qMax<qint64>(0, c.rx - c.accountedLiveRx);
+        const qint64 baseTx = qMax<qint64>(0, c.tx - c.accountedLiveTx);
+        chartSamples.append({c.startedTs, isBlk, isInet, baseRx, baseTx});
+    }
+    const auto& liveBw = m_dashboardChartInternetOnly ? m_liveInetBwBins : m_liveBwBins;
+    m_connChartBins = buildChartBinsHelper(chartSamples, m_dashboardChartInternetOnly, true, nowSec, &liveBw);
+    emit connectionsChanged();
+    if (!m_selectedProfileKey.isEmpty()) rebuildSelectedAppCache();
 }
 
 QVariantMap PortmasterBackend::buildSettingMap(const QJsonObject& s, const QJsonObject* appCfg) const {
@@ -2514,15 +2606,42 @@ void PortmasterBackend::applyAppPreset(const QString& scopedKey, const QString& 
 }
 
 void PortmasterBackend::addAppRule(const QString& scopedKey, const QString& rule) {
-    if (!m_profiles.contains(scopedKey) || rule.trimmed().isEmpty()) return;
+    const QString trimmed = rule.trimmed();
+    if (!m_profiles.contains(scopedKey) || trimmed.isEmpty()) return;
     QJsonObject p = m_profiles.value(scopedKey);
     QJsonObject cfg = p.value(QStringLiteral("Config")).toObject();
     QJsonArray arr = readProfileCfg(cfg, QStringLiteral("filter/endpoints")).toArray();
-    for (const auto& v : arr) {
-        if (v.toString() == rule.trimmed()) return;
+
+    QJsonArray next;
+    next.append(trimmed);
+
+    QStringList dropList{trimmed};
+    if (trimmed.startsWith(QLatin1String("+ ")) || trimmed.startsWith(QLatin1String("- "))) {
+        const QString sign = trimmed.left(1);
+        const QString oppSign = (sign == QLatin1String("+")) ? QStringLiteral("-") : QStringLiteral("+");
+        const QString target = trimmed.mid(2).trimmed();
+        if (!target.isEmpty()) {
+            dropList.append(oppSign + QStringLiteral(" ") + target);
+            const QString bare = target.startsWith('.') ? target.mid(1) : QString();
+            const QString dotted = target.startsWith('.') ? QString() : (QStringLiteral(".") + target);
+            if (!bare.isEmpty()) {
+                dropList.append(sign + QStringLiteral(" ") + bare);
+                dropList.append(oppSign + QStringLiteral(" ") + bare);
+            }
+            if (!dotted.isEmpty()) {
+                dropList.append(sign + QStringLiteral(" ") + dotted);
+                dropList.append(oppSign + QStringLiteral(" ") + dotted);
+            }
+        }
     }
-    arr.append(rule.trimmed());
-    setAppSetting(scopedKey, QStringLiteral("filter/endpoints"), arr.toVariantList());
+
+    for (const auto& v : arr) {
+        const QString cur = v.toString().trimmed();
+        if (!cur.isEmpty() && !dropList.contains(cur)) {
+            next.append(cur);
+        }
+    }
+    setAppSetting(scopedKey, QStringLiteral("filter/endpoints"), next.toVariantList());
 }
 
 void PortmasterBackend::removeAppRule(const QString& scopedKey, const QString& rule) {
@@ -2613,20 +2732,37 @@ void PortmasterBackend::importProfile(const QString& rawPayload) {
 void PortmasterBackend::allowOrBlockConnection(const QString& connId, bool allow) {
     for (auto& c : m_connections) {
         if (c.id != connId) continue;
-        const QString& prof = c.profile;
-        QString dbKey = prof.startsWith(QLatin1String("core:")) ? prof : QStringLiteral("core:profiles/%1").arg(prof.contains('/') ? prof : QStringLiteral("local/") + prof);
-        const QString dom = c.domain.trimmed();
+        QString dbKey = !c.profileKey.isEmpty()
+                            ? c.profileKey
+                            : (c.profile.startsWith(QLatin1String("core:"))
+                                   ? c.profile
+                                   : QStringLiteral("core:profiles/%1").arg(c.profile.contains('/') ? c.profile : QStringLiteral("local/") + c.profile));
+        QString dom = c.domain.trimmed();
+        while (dom.startsWith('.')) dom.remove(0, 1);
+        while (dom.endsWith('.')) dom.chop(1);
         const QString ip = c.ip.trimmed();
-        const QString pat = dom.isEmpty() ? ip : (QStringLiteral(".") + dom);
+        const bool domIsIp = !dom.isEmpty() && !QHostAddress(dom).isNull();
+        const QString pat = (dom.isEmpty() || domIsIp) ? (ip.isEmpty() ? dom : ip) : (QStringLiteral(".") + dom);
+        if (pat.isEmpty()) return;
+
+        const QString rule = QStringLiteral("%1 %2").arg(allow ? QStringLiteral("+") : QStringLiteral("-"), pat);
         if (m_demoMode) {
             c.verdict = allow ? QStringLiteral("permit") : QStringLiteral("block");
             c.reason = allow ? QStringLiteral("Permitted by demo rule") : QStringLiteral("Blocked by demo rule");
+            addAppRule(dbKey, rule);
             rebuildConnectionsCache();
             rebuildAppsCache();
             if (!m_selectedProfileKey.isEmpty()) rebuildSelectedAppCache();
             return;
         }
-        if (!pat.isEmpty()) addAppRule(dbKey, QStringLiteral("%1 %2").arg(allow ? QStringLiteral("+") : QStringLiteral("-"), pat));
+        if (m_profiles.contains(dbKey)) {
+            addAppRule(dbKey, rule);
+            emit toastMessage(
+                allow ? (m_ru ? QStringLiteral("Правило разрешено") : QStringLiteral("Rule permitted"))
+                      : (m_ru ? QStringLiteral("Правило заблокировано") : QStringLiteral("Rule blocked")),
+                rule,
+                false);
+        }
         return;
     }
 }
@@ -2635,6 +2771,8 @@ void PortmasterBackend::clearHistory() {
     if (m_demoMode) {
         m_connections.clear();
         m_connSeqById.clear();
+        m_liveBwBins.clear();
+        m_liveInetBwBins.clear();
         m_connHeadSeq = 0;
         m_historyLoaded = true;
         rebuildConnectionsCache();
@@ -2645,6 +2783,8 @@ void PortmasterBackend::clearHistory() {
         if (code >= 200 && code < 300) {
             m_connections.clear();
             m_connSeqById.clear();
+            m_liveBwBins.clear();
+            m_liveInetBwBins.clear();
             m_connHeadSeq = 0;
             m_historyLoaded = true;
             rebuildConnectionsCache();
@@ -3345,6 +3485,8 @@ void PortmasterBackend::loadDemoData() {
 
     m_connections.clear();
     m_connSeqById.clear();
+    m_liveBwBins.clear();
+    m_liveInetBwBins.clear();
     const qint64 now = QDateTime::currentSecsSinceEpoch();
     struct DemoConnSpec {
         const char* prof;
