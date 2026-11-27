@@ -171,3 +171,40 @@ fn config_generates_xhttp_kcp_mux_and_fragment_options() {
     assert_eq!(kcp_cfg["outbounds"][0]["streamSettings"]["kcpSettings"]["header"]["type"], "wechat-video");
     assert_eq!(kcp_cfg["outbounds"][0]["streamSettings"]["kcpSettings"]["seed"], "myseed");
 }
+
+#[test]
+fn vmess_sni_cipher_and_hysteria2_roundtrip() {
+    use base64::Engine as _;
+    let vmess_json = serde_json::json!({
+        "v": "2",
+        "ps": "VMess-Test",
+        "add": "203.0.113.10",
+        "port": "443",
+        "id": "11111111-1111-4111-8111-111111111111",
+        "scy": "chacha20-poly1305",
+        "net": "ws",
+        "host": "cdn.example.com",
+        "path": "/ws",
+        "tls": "tls",
+        "sni": "sni.example.com"
+    });
+    let link = format!(
+        "vmess://{}",
+        base64::engine::general_purpose::STANDARD.encode(vmess_json.to_string().as_bytes())
+    );
+    let parsed = pm_xray::parser::parse_link(&link).unwrap();
+    assert_eq!(parsed.sni, "sni.example.com");
+    assert_eq!(parsed.method, "chacha20-poly1305");
+    assert_eq!(parsed.security, "tls");
+    let cfg = generate_config(&node(&link), 1080, InboundProtocol::Socks).unwrap();
+    assert_eq!(cfg["outbounds"][0]["settings"]["security"], "chacha20-poly1305");
+    assert_eq!(cfg["outbounds"][0]["streamSettings"]["tlsSettings"]["serverName"], "sni.example.com");
+
+    let hy = "hysteria2://secret@203.0.113.20:20000-20010?sni=hy.example.com&pinSHA256=deadbeef&obfs=salamander&obfs-password=pass1234#HY2";
+    let parsed_hy = pm_xray::parser::parse_link(hy).unwrap();
+    let encoded_hy = pm_xray::parser::encode_share_link(&parsed_hy);
+    let reparsed_hy = pm_xray::parser::parse_link(&encoded_hy).unwrap();
+    assert_eq!(reparsed_hy.hy_pin, "deadbeef");
+    assert_eq!(reparsed_hy.hy_mport, "20000-20010");
+    assert_eq!(reparsed_hy.hy_obfs, "salamander");
+}

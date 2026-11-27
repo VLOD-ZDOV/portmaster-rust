@@ -175,11 +175,11 @@ ApplicationWindow {
 
                     DashboardView {
                         onOpenMonitorPreset: function(internetOnly, verdict, query) {
-                            monitorView.scopeInternet = internetOnly
-                            monitorView.scopeLan = false
-                            monitorView.scopeLocal = false
-                            monitorView.dirFilter = "all"
-                            monitorView.verdictFilter = verdict
+                            pm.connectionsModel.scopeInternet = internetOnly
+                            pm.connectionsModel.scopeLan = false
+                            pm.connectionsModel.scopeLocal = false
+                            pm.connectionsModel.dirFilter = "all"
+                            pm.connectionsModel.verdictFilter = verdict
                             monitorView.applySearch(query)
                             win.currentPage = "monitor"
                         }

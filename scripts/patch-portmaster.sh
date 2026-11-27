@@ -207,7 +207,11 @@ for exe_link in /proc/[0-9]*/exe; do
     TRAY_EXE_LIST+=("${exe_target}")
     if [[ -z "${TRAY_USER}" ]]; then
       TRAY_USER=$(ps -p "${pid}" -o user= 2>/dev/null | xargs || true)
-      TRAY_LAUNCH_EXE="${exe_target}"
+      if [[ "${exe_base}" == "portmaster-qt" && -x "${INSTALL_DIR}/portmaster" ]]; then
+        TRAY_LAUNCH_EXE="${INSTALL_DIR}/portmaster"
+      else
+        TRAY_LAUNCH_EXE="${exe_target}"
+      fi
       if [[ -r "/proc/${pid}/environ" ]]; then
         while IFS= read -r -d '' env_entry; do
           case "${env_entry}" in

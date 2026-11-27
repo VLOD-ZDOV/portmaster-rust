@@ -354,10 +354,10 @@ Item {
             ColumnLayout {
                 spacing: 10
 
-                // Per-App Activity Graph Card (Green Allowed / Red Blocked)
+                // Per-App Activity Graph Card (Connections or RX/TX Data)
                 Rectangle {
                     Layout.fillWidth: true
-                    height: 122
+                    height: 152
                     radius: 6
                     color: "#18181a"
                     border.color: "#26262a"
@@ -367,46 +367,24 @@ Item {
                         anchors.margins: 10
                         spacing: 6
 
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 8
-                            Label {
-                                text: pm.isRu ? "График соединений приложения" : "App Connections Graph"
-                                color: "#dcdce4"; font.pixelSize: 12; font.bold: true
-                            }
-                            Rectangle {
-                                height: 22; radius: 4
-                                color: pm.appChartInternetOnly ? "#173252" : "#222328"
-                                border.color: pm.appChartInternetOnly ? "#4e97fa" : "#343640"
-                                implicitWidth: appInetLbl.implicitWidth + 14
-                                Label {
-                                    id: appInetLbl; anchors.centerIn: parent
-                                    text: pm.isRu ? "Только интернет" : "Internet Only"
-                                    color: pm.appChartInternetOnly ? "#89b7ff" : "#8e8e98"
-                                    font.pixelSize: 10; font.bold: pm.appChartInternetOnly
-                                }
-                                MouseArea {
-                                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                    onClicked: pm.setAppChartInternetOnly(!pm.appChartInternetOnly)
-                                }
-                            }
-                            Item { Layout.fillWidth: true }
-                            Rectangle { width: 8; height: 8; radius: 4; color: "#1de966" }
-                            Label {
-                                text: "OK: " + (pm.appChartInternetOnly ? pm.selectedAppInetAllowed : pm.selectedAppAllAllowed)
-                                color: "#1de966"; font.pixelSize: 11; font.bold: true
-                            }
-                            Item { width: 8 }
-                            Rectangle { width: 8; height: 8; radius: 4; color: "#e01d1d" }
-                            Label {
-                                text: (pm.isRu ? "Блок: " : "Blocked: ") + (pm.appChartInternetOnly ? pm.selectedAppInetBlocked : pm.selectedAppAllBlocked)
-                                color: "#f03c3c"; font.pixelSize: 11; font.bold: true
-                            }
+                        PmChartHeader {
+                            title: pm.isRu
+                                   ? (pm.chartDataMode ? "График трафика приложения (RX / TX)" : "График соединений приложения")
+                                   : (pm.chartDataMode ? "App Traffic Timeline (RX / TX)" : "App Connections Graph")
+                            showInternetToggle: true
+                            internetOnly: pm.appChartInternetOnly
+                            onToggleInternet: pm.setAppChartInternetOnly(!pm.appChartInternetOnly)
+                            okCount: pm.appChartInternetOnly ? pm.selectedAppInetAllowed : pm.selectedAppAllAllowed
+                            blockedCount: pm.appChartInternetOnly ? pm.selectedAppInetBlocked : pm.selectedAppAllBlocked
+                            rxStr: pm.appChartInternetOnly ? (root.app.rxInetStr || "0 B") : (root.app.rxStr || "0 B")
+                            txStr: pm.appChartInternetOnly ? (root.app.txInetStr || "0 B") : (root.app.txStr || "0 B")
                         }
 
                         ConnChartCanvas {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
+                            showAxes: true
+                            dataMode: pm.chartDataMode
                             bins: pm.selectedAppChartBins
                         }
                     }

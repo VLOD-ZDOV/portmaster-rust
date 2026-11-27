@@ -6,79 +6,11 @@ Item {
     id: root
     signal openApp(string key)
 
-    property string searchQuery: ""
-    property bool scopeInternet: false
-    property bool scopeLan: false
-    property bool scopeLocal: false
-    property string dirFilter: "all"     // "all" | "outbound" | "inbound"
-    property string verdictFilter: "all" // "all" | "permit" | "xray" | "block"
-    property bool hideDnsNoise: true
-    property bool hideLocalhost: true
     property string expandedId: ""
-    property var cachedFiltered: []
 
     function applySearch(q) {
         searchField.text = q || ""
-        searchQuery = q || ""
-    }
-
-    function recompute() {
-        var list = pm.connections || []
-        var q = searchQuery.toLowerCase().trim()
-        var anyScope = scopeInternet || scopeLan || scopeLocal
-        var out = []
-        for (var i = 0; i < list.length; i++) {
-            var c = list[i]
-            if (q !== "") {
-                var hay = ((c.target || "") + " " + (c.ip || "") + " " + (c.app || "") + " " + (c.country || "") + " " + (c.asOwner || "")).toLowerCase()
-                if (hay.indexOf(q) < 0) continue
-            }
-            if (dirFilter !== "all") {
-                var dir = (c.direction || "outbound").toLowerCase()
-                if (dir !== dirFilter) continue
-            }
-            if (anyScope) {
-                var sc = (c.scope || "").toLowerCase()
-                var hit = (scopeInternet && sc.indexOf("internet") >= 0) ||
-                          (scopeLan && sc.indexOf("lan") >= 0) ||
-                          (scopeLocal && sc.indexOf("local") >= 0)
-                if (!hit) continue
-            }
-            if (verdictFilter !== "all") {
-                var vd = (c.verdict || "").toLowerCase()
-                var isBlk = (vd === "block" || vd === "drop" || vd === "failed")
-                var isXray = !!c.tunneled || vd === "tunneled"
-                if (verdictFilter === "block" && !isBlk) continue
-                if (verdictFilter === "xray" && !isXray) continue
-                if (verdictFilter === "permit" && isBlk) continue
-            }
-            if (hideDnsNoise) {
-                var rport = c.port || 0
-                if (rport === 53 || rport === 853) continue
-            }
-            if (hideLocalhost && !scopeLocal) {
-                var scLo = (c.scope || "").toLowerCase()
-                var cip = c.ip || ""
-                if (scLo.indexOf("local") >= 0 || cip === "127.0.0.1" || cip === "::1" || cip.indexOf("127.") === 0 || cip === "::") continue
-            }
-            out.push(c)
-        }
-        cachedFiltered = out
-    }
-
-    onSearchQueryChanged: recompute()
-    onScopeInternetChanged: recompute()
-    onScopeLanChanged: recompute()
-    onScopeLocalChanged: recompute()
-    onDirFilterChanged: recompute()
-    onVerdictFilterChanged: recompute()
-    onHideDnsNoiseChanged: recompute()
-    onHideLocalhostChanged: recompute()
-    onVisibleChanged: if (visible) recompute()
-    Component.onCompleted: recompute()
-    Connections {
-        target: pm
-        function onConnectionsChanged() { if (root.visible) root.recompute() }
+        pm.connectionsModel.searchQuery = q || ""
     }
 
     ColumnLayout {
@@ -103,7 +35,7 @@ Item {
                 implicitWidth: cntLbl.implicitWidth + 16
                 Label {
                     id: cntLbl; anchors.centerIn: parent
-                    text: root.cachedFiltered.length + " / " + (pm.connections || []).length + (pm.historyLoading ? " ↻" : "")
+                    text: pm.connectionsModel.count + " / " + pm.connectionsTotal + (pm.historyLoading ? " ↻" : "")
                     color: pm.historyLoading ? "#89b7ff" : "#9e9ea6"; font.pixelSize: 11
                 }
             }
@@ -134,37 +66,39 @@ Item {
 
             Rectangle {
                 height: 22; radius: 4
-                color: root.hideDnsNoise ? "#1c3354" : "#1c1c1e"
-                border.color: root.hideDnsNoise ? "#4e97fa" : "#2a2a2e"
+                color: pm.connectionsModel.hideDnsNoise ? "#1c3354" : "#1c1c1e"
+                border.color: pm.connectionsModel.hideDnsNoise ? "#4e97fa" : "#2a2a2e"
                 implicitWidth: dnsHideLbl.implicitWidth + 12
                 Label {
                     id: dnsHideLbl; anchors.centerIn: parent
                     text: pm.isRu ? "Скрыть DNS" : "Hide DNS"
-                    color: root.hideDnsNoise ? "#89b7ff" : "#888894"
-                    font.pixelSize: 10; font.bold: root.hideDnsNoise
+                    color: pm.connectionsModel.hideDnsNoise ? "#89b7ff" : "#888894"
+                    font.pixelSize: 10; font.bold: pm.connectionsModel.hideDnsNoise
                 }
                 MouseArea {
                     anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                    onClicked: root.hideDnsNoise = !root.hideDnsNoise
+                    onClicked: pm.connectionsModel.hideDnsNoise = !pm.connectionsModel.hideDnsNoise
                 }
             }
 
             Rectangle {
                 height: 22; radius: 4
-                color: root.hideLocalhost ? "#1c3354" : "#1c1c1e"
-                border.color: root.hideLocalhost ? "#4e97fa" : "#2a2a2e"
+                color: pm.connectionsModel.hideLocalhost ? "#1c3354" : "#1c1c1e"
+                border.color: pm.connectionsModel.hideLocalhost ? "#4e97fa" : "#2a2a2e"
                 implicitWidth: localHideLbl.implicitWidth + 12
                 Label {
                     id: localHideLbl; anchors.centerIn: parent
                     text: pm.isRu ? "Скрыть локалхост" : "Hide Localhost"
-                    color: root.hideLocalhost ? "#89b7ff" : "#888894"
-                    font.pixelSize: 10; font.bold: root.hideLocalhost
+                    color: pm.connectionsModel.hideLocalhost ? "#89b7ff" : "#888894"
+                    font.pixelSize: 10; font.bold: pm.connectionsModel.hideLocalhost
                 }
                 MouseArea {
                     anchors.fill: parent; cursorShape: Qt.PointingHandCursor
                     onClicked: {
-                        root.hideLocalhost = !root.hideLocalhost
-                        if (root.hideLocalhost && root.scopeLocal) root.scopeLocal = false
+                        pm.connectionsModel.hideLocalhost = !pm.connectionsModel.hideLocalhost
+                        if (pm.connectionsModel.hideLocalhost && pm.connectionsModel.scopeLocal) {
+                            pm.connectionsModel.scopeLocal = false
+                        }
                     }
                 }
             }
@@ -185,7 +119,7 @@ Item {
                 placeholderTextColor: "#66666e"
                 color: "#ffffff"
                 font.pixelSize: 12
-                onTextChanged: root.searchQuery = text
+                onTextChanged: pm.connectionsModel.searchQuery = text
                 background: Rectangle {
                     color: "#1b1b1d"; radius: 4
                     border.color: parent.activeFocus ? "#4e97fa" : "#2c2c30"
@@ -226,26 +160,30 @@ Item {
                 }
                 ScopeChip {
                     label: pm.t("mon.all")
-                    act: !root.scopeInternet && !root.scopeLan && !root.scopeLocal
+                    act: !pm.connectionsModel.scopeInternet && !pm.connectionsModel.scopeLan && !pm.connectionsModel.scopeLocal
                     color: act ? "#2d2f38" : "#1c1c1e"
-                    onClicked: { root.scopeInternet = false; root.scopeLan = false; root.scopeLocal = false }
+                    onClicked: {
+                        pm.connectionsModel.scopeInternet = false
+                        pm.connectionsModel.scopeLan = false
+                        pm.connectionsModel.scopeLocal = false
+                    }
                 }
                 ScopeChip {
                     label: pm.t("mon.internet")
-                    act: root.scopeInternet
-                    onClicked: root.scopeInternet = !root.scopeInternet
+                    act: pm.connectionsModel.scopeInternet
+                    onClicked: pm.connectionsModel.scopeInternet = !pm.connectionsModel.scopeInternet
                 }
                 ScopeChip {
                     label: pm.t("mon.lan")
-                    act: root.scopeLan
-                    onClicked: root.scopeLan = !root.scopeLan
+                    act: pm.connectionsModel.scopeLan
+                    onClicked: pm.connectionsModel.scopeLan = !pm.connectionsModel.scopeLan
                 }
                 ScopeChip {
                     label: pm.t("mon.local")
-                    act: root.scopeLocal
+                    act: pm.connectionsModel.scopeLocal
                     onClicked: {
-                        root.scopeLocal = !root.scopeLocal
-                        if (root.scopeLocal) root.hideLocalhost = false
+                        pm.connectionsModel.scopeLocal = !pm.connectionsModel.scopeLocal
+                        if (pm.connectionsModel.scopeLocal) pm.connectionsModel.hideLocalhost = false
                     }
                 }
             }
@@ -261,10 +199,10 @@ Item {
                     delegate: Rectangle {
                         height: 24; radius: 12
                         implicitWidth: drLbl.implicitWidth + 16
-                        color: root.dirFilter === modelData.id ? "#2d2f38" : "#1c1c1e"
-                        border.color: root.dirFilter === modelData.id ? "#4e97fa" : "#2a2a2e"
-                        Label { id: drLbl; anchors.centerIn: parent; text: modelData.label; color: root.dirFilter === modelData.id ? "#ffffff" : "#8e8e94"; font.pixelSize: 11; font.bold: root.dirFilter === modelData.id }
-                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.dirFilter = modelData.id }
+                        color: pm.connectionsModel.dirFilter === modelData.id ? "#2d2f38" : "#1c1c1e"
+                        border.color: pm.connectionsModel.dirFilter === modelData.id ? "#4e97fa" : "#2a2a2e"
+                        Label { id: drLbl; anchors.centerIn: parent; text: modelData.label; color: pm.connectionsModel.dirFilter === modelData.id ? "#ffffff" : "#8e8e94"; font.pixelSize: 11; font.bold: pm.connectionsModel.dirFilter === modelData.id }
+                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: pm.connectionsModel.dirFilter = modelData.id }
                     }
                 }
             }
@@ -281,27 +219,27 @@ Item {
                     delegate: Rectangle {
                         height: 24; radius: 12
                         implicitWidth: vdLbl.implicitWidth + 16
-                        color: root.verdictFilter === modelData.id ? "#26262b" : "#1c1c1e"
-                        border.color: root.verdictFilter === modelData.id ? modelData.accent : "#2a2a2e"
+                        color: pm.connectionsModel.verdictFilter === modelData.id ? "#26262b" : "#1c1c1e"
+                        border.color: pm.connectionsModel.verdictFilter === modelData.id ? modelData.accent : "#2a2a2e"
                         Label {
                             id: vdLbl; anchors.centerIn: parent
                             text: modelData.label
-                            color: root.verdictFilter === modelData.id ? modelData.accent : "#8e8e94"
-                            font.pixelSize: 11; font.bold: root.verdictFilter === modelData.id
+                            color: pm.connectionsModel.verdictFilter === modelData.id ? modelData.accent : "#8e8e94"
+                            font.pixelSize: 11; font.bold: pm.connectionsModel.verdictFilter === modelData.id
                         }
                         MouseArea {
                             anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                            onClicked: root.verdictFilter = modelData.id
+                            onClicked: pm.connectionsModel.verdictFilter = modelData.id
                         }
                     }
                 }
             }
         }
 
-        // Green (Allowed) / Red (Blocked) Live Connections Graph Strip
+        // Green (Allowed) / Red (Blocked) Live Connections or Traffic Graph Strip
         Rectangle {
             Layout.fillWidth: true
-            height: 74
+            height: 104
             radius: 6
             color: "#16171a"
             border.color: "#24262e"
@@ -309,26 +247,28 @@ Item {
             ColumnLayout {
                 anchors.fill: parent
                 anchors.leftMargin: 12; anchors.rightMargin: 12; anchors.topMargin: 6; anchors.bottomMargin: 6
-                spacing: 2
+                spacing: 4
 
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 10
-                    Label {
-                        text: pm.isRu ? "График соединений (Зелёный = Разрешено • Красный = Блок)" : "Connections Graph (Green = Allowed • Red = Blocked)"
-                        color: "#7e8290"; font.pixelSize: 10; font.bold: true
-                    }
-                    Item { Layout.fillWidth: true }
-                    Rectangle { width: 7; height: 7; radius: 3.5; color: "#1de966" }
-                    Label { text: pm.connAllowedTotal; color: "#1de966"; font.pixelSize: 10; font.bold: true }
-                    Rectangle { width: 7; height: 7; radius: 3.5; color: "#f03c3c" }
-                    Label { text: pm.connBlockedTotal; color: "#f03c3c"; font.pixelSize: 10; font.bold: true }
+                PmChartHeader {
+                    compact: true
+                    showInternetToggle: true
+                    internetOnly: pm.dashboardChartInternetOnly
+                    onToggleInternet: pm.setDashboardChartInternetOnly(!pm.dashboardChartInternetOnly)
+                    title: pm.isRu
+                           ? (pm.chartDataMode ? "График данных (RX / TX)" : "График соединений (Разрешено / Блок)")
+                           : (pm.chartDataMode ? "Data Volume Graph (RX / TX)" : "Connections Graph (Allowed / Blocked)")
+                    okCount: pm.dashboardChartInternetOnly ? pm.connInetAllowedTotal : pm.connAllowedTotal
+                    blockedCount: pm.dashboardChartInternetOnly ? pm.connInetBlockedTotal : pm.connBlockedTotal
+                    rxStr: pm.dashboardChartInternetOnly ? pm.connInetRxStr : pm.connRxStr
+                    txStr: pm.dashboardChartInternetOnly ? pm.connInetTxStr : pm.connTxStr
                 }
 
                 ConnChartCanvas {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     compact: true
+                    showAxes: true
+                    dataMode: pm.chartDataMode
                     bins: pm.connChartBins
                 }
             }
@@ -372,17 +312,17 @@ Item {
                     clip: true
                     cacheBuffer: 1200
                     spacing: 1
-                    model: root.cachedFiltered
+                    model: pm.connectionsModel
                     ScrollBar.vertical: PmScrollBar {}
                     PmWheelHelper {}
 
                     delegate: Rectangle {
                         id: rowItem
                         width: ListView.view.width
-                        property bool expanded: root.expandedId === modelData.id
-                        property bool isBlock: modelData.verdict === "block" || modelData.verdict === "drop" || modelData.verdict === "failed"
-                        property bool isAsk: modelData.verdict === "ask"
-                        property bool isXray: !!modelData.tunneled || modelData.verdict === "tunneled"
+                        property bool expanded: root.expandedId === model.connId
+                        property bool isBlock: model.verdict === "block" || model.verdict === "drop" || model.verdict === "failed"
+                        property bool isAsk: model.verdict === "ask"
+                        property bool isXray: !!model.tunneled || model.verdict === "tunneled"
                         height: expanded ? 92 : 34
                         color: expanded ? "#232328" : (rowMa.containsMouse ? "#202024" : (index % 2 === 0 ? "#18181b" : "#151517"))
 
@@ -392,7 +332,7 @@ Item {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: root.expandedId = (root.expandedId === modelData.id) ? "" : modelData.id
+                            onClicked: root.expandedId = (root.expandedId === model.connId) ? "" : model.connId
                         }
 
                         ColumnLayout {
@@ -414,14 +354,14 @@ Item {
                                         color: isBlock ? "#e01d1d" : (isAsk ? "#e9d81d" : (isXray ? "#4e97fa" : "#1de966"))
                                     }
                                     Label {
-                                        text: modelData.direction === "inbound" ? "↙" : "↗"
+                                        text: model.direction === "inbound" ? "↙" : "↗"
                                         color: "#76767e"; font.pixelSize: 10
                                     }
                                 }
 
                                 // Flex Col 2: Domain / Target
                                 Label {
-                                    text: modelData.target || "-"
+                                    text: model.target || "-"
                                     color: "#ffffff"; font.pixelSize: 12
                                     elide: Text.ElideRight
                                     Layout.fillWidth: true
@@ -430,7 +370,7 @@ Item {
 
                                 // Fixed Col 3: IP Address (126px)
                                 Label {
-                                    text: modelData.ip || "-"
+                                    text: model.ip || "-"
                                     color: "#80828c"; font.pixelSize: 11; font.family: "monospace"
                                     elide: Text.ElideRight
                                     Layout.preferredWidth: 126; Layout.minimumWidth: 126; Layout.maximumWidth: 126
@@ -441,12 +381,12 @@ Item {
                                     Layout.preferredWidth: 68; Layout.minimumWidth: 68; Layout.maximumWidth: 68
                                     spacing: 5
                                     FlagBadge {
-                                        visible: (modelData.country || "") !== ""
-                                        code: modelData.country || ""
+                                        visible: (model.country || "") !== ""
+                                        code: model.country || ""
                                         badgeWidth: 18; badgeHeight: 12
                                     }
                                     Label {
-                                        text: modelData.country || "-"
+                                        text: model.country || "-"
                                         color: "#cacaca"; font.pixelSize: 10; font.family: "monospace"
                                         elide: Text.ElideRight
                                         Layout.fillWidth: true
@@ -460,23 +400,23 @@ Item {
                                     Label {
                                         anchors.fill: parent
                                         verticalAlignment: Text.AlignVCenter
-                                        text: modelData.app || "-"
-                                        color: appJumpMa.containsMouse && modelData.profileKey !== "" ? "#4e97fa" : "#cacaca"
-                                        font.pixelSize: 12; font.underline: appJumpMa.containsMouse && modelData.profileKey !== ""
+                                        text: model.app || "-"
+                                        color: appJumpMa.containsMouse && model.profileKey !== "" ? "#4e97fa" : "#cacaca"
+                                        font.pixelSize: 12; font.underline: appJumpMa.containsMouse && model.profileKey !== ""
                                         elide: Text.ElideRight
                                     }
                                     MouseArea {
                                         id: appJumpMa
                                         anchors.fill: parent; hoverEnabled: true
-                                        enabled: (modelData.profileKey || "") !== ""
+                                        enabled: (model.profileKey || "") !== ""
                                         cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-                                        onClicked: if (modelData.profileKey) root.openApp(modelData.profileKey)
+                                        onClicked: if (model.profileKey) root.openApp(model.profileKey)
                                     }
                                 }
 
                                 // Fixed Col 6: Proto:Port (92px)
                                 Label {
-                                    text: (modelData.proto || "") + (modelData.port > 0 ? (":" + modelData.port) : "")
+                                    text: (model.proto || "") + (model.port > 0 ? (":" + model.port) : "")
                                     color: "#8a8a94"; font.pixelSize: 11; font.family: "monospace"
                                     elide: Text.ElideRight
                                     Layout.preferredWidth: 92; Layout.minimumWidth: 92; Layout.maximumWidth: 92
@@ -492,7 +432,7 @@ Item {
                                         color: isBlock ? "#3d1414" : (isAsk ? "#3b3612" : (isXray ? "#173256" : "#123821"))
                                         Label {
                                             anchors.centerIn: parent
-                                            text: (isXray ? "XRAY" : (modelData.verdict || "accept")).toUpperCase()
+                                            text: (isXray ? "XRAY" : (model.verdict || "accept")).toUpperCase()
                                             color: isBlock ? "#e01d1d" : (isAsk ? "#e9d81d" : (isXray ? "#4e97fa" : "#1de966"))
                                             font.pixelSize: 9; font.bold: true
                                         }
@@ -506,7 +446,7 @@ Item {
 
                                 // Fixed Col 8: Traffic Bytes (76px)
                                 Label {
-                                    text: modelData.bytes || "0 B"
+                                    text: model.bytes || "0 B"
                                     color: "#9e9ea6"; font.pixelSize: 11
                                     Layout.preferredWidth: 76; Layout.minimumWidth: 76; Layout.maximumWidth: 76
                                     horizontalAlignment: Text.AlignRight
@@ -520,9 +460,9 @@ Item {
                                 spacing: 10
 
                                 Label {
-                                    text: (modelData.reason || (pm.isRu ? "По умолчанию" : "Default policy"))
-                                          + (modelData.scope ? (" • " + modelData.scope) : "")
-                                          + (modelData.asOwner ? (" • " + modelData.asOwner) : "")
+                                    text: (model.reason || (pm.isRu ? "По умолчанию" : "Default policy"))
+                                          + (model.scope ? (" • " + model.scope) : "")
+                                          + (model.asOwner ? (" • " + model.asOwner) : "")
                                     color: "#8e8e98"; font.pixelSize: 11
                                     elide: Text.ElideRight; Layout.fillWidth: true
                                 }
@@ -533,7 +473,7 @@ Item {
                                     Label { id: alLbl; anchors.centerIn: parent; text: pm.isRu ? "+ Правило прил." : "+ Permit App"; color: "#ffffff"; font.pixelSize: 10; font.bold: true }
                                     MouseArea {
                                         anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                        onClicked: pm.allowOrBlockConnection(modelData.id, true)
+                                        onClicked: pm.allowOrBlockConnection(model.connId, true)
                                     }
                                 }
                                 Rectangle {
@@ -542,7 +482,7 @@ Item {
                                     Label { id: blLbl; anchors.centerIn: parent; text: pm.isRu ? "- Блок прил." : "- Block App"; color: "#ffffff"; font.pixelSize: 10; font.bold: true }
                                     MouseArea {
                                         anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                        onClicked: pm.allowOrBlockConnection(modelData.id, false)
+                                        onClicked: pm.allowOrBlockConnection(model.connId, false)
                                     }
                                 }
                                 Rectangle {
@@ -552,7 +492,7 @@ Item {
                                     MouseArea {
                                         anchors.fill: parent; cursorShape: Qt.PointingHandCursor
                                         onClicked: {
-                                            var pat = modelData.domain !== "" ? ("- ." + modelData.domain) : ("- " + modelData.ip)
+                                            var pat = model.domain !== "" ? ("- ." + model.domain) : ("- " + model.ip)
                                             pm.promoteRuleToGlobal("filter/endpoints", pat)
                                         }
                                     }
@@ -563,7 +503,7 @@ Item {
 
                     Label {
                         anchors.centerIn: parent
-                        visible: root.cachedFiltered.length === 0
+                        visible: pm.connectionsModel.count === 0
                         text: pm.isRu ? "Сетевая активность по фильтру не найдена." : "No matching network connections."
                         color: "#76767e"; font.pixelSize: 13
                     }

@@ -212,6 +212,26 @@ Item {
                 model: root.filteredSettings()
                 ScrollBar.vertical: PmScrollBar {}
                 PmWheelHelper {}
+                property bool userScrolled: false
+                onMovementStarted: userScrolled = true
+                onOriginYChanged: if (!userScrolled) positionViewAtBeginning()
+                onModelChanged: {
+                    userScrolled = false
+                    Qt.callLater(function() { settingsListView.positionViewAtBeginning() })
+                }
+                Connections {
+                    target: root
+                    function onVisibleChanged() {
+                        if (root.visible) {
+                            settingsListView.userScrolled = false
+                            Qt.callLater(function() { settingsListView.positionViewAtBeginning() })
+                        }
+                    }
+                    function onSelectedSubChanged() {
+                        settingsListView.userScrolled = false
+                        Qt.callLater(function() { settingsListView.positionViewAtBeginning() })
+                    }
+                }
 
                 header: ColumnLayout {
                     width: settingsListView.width - 10

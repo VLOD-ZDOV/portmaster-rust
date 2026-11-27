@@ -274,11 +274,16 @@ fn outbound_settings(profile: &ParsedProfile) -> Result<Value> {
             json!({ "vnext": [Value::Object(server)] })
         }
         Protocol::Vmess => {
+            let scy = if profile.method.is_empty() {
+                "auto"
+            } else {
+                profile.method.as_str()
+            };
             json!({
                 "address": profile.address,
                 "port": profile.port,
                 "id": profile.credential,
-                "security": "auto",
+                "security": scy,
             })
         }
         Protocol::Trojan => {

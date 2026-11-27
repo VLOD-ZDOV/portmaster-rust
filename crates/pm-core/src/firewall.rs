@@ -1524,7 +1524,7 @@ impl Firewall {
             let poller = Arc::new(Mutex::new(BandwidthPoller::default()));
             let cancel_bw = cancel.clone();
             tokio::spawn(async move {
-                let mut interval = tokio::time::interval(Duration::from_secs(2));
+                let mut interval = tokio::time::interval(Duration::from_secs(1));
                 loop {
                     tokio::select! {
                         () = cancel_bw.cancelled() => break,
@@ -1849,11 +1849,12 @@ fn poll_linux_bandwidth(
 
     p.updates.clear();
     p.dirty.clear();
+    let now_unix = pm_database::now();
     for shared in network.get_all_connections() {
         let Ok(conn) = shared.try_lock() else {
             continue;
         };
-        if conn.internal || conn.ended != 0 {
+        if conn.ended != 0 && now_unix.saturating_sub(conn.ended) > 20 {
             continue;
         }
         let (Some(local_ip), Some(entity)) = (conn.local_ip, conn.entity.as_ref()) else {

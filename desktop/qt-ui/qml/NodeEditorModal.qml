@@ -17,6 +17,8 @@ Rectangle {
     property string addrVal: ""
     property string portVal: "443"
     property string credVal: ""
+    property string passVal: ""
+    property string methodVal: "auto"
     property string shareLinkVal: ""
     property string encVal: "none"
     property string secVal: "tls"
@@ -46,6 +48,19 @@ Rectangle {
     property bool fragmentVal: false
     property bool tfoVal: false
     property string keepAliveVal: "0"
+    property string headersJsonVal: ""
+    property string pluginVal: ""
+    property string pluginOptsVal: ""
+    property string hyObfsVal: ""
+    property string hyObfsPassVal: ""
+    property string hyPinVal: ""
+    property string hyMportVal: ""
+    property string wgPubVal: ""
+    property string wgPskVal: ""
+    property string wgAddrVal: ""
+    property string wgDnsVal: ""
+    property string wgMtuVal: "1420"
+    property string wgKeepAliveVal: "25"
     property string presetVal: "default"
     property var rulesList: []
     property string newRuleInput: ""
@@ -60,6 +75,8 @@ Rectangle {
             modal.addrVal = n.address || ""
             modal.portVal = String(n.port || 443)
             modal.credVal = ""
+            modal.passVal = ""
+            modal.methodVal = n.method || ""
             modal.shareLinkVal = ""
             modal.encVal = (n.encryption && n.encryption !== "") ? n.encryption : "none"
             modal.secVal = n.security || "none"
@@ -89,6 +106,21 @@ Rectangle {
             modal.fragmentVal = !!n.fragmentEnabled
             modal.tfoVal = !!n.tcpFastOpen
             modal.keepAliveVal = String(n.tcpKeepAliveInterval || 0)
+            var hdrs = n.headers || ({})
+            var hdrKeys = Object.keys(hdrs)
+            modal.headersJsonVal = hdrKeys.length > 0 ? JSON.stringify(hdrs) : ""
+            modal.pluginVal = n.plugin || ""
+            modal.pluginOptsVal = n.pluginOpts || ""
+            modal.hyObfsVal = n.hyObfs || ""
+            modal.hyObfsPassVal = n.hyObfsPassword || ""
+            modal.hyPinVal = n.hyPin || ""
+            modal.hyMportVal = n.hyMport || ""
+            modal.wgPubVal = n.wgPublicKey || ""
+            modal.wgPskVal = n.wgPreSharedKey || ""
+            modal.wgAddrVal = (n.wgAddresses && n.wgAddresses.length > 0) ? n.wgAddresses.join(",") : ""
+            modal.wgDnsVal = (n.wgDns && n.wgDns.length > 0) ? n.wgDns.join(",") : ""
+            modal.wgMtuVal = String(n.wgMtu || 1420)
+            modal.wgKeepAliveVal = String(n.wgKeepAlive || 25)
             modal.presetVal = (n.rulePreset && n.rulePreset !== "") ? n.rulePreset : "default"
             modal.rulesList = (n.routingRules || []).slice(0)
         }
@@ -170,12 +202,12 @@ Rectangle {
                         ColumnLayout {
                             Layout.fillWidth: true; spacing: 3
                             Label { text: pm.isRu ? "Протокол" : "Protocol"; color: "#9e9ea6"; font.pixelSize: 10 }
-                            Row {
-                                spacing: 4
+                            Flow {
+                                Layout.fillWidth: true; spacing: 4
                                 Repeater {
-                                    model: ["vless", "trojan", "vmess", "shadowsocks", "hysteria", "wireguard"]
+                                    model: ["vless", "trojan", "vmess", "shadowsocks", "hysteria", "wireguard", "socks", "http"]
                                     delegate: Rectangle {
-                                        height: 28; radius: 4; implicitWidth: pL.implicitWidth + 10
+                                        height: 26; radius: 4; implicitWidth: pL.implicitWidth + 10
                                         color: modal.protoVal === modelData ? "#1c3354" : "#222329"
                                         border.color: modal.protoVal === modelData ? "#4e97fa" : "#343640"
                                         Label { id: pL; anchors.centerIn: parent; text: modelData.toUpperCase(); color: "#ffffff"; font.pixelSize: 9; font.bold: modal.protoVal === modelData }
@@ -206,18 +238,204 @@ Rectangle {
                         }
                     }
 
+                    RowLayout {
+                        Layout.fillWidth: true; spacing: 10
+                        ColumnLayout {
+                            Layout.fillWidth: true; spacing: 3
+                            Label {
+                                text: (modal.protoVal === "socks" || modal.protoVal === "http")
+                                      ? (pm.isRu ? "Логин (пусто = без изменений)" : "Username (blank = keep)")
+                                      : (modal.protoVal === "wireguard"
+                                         ? (pm.isRu ? "Новый PrivateKey (пусто = сохранить)" : "New PrivateKey (blank = keep)")
+                                         : (pm.isRu ? "Новый UUID / Пароль (оставьте пустым, чтобы сохранить текущий)" : "New UUID / Password (leave blank to keep current)"))
+                                color: "#9e9ea6"; font.pixelSize: 10
+                            }
+                            TextField {
+                                Layout.fillWidth: true; text: modal.credVal; onTextChanged: modal.credVal = text
+                                echoMode: TextInput.Password
+                                placeholderText: !!pm.editingNode.hasCredential ? "••••••••••••" : ""
+                                placeholderTextColor: "#666670"; color: "#ffffff"; font.pixelSize: 12; font.family: "monospace"
+                                background: Rectangle { color: "#121214"; radius: 4; border.color: "#2c2e38" }
+                            }
+                        }
+                        ColumnLayout {
+                            visible: modal.protoVal === "socks" || modal.protoVal === "http"
+                            Layout.fillWidth: true; spacing: 3
+                            Label {
+                                text: pm.isRu ? "Пароль (пусто = без изменений)" : "Password (blank = keep)"
+                                color: "#9e9ea6"; font.pixelSize: 10
+                            }
+                            TextField {
+                                Layout.fillWidth: true; text: modal.passVal; onTextChanged: modal.passVal = text
+                                echoMode: TextInput.Password
+                                placeholderText: !!pm.editingNode.hasCredential ? "••••••••••••" : ""
+                                placeholderTextColor: "#666670"; color: "#ffffff"; font.pixelSize: 12; font.family: "monospace"
+                                background: Rectangle { color: "#121214"; radius: 4; border.color: "#2c2e38" }
+                            }
+                        }
+                    }
+
+                    // Protocol-specific Cipher / Shadowsocks Plugin / Hysteria 2 / WireGuard
                     ColumnLayout {
-                        Layout.fillWidth: true; spacing: 3
+                        visible: modal.protoVal === "shadowsocks" || modal.protoVal === "vmess"
+                        Layout.fillWidth: true; spacing: 6
                         Label {
-                            text: pm.isRu ? "Новый UUID / Пароль (оставьте пустым, чтобы сохранить текущий)" : "New UUID / Password (leave blank to keep current)"
+                            text: pm.isRu ? "Метод шифрования (Cipher / Method)" : "Encryption Cipher / Method"
                             color: "#9e9ea6"; font.pixelSize: 10
                         }
+                        Flow {
+                            Layout.fillWidth: true; spacing: 4
+                            Repeater {
+                                model: modal.protoVal === "shadowsocks"
+                                       ? ["aes-256-gcm", "aes-128-gcm", "chacha20-poly1305", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"]
+                                       : ["auto", "aes-128-gcm", "chacha20-poly1305", "none", "zero"]
+                                delegate: Rectangle {
+                                    height: 24; radius: 4; implicitWidth: mL.implicitWidth + 10
+                                    color: modal.methodVal === modelData ? "#1c3354" : "#222329"
+                                    border.color: modal.methodVal === modelData ? "#4e97fa" : "#343640"
+                                    Label { id: mL; anchors.centerIn: parent; text: modelData; color: "#ffffff"; font.pixelSize: 9; font.family: "monospace" }
+                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: modal.methodVal = modelData }
+                                }
+                            }
+                        }
                         TextField {
-                            Layout.fillWidth: true; text: modal.credVal; onTextChanged: modal.credVal = text
-                            echoMode: TextInput.Password
-                            placeholderText: !!pm.editingNode.hasCredential ? "••••••••••••" : ""
-                            placeholderTextColor: "#666670"; color: "#ffffff"; font.pixelSize: 12; font.family: "monospace"
+                            Layout.fillWidth: true; text: modal.methodVal; onTextChanged: modal.methodVal = text
+                            placeholderText: modal.protoVal === "shadowsocks" ? "aes-256-gcm" : "auto"
+                            placeholderTextColor: "#545662"; color: "#ffffff"; font.pixelSize: 11; font.family: "monospace"
                             background: Rectangle { color: "#121214"; radius: 4; border.color: "#2c2e38" }
+                        }
+                        GridLayout {
+                            visible: modal.protoVal === "shadowsocks"
+                            Layout.fillWidth: true; columns: 2; columnSpacing: 10; rowSpacing: 4
+                            ColumnLayout {
+                                Layout.fillWidth: true; spacing: 2
+                                Label { text: pm.isRu ? "SS Плагин (xray-rust не поддерживает)" : "SS Plugin (dropped on xray-rust)"; color: "#9e9ea6"; font.pixelSize: 10 }
+                                TextField {
+                                    Layout.fillWidth: true; text: modal.pluginVal; onTextChanged: modal.pluginVal = text
+                                    color: "#ffffff"; font.pixelSize: 10; font.family: "monospace"
+                                    background: Rectangle { color: "#121214"; radius: 4; border.color: "#2c2e38" }
+                                }
+                            }
+                            ColumnLayout {
+                                Layout.fillWidth: true; spacing: 2
+                                Label { text: "Plugin Opts"; color: "#9e9ea6"; font.pixelSize: 10 }
+                                TextField {
+                                    Layout.fillWidth: true; text: modal.pluginOptsVal; onTextChanged: modal.pluginOptsVal = text
+                                    color: "#ffffff"; font.pixelSize: 10; font.family: "monospace"
+                                    background: Rectangle { color: "#121214"; radius: 4; border.color: "#2c2e38" }
+                                }
+                            }
+                        }
+                    }
+
+                    GridLayout {
+                        visible: modal.protoVal === "hysteria"
+                        Layout.fillWidth: true; columns: 2; columnSpacing: 10; rowSpacing: 6
+                        ColumnLayout {
+                            Layout.fillWidth: true; spacing: 3
+                            Label { text: pm.isRu ? "Hysteria2 Obfs" : "Hysteria2 Obfs"; color: "#9e9ea6"; font.pixelSize: 10 }
+                            Flow {
+                                Layout.fillWidth: true; spacing: 4
+                                Repeater {
+                                    model: ["", "salamander", "gecko"]
+                                    delegate: Rectangle {
+                                        height: 24; radius: 4; implicitWidth: hoL.implicitWidth + 10
+                                        color: modal.hyObfsVal === modelData ? "#1c3354" : "#222329"
+                                        border.color: modal.hyObfsVal === modelData ? "#4e97fa" : "#343640"
+                                        Label { id: hoL; anchors.centerIn: parent; text: modelData === "" ? (pm.isRu ? "Нет" : "None") : modelData; color: "#ffffff"; font.pixelSize: 10 }
+                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: modal.hyObfsVal = modelData }
+                                    }
+                                }
+                            }
+                        }
+                        ColumnLayout {
+                            Layout.fillWidth: true; spacing: 3
+                            Label { text: pm.isRu ? "Пароль Obfs" : "Obfs Password"; color: "#9e9ea6"; font.pixelSize: 10 }
+                            TextField {
+                                Layout.fillWidth: true; text: modal.hyObfsPassVal; onTextChanged: modal.hyObfsPassVal = text
+                                color: "#ffffff"; font.pixelSize: 11; font.family: "monospace"
+                                background: Rectangle { color: "#121214"; radius: 4; border.color: "#2c2e38" }
+                            }
+                        }
+                        ColumnLayout {
+                            Layout.fillWidth: true; spacing: 3
+                            Label { text: "Hysteria2 Pin SHA-256"; color: "#9e9ea6"; font.pixelSize: 10 }
+                            TextField {
+                                Layout.fillWidth: true; text: modal.hyPinVal; onTextChanged: modal.hyPinVal = text
+                                color: "#ffffff"; font.pixelSize: 10; font.family: "monospace"
+                                background: Rectangle { color: "#121214"; radius: 4; border.color: "#2c2e38" }
+                            }
+                        }
+                        ColumnLayout {
+                            Layout.fillWidth: true; spacing: 3
+                            Label { text: pm.isRu ? "Диапазон портов (Port Hopping, mport)" : "Port Hopping (mport)"; color: "#9e9ea6"; font.pixelSize: 10 }
+                            TextField {
+                                Layout.fillWidth: true; text: modal.hyMportVal; onTextChanged: modal.hyMportVal = text
+                                placeholderText: "20000-50000"
+                                placeholderTextColor: "#545662"; color: "#ffffff"; font.pixelSize: 11; font.family: "monospace"
+                                background: Rectangle { color: "#121214"; radius: 4; border.color: "#2c2e38" }
+                            }
+                        }
+                    }
+
+                    GridLayout {
+                        visible: modal.protoVal === "wireguard"
+                        Layout.fillWidth: true; columns: 2; columnSpacing: 10; rowSpacing: 6
+                        ColumnLayout {
+                            Layout.fillWidth: true; spacing: 3
+                            Label { text: "WireGuard Peer Public Key"; color: "#9e9ea6"; font.pixelSize: 10 }
+                            TextField {
+                                Layout.fillWidth: true; text: modal.wgPubVal; onTextChanged: modal.wgPubVal = text
+                                color: "#ffffff"; font.pixelSize: 10; font.family: "monospace"
+                                background: Rectangle { color: "#121214"; radius: 4; border.color: "#2c2e38" }
+                            }
+                        }
+                        ColumnLayout {
+                            Layout.fillWidth: true; spacing: 3
+                            Label { text: "PreShared Key (PSK)"; color: "#9e9ea6"; font.pixelSize: 10 }
+                            TextField {
+                                Layout.fillWidth: true; text: modal.wgPskVal; onTextChanged: modal.wgPskVal = text
+                                color: "#ffffff"; font.pixelSize: 10; font.family: "monospace"
+                                background: Rectangle { color: "#121214"; radius: 4; border.color: "#2c2e38" }
+                            }
+                        }
+                        ColumnLayout {
+                            Layout.fillWidth: true; spacing: 3
+                            Label { text: pm.isRu ? "Локальные адреса (CIDR через запятую)" : "Local Addresses (CSV)"; color: "#9e9ea6"; font.pixelSize: 10 }
+                            TextField {
+                                Layout.fillWidth: true; text: modal.wgAddrVal; onTextChanged: modal.wgAddrVal = text
+                                placeholderText: "10.0.0.2/32"
+                                placeholderTextColor: "#545662"; color: "#ffffff"; font.pixelSize: 11; font.family: "monospace"
+                                background: Rectangle { color: "#121214"; radius: 4; border.color: "#2c2e38" }
+                            }
+                        }
+                        ColumnLayout {
+                            Layout.fillWidth: true; spacing: 3
+                            Label { text: pm.isRu ? "DNS туннеля (через запятую)" : "Tunnel DNS (CSV)"; color: "#9e9ea6"; font.pixelSize: 10 }
+                            TextField {
+                                Layout.fillWidth: true; text: modal.wgDnsVal; onTextChanged: modal.wgDnsVal = text
+                                placeholderText: "1.1.1.1,1.0.0.1"
+                                placeholderTextColor: "#545662"; color: "#ffffff"; font.pixelSize: 11; font.family: "monospace"
+                                background: Rectangle { color: "#121214"; radius: 4; border.color: "#2c2e38" }
+                            }
+                        }
+                        ColumnLayout {
+                            Layout.fillWidth: true; spacing: 3
+                            Label { text: "MTU"; color: "#9e9ea6"; font.pixelSize: 10 }
+                            TextField {
+                                Layout.fillWidth: true; text: modal.wgMtuVal; onTextChanged: modal.wgMtuVal = text
+                                color: "#ffffff"; font.pixelSize: 11; font.family: "monospace"
+                                background: Rectangle { color: "#121214"; radius: 4; border.color: "#2c2e38" }
+                            }
+                        }
+                        ColumnLayout {
+                            Layout.fillWidth: true; spacing: 3
+                            Label { text: "Persistent KeepAlive (sec)"; color: "#9e9ea6"; font.pixelSize: 10 }
+                            TextField {
+                                Layout.fillWidth: true; text: modal.wgKeepAliveVal; onTextChanged: modal.wgKeepAliveVal = text
+                                color: "#ffffff"; font.pixelSize: 11; font.family: "monospace"
+                                background: Rectangle { color: "#121214"; radius: 4; border.color: "#2c2e38" }
+                            }
                         }
                     }
 
@@ -582,6 +800,18 @@ Rectangle {
                         }
                     }
 
+                    ColumnLayout {
+                        visible: modal.netVal === "ws" || modal.netVal === "httpupgrade" || modal.netVal === "xhttp"
+                        Layout.fillWidth: true; spacing: 3
+                        Label { text: pm.isRu ? "Произвольные HTTP-заголовки (JSON, опционально)" : "Custom HTTP Headers (JSON object, optional)"; color: "#9e9ea6"; font.pixelSize: 10 }
+                        TextField {
+                            Layout.fillWidth: true; text: modal.headersJsonVal; onTextChanged: modal.headersJsonVal = text
+                            placeholderText: "{\"User-Agent\":\"Mozilla/5.0\"}"
+                            placeholderTextColor: "#545662"; color: "#ffffff"; font.pixelSize: 11; font.family: "monospace"
+                            background: Rectangle { color: "#121214"; radius: 4; border.color: "#2c2e38" }
+                        }
+                    }
+
                     // Mux, TLS Fragmentation & Sockopt
                     Rectangle { Layout.fillWidth: true; height: 1; color: "#272832" }
                     Label {
@@ -738,11 +968,33 @@ Rectangle {
                                 var item = parts[ai].trim()
                                 if (item !== "") alpnList.push(item)
                             }
+                            var wgAddrs = []
+                            var waParts = (modal.wgAddrVal || "").split(",")
+                            for (var wi = 0; wi < waParts.length; wi++) {
+                                var wa = waParts[wi].trim()
+                                if (wa !== "") wgAddrs.push(wa)
+                            }
+                            var wgDnsList = []
+                            var wdParts = (modal.wgDnsVal || "").split(",")
+                            for (var di = 0; di < wdParts.length; di++) {
+                                var wd = wdParts[di].trim()
+                                if (wd !== "") wgDnsList.push(wd)
+                            }
+                            var hdrObj = {}
+                            if (modal.headersJsonVal.trim() !== "") {
+                                try {
+                                    var parsedHdr = JSON.parse(modal.headersJsonVal.trim())
+                                    if (parsedHdr && typeof parsedHdr === "object" && !Array.isArray(parsedHdr)) {
+                                        hdrObj = parsedHdr
+                                    }
+                                } catch (e) {}
+                            }
                             var body = {
                                 "name": modal.nameVal,
                                 "protocol": modal.protoVal,
                                 "address": modal.addrVal,
                                 "port": p,
+                                "method": modal.methodVal.trim(),
                                 "encryption": modal.encVal.trim(),
                                 "security": modal.secVal,
                                 "network": modal.netVal,
@@ -760,6 +1012,19 @@ Rectangle {
                                 "wsHeartbeatPeriod": wsh,
                                 "fingerprint": modal.fpVal.trim(),
                                 "alpn": alpnList,
+                                "headers": hdrObj,
+                                "plugin": modal.pluginVal.trim(),
+                                "pluginOpts": modal.pluginOptsVal.trim(),
+                                "hyObfs": modal.hyObfsVal,
+                                "hyObfsPassword": modal.hyObfsPassVal.trim(),
+                                "hyPin": modal.hyPinVal.trim(),
+                                "hyMport": modal.hyMportVal.trim(),
+                                "wgPublicKey": modal.wgPubVal.trim(),
+                                "wgPreSharedKey": modal.wgPskVal.trim(),
+                                "wgAddresses": wgAddrs,
+                                "wgDns": wgDnsList,
+                                "wgMtu": parseInt(modal.wgMtuVal) || 1420,
+                                "wgKeepAlive": parseInt(modal.wgKeepAliveVal) || 0,
                                 "realityPublicKey": modal.pbkVal.trim(),
                                 "realityShortId": modal.sidVal.trim(),
                                 "realitySpiderX": modal.spxVal.trim(),
@@ -777,7 +1042,10 @@ Rectangle {
                             if (modal.shareLinkVal.trim() !== "") {
                                 body["shareLink"] = modal.shareLinkVal.trim()
                             }
-                            if (modal.credVal.trim() !== "") {
+                            if (modal.protoVal === "socks" || modal.protoVal === "http") {
+                                if (modal.credVal.trim() !== "") body["credential"] = modal.credVal.trim()
+                                if (modal.passVal.trim() !== "") body["password"] = modal.passVal.trim()
+                            } else if (modal.credVal.trim() !== "") {
                                 body["credential"] = modal.credVal.trim()
                                 body["password"] = modal.credVal.trim()
                             }

@@ -935,6 +935,7 @@ impl Xray {
         let node = self.store.get_node(id)?;
         let parsed = parser::parse_link(&node.raw_config)
             .map_err(|e| crate::Error::InvalidRequest(e.to_string()))?;
+        let wg = parsed.wireguard.as_ref();
         Ok(NodeEditInfo {
             id: node.id,
             subscription_id: node.subscription_id,
@@ -970,6 +971,19 @@ impl Xray {
             fragment_enabled: parsed.fragment_enabled,
             tcp_fast_open: parsed.tcp_fast_open,
             tcp_keep_alive_interval: parsed.tcp_keep_alive_interval,
+            headers: parsed.headers.into_iter().collect(),
+            plugin: parsed.plugin,
+            plugin_opts: parsed.plugin_opts,
+            hy_obfs: parsed.hy_obfs,
+            hy_obfs_password: parsed.hy_obfs_password,
+            hy_pin: parsed.hy_pin,
+            hy_mport: parsed.hy_mport,
+            wg_public_key: wg.map(|w| w.public_key.clone()).unwrap_or_default(),
+            wg_pre_shared_key: wg.map(|w| w.pre_shared_key.clone()).unwrap_or_default(),
+            wg_addresses: wg.map(|w| w.addresses.clone()).unwrap_or_default(),
+            wg_dns: wg.map(|w| w.dns.clone()).unwrap_or_default(),
+            wg_mtu: wg.map(|w| w.mtu).unwrap_or(0),
+            wg_keep_alive: wg.map(|w| w.keep_alive).unwrap_or(0),
             reality_public_key: parsed.reality_public_key,
             reality_short_id: parsed.reality_short_id,
             reality_spider_x: parsed.reality_spider_x,
@@ -1012,8 +1026,9 @@ impl Xray {
             }
             parsed.port = port;
         }
-        if let Some(cred) = req.credential.filter(|s| !s.trim().is_empty()) {
-            parsed.credential = cred.trim().to_string();
+        let cred_override = req.credential.filter(|s| !s.trim().is_empty()).map(|s| s.trim().to_string());
+        if let Some(ref cred) = cred_override {
+            parsed.credential = cred.clone();
         }
         if let Some(pass) = req.password.filter(|s| !s.trim().is_empty()) {
             parsed.password = pass.trim().to_string();
@@ -1095,6 +1110,59 @@ impl Xray {
         }
         if let Some(ka) = req.tcp_keep_alive_interval {
             parsed.tcp_keep_alive_interval = ka;
+        }
+        if let Some(headers) = req.headers {
+            parsed.headers = headers.into_iter().collect();
+        }
+        if let Some(plugin) = req.plugin {
+            parsed.plugin = plugin.trim().to_string();
+        }
+        if let Some(opts) = req.plugin_opts {
+            parsed.plugin_opts = opts.trim().to_string();
+        }
+        if let Some(obfs) = req.hy_obfs {
+            parsed.hy_obfs = obfs.trim().to_string();
+        }
+        if let Some(obfs_pw) = req.hy_obfs_password {
+            parsed.hy_obfs_password = obfs_pw.trim().to_string();
+        }
+        if let Some(pin) = req.hy_pin {
+            parsed.hy_pin = pin.trim().to_string();
+        }
+        if let Some(mport) = req.hy_mport {
+            parsed.hy_mport = mport.trim().to_string();
+        }
+        if parsed.protocol == Protocol::Wireguard {
+            let wg = parsed.wireguard.get_or_insert_with(parser::WireGuardProfile::default);
+            wg.endpoint = if parsed.address.contains(':') && !parsed.address.starts_with('[') {
+                format!("[{}]:{}", parsed.address, parsed.port)
+            } else {
+                format!("{}:{}", parsed.address, parsed.port)
+            };
+            if let Some(cred) = cred_override {
+                wg.secret_key = cred;
+            }
+            if let Some(pk) = req.wg_public_key {
+                wg.public_key = pk.trim().to_string();
+            }
+            if let Some(psk) = req.wg_pre_shared_key {
+                wg.pre_shared_key = psk.trim().to_string();
+            }
+            if let Some(addrs) = req.wg_addresses {
+                wg.addresses = addrs.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+            }
+            if let Some(dns) = req.wg_dns {
+                wg.dns = dns.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+            }
+            if let Some(mtu) = req.wg_mtu {
+                wg.mtu = mtu;
+            }
+            if let Some(ka) = req.wg_keep_alive {
+                wg.keep_alive = ka;
+            }
+            if wg.allowed_ips.is_empty() {
+                wg.allowed_ips = vec!["0.0.0.0/0".into(), "::/0".into()];
+            }
         }
         if let Some(pbk) = req.reality_public_key {
             parsed.reality_public_key = pbk.trim().to_string();

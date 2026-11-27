@@ -24,8 +24,17 @@ This fork modernizes Portmaster by introducing a high-performance **Rust Core** 
 - **Encrypted DNS**:
   Built-in DNS proxy supporting DNS-over-TLS (DoT) and DNS-over-HTTPS (DoH) with split-horizon routing and blocklist enforcement.
 - **Modern UI Options**:
+  - **Qt 6 Native UI (`portmaster-qt`)**: Native C++/QML desktop application with Dashboard, live network monitor, per-app controls, and full V2Ray/Xray node editor.
   - Full-featured Angular desktop UI with unlocked settings and proxy routing controls.
   - Experimental ultra-lightweight Leptos/WASM web dashboard (`pilot/leptos/web`).
+
+---
+
+## Qt 6 Native Interface
+
+| Dashboard & Activity Timeline | Xray Routing & Node Editor |
+|---|---|
+| ![Qt Dashboard](assets/screenshots/qt-dashboard.png) | ![Qt Xray Node Editor](assets/screenshots/qt-node-editor.png) |
 
 ---
 

@@ -58,7 +58,7 @@ Rectangle {
             height: 52
             radius: 12
             color: (root.currentPage === "dashboard" && root.sideDashOpen) ? "#23252c" : (topMa.containsMouse ? "#1e1f24" : "transparent")
-            ToolTip.visible: topMa.containsMouse
+            ToolTip.visible: topMa.containsMouse && Qt.application.arguments.indexOf("--screenshot") < 0
             ToolTip.text: pm.isRu ? "Панель управления (Dashboard)" : "Dashboard"
             ToolTip.delay: 300
 
@@ -189,7 +189,7 @@ Rectangle {
             Layout.alignment: Qt.AlignHCenter
             width: 36; height: 36; radius: 10
             color: isActive ? "#2c2c2c" : (ma.containsMouse ? "#222222" : "transparent")
-            ToolTip.visible: ma.containsMouse
+            ToolTip.visible: ma.containsMouse && Qt.application.arguments.indexOf("--screenshot") < 0
             ToolTip.text: tip
             ToolTip.delay: 350
 

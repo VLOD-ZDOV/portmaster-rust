@@ -327,10 +327,10 @@ Item {
                 }
             }
 
-            // 4. Activity Graph Card (Green Allowed / Red Blocked)
+            // 4. Activity Graph Card (Green Allowed / Red Blocked or Traffic RX/TX Data)
             Rectangle {
                 Layout.fillWidth: true
-                height: 146
+                height: 174
                 radius: 6
                 color: "#18191d"
                 border.color: "#272932"
@@ -340,54 +340,26 @@ Item {
                     anchors.margins: 12
                     spacing: 6
 
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 8
-                        Label {
-                            text: pm.isRu ? "График активности: Разрешённые и Заблокированные соединения" : "Activity Graph: Permitted & Blocked Connections"
-                            color: "#dcdce4"; font.pixelSize: 12; font.bold: true
-                        }
-                        Rectangle {
-                            height: 22; radius: 4
-                            color: pm.dashboardChartInternetOnly ? "#173252" : "#222328"
-                            border.color: pm.dashboardChartInternetOnly ? "#4e97fa" : "#343640"
-                            implicitWidth: inetOnlyLbl.implicitWidth + 14
-                            Label {
-                                id: inetOnlyLbl; anchors.centerIn: parent
-                                text: pm.isRu ? "Только интернет" : "Internet Only"
-                                color: pm.dashboardChartInternetOnly ? "#89b7ff" : "#8e8e98"
-                                font.pixelSize: 10; font.bold: pm.dashboardChartInternetOnly
-                            }
-                            MouseArea {
-                                anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                onClicked: pm.setDashboardChartInternetOnly(!pm.dashboardChartInternetOnly)
-                            }
-                        }
-                        Item { Layout.fillWidth: true }
-                        Rectangle { width: 8; height: 8; radius: 4; color: "#1de966" }
-                        Label {
-                            text: "OK: " + (pm.dashboardChartInternetOnly ? pm.connInetAllowedTotal : pm.connAllowedTotal)
-                            color: "#1de966"; font.pixelSize: 11; font.bold: true
-                        }
-                        Item { width: 10 }
-                        Rectangle { width: 8; height: 8; radius: 4; color: "#e01d1d" }
-                        Label {
-                            text: (pm.isRu ? "Блок: " : "Blocked: ") + (pm.dashboardChartInternetOnly ? pm.connInetBlockedTotal : pm.connBlockedTotal)
-                            color: "#f03c3c"; font.pixelSize: 11; font.bold: true
-                        }
+                    PmChartHeader {
+                        title: pm.isRu
+                               ? (pm.chartDataMode ? "График трафика по времени (RX / TX)" : "График активности: Разрешённые и Заблокированные соединения")
+                               : (pm.chartDataMode ? "Traffic Volume Timeline (RX / TX)" : "Activity Graph: Permitted & Blocked Connections")
+                        showInternetToggle: true
+                        internetOnly: pm.dashboardChartInternetOnly
+                        onToggleInternet: pm.setDashboardChartInternetOnly(!pm.dashboardChartInternetOnly)
+                        okCount: pm.dashboardChartInternetOnly ? pm.connInetAllowedTotal : pm.connAllowedTotal
+                        blockedCount: pm.dashboardChartInternetOnly ? pm.connInetBlockedTotal : pm.connBlockedTotal
+                        rxStr: pm.dashboardChartInternetOnly ? pm.connInetRxStr : pm.connRxStr
+                        txStr: pm.dashboardChartInternetOnly ? pm.connInetTxStr : pm.connTxStr
                     }
 
-                    Item {
+                    ConnChartCanvas {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        ConnChartCanvas {
-                            anchors.fill: parent
-                            bins: pm.connChartBins
-                        }
-                        MouseArea {
-                            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                            onClicked: root.openMonitorPreset(pm.dashboardChartInternetOnly, "all", "")
-                        }
+                        showAxes: true
+                        dataMode: pm.chartDataMode
+                        bins: pm.connChartBins
+                        onChartClicked: root.openMonitorPreset(pm.dashboardChartInternetOnly, "all", "")
                     }
                 }
             }

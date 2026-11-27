@@ -89,18 +89,18 @@ Item {
 
             RowLayout {
                 anchors.fill: parent
-                anchors.leftMargin: 16; anchors.rightMargin: 16
-                spacing: 12
+                anchors.leftMargin: 12; anchors.rightMargin: 12
+                spacing: 7
 
                 Label {
                     text: pm.t("xray.title")
-                    color: "#ffffff"; font.pixelSize: 16; font.bold: true
+                    color: "#ffffff"; font.pixelSize: 15; font.bold: true
                 }
 
                 Rectangle {
                     height: 20; radius: 4
                     color: (pm.xrayStatus.geoipAvailable && pm.xrayStatus.geositeAvailable) ? "#13293e" : "#3a2c12"
-                    implicitWidth: geoBadge.implicitWidth + 12
+                    implicitWidth: geoBadge.implicitWidth + 10
                     Label {
                         id: geoBadge; anchors.centerIn: parent
                         text: (pm.xrayStatus.geoipAvailable && pm.xrayStatus.geositeAvailable)
@@ -111,13 +111,13 @@ Item {
                 }
 
                 RowLayout {
-                    spacing: 6
+                    spacing: 5
                     PmSwitch { checked: pm.globalVpn; onToggled: pm.toggleGlobalVpn() }
                     Label { text: pm.isRu ? "Весь трафик" : "Route All"; color: "#cacad4"; font.pixelSize: 11 }
                 }
 
                 RowLayout {
-                    spacing: 6
+                    spacing: 5
                     PmSwitch { checked: pm.autoConnectXray; onToggled: pm.updateSetting("xray/autoConnect", checked) }
                     Label { text: pm.isRu ? "Автоподкл." : "Auto"; color: "#cacad4"; font.pixelSize: 11 }
                 }
@@ -126,35 +126,35 @@ Item {
 
                 Rectangle {
                     height: 28; radius: 4; color: "#1c283a"; border.color: "#4e97fa"
-                    implicitWidth: gRbLbl.implicitWidth + 14
-                    Label { id: gRbLbl; anchors.centerIn: parent; text: pm.isRu ? "⚙ Правила Xray" : "⚙ Xray Rules"; color: "#89b7ff"; font.pixelSize: 10; font.bold: true }
+                    implicitWidth: gRbLbl.implicitWidth + 10
+                    Label { id: gRbLbl; anchors.centerIn: parent; text: pm.isRu ? "⚙ Правила" : "⚙ Xray Rules"; color: "#89b7ff"; font.pixelSize: 10; font.bold: true }
                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.openGlobalRuleBuilder() }
                 }
 
                 Rectangle {
                     height: 28; radius: 4; color: "#22242a"; border.color: "#363842"
-                    implicitWidth: rstLbl.implicitWidth + 14
+                    implicitWidth: rstLbl.implicitWidth + 10
                     Label { id: rstLbl; anchors.centerIn: parent; text: pm.t("apps.resetDirect"); color: "#cacaca"; font.pixelSize: 10 }
                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: pm.resetAllAppOverrides() }
                 }
 
                 Rectangle {
                     height: 28; radius: 4; color: "#22242a"; border.color: "#363842"
-                    implicitWidth: geoLbl.implicitWidth + 14
+                    implicitWidth: geoLbl.implicitWidth + 10
                     Label { id: geoLbl; anchors.centerIn: parent; text: pm.isRu ? "Базы Geo" : "Geodata"; color: "#cacaca"; font.pixelSize: 10 }
                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: pm.downloadGeodata() }
                 }
 
                 Rectangle {
                     height: 28; radius: 4; color: "#22242a"; border.color: "#363842"
-                    implicitWidth: binLbl.implicitWidth + 14
+                    implicitWidth: binLbl.implicitWidth + 10
                     Label { id: binLbl; anchors.centerIn: parent; text: "xray-rust"; color: "#cacaca"; font.pixelSize: 10 }
                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: pm.downloadXrayBinary() }
                 }
 
                 Rectangle {
                     height: 28; radius: 4; color: root.showSubDrawer ? "#4e97fa" : "#22242a"; border.color: "#363842"
-                    implicitWidth: subBtnLbl.implicitWidth + 14
+                    implicitWidth: subBtnLbl.implicitWidth + 10
                     Label { id: subBtnLbl; anchors.centerIn: parent; text: "+ " + pm.t("xray.addSub"); color: "#ffffff"; font.pixelSize: 10 }
                     MouseArea {
                         anchors.fill: parent; cursorShape: Qt.PointingHandCursor
@@ -164,7 +164,7 @@ Item {
 
                 Rectangle {
                     height: 28; radius: 4; color: root.showLinkDrawer ? "#4e97fa" : "#22242a"; border.color: "#363842"
-                    implicitWidth: lnkBtnLbl.implicitWidth + 14
+                    implicitWidth: lnkBtnLbl.implicitWidth + 10
                     Label { id: lnkBtnLbl; anchors.centerIn: parent; text: "+ " + pm.t("xray.addManual"); color: "#ffffff"; font.pixelSize: 10 }
                     MouseArea {
                         anchors.fill: parent; cursorShape: Qt.PointingHandCursor
@@ -478,7 +478,7 @@ Item {
                                 height: width; radius: width / 2
                                 color: modelData.active ? "#1de966" : (root.selectedCountry === modelData.country ? "#fde047" : "#4e97fa")
                                 border.color: "#111112"; border.width: 1.5
-                                ToolTip.visible: pinMa.containsMouse
+                                ToolTip.visible: pinMa.containsMouse && Qt.application.arguments.indexOf("--screenshot") < 0
                                 ToolTip.text: pm.countryName(modelData.country) + " (" + modelData.count + ")"
                                 ToolTip.delay: 150
                                 MouseArea {

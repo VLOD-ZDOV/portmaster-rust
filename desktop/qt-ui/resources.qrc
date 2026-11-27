@@ -13,6 +13,7 @@
         <file alias="FlagBadge.qml">qml/FlagBadge.qml</file>
         <file alias="SecurityShield.qml">qml/SecurityShield.qml</file>
         <file alias="ConnChartCanvas.qml">qml/ConnChartCanvas.qml</file>
+        <file alias="PmChartHeader.qml">qml/PmChartHeader.qml</file>
         <file alias="cfg_i18n.json">cfg_i18n.json</file>
         <file alias="PmSwitch.qml">qml/PmSwitch.qml</file>
         <file alias="PmCheckBox.qml">qml/PmCheckBox.qml</file>
@@ -20,5 +21,6 @@
         <file alias="PmWheelHelper.qml">qml/PmWheelHelper.qml</file>
         <file alias="RuleBuilderModal.qml">qml/RuleBuilderModal.qml</file>
         <file alias="NodeEditorModal.qml">qml/NodeEditorModal.qml</file>
+        <file alias="world-50m.json">../../assets/data/world-50m.json</file>
     </qresource>
 </RCC>

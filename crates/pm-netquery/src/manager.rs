@@ -185,7 +185,11 @@ impl Manager {
                 return;
             }
             match convert_connection(&conn) {
-                Ok(model) => (model, conn.history_enabled, conn.meta),
+                Ok(mut model) => {
+                    model.bytes_received = conn.bytes_received;
+                    model.bytes_sent = conn.bytes_sent;
+                    (model, conn.history_enabled, conn.meta)
+                }
                 Err(error) => {
                     tracing::error!(%error, id = %conn.id, "netquery: failed to convert connection");
                     return;
@@ -209,7 +213,11 @@ impl Manager {
                 return;
             }
             match convert_connection(&conn) {
-                Ok(model) => (model, conn.meta),
+                Ok(mut model) => {
+                    model.bytes_received = conn.bytes_received;
+                    model.bytes_sent = conn.bytes_sent;
+                    (model, conn.meta)
+                }
                 Err(_) => return,
             }
         };

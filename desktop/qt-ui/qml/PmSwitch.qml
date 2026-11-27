@@ -5,6 +5,10 @@ Switch {
     id: ctrl
     implicitWidth: 40
     implicitHeight: 22
+    leftPadding: 0
+    rightPadding: 0
+    topPadding: 0
+    bottomPadding: 0
 
     indicator: Rectangle {
         implicitWidth: 40

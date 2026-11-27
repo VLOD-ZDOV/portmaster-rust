@@ -1,6 +1,7 @@
 #pragma once
 
 #include <deque>
+#include <QAbstractListModel>
 #include <QHash>
 #include <QImage>
 #include <QJsonArray>
@@ -20,6 +21,113 @@
 
 class QAction;
 class QMenu;
+
+struct ConnRecord {
+    QString id;
+    QString profile;
+    QString profileKey;
+    QString profileName;
+    QString domain;
+    QString ip;
+    QString proto;
+    QString direction;
+    QString scope;
+    QString country;
+    QString asOwner;
+    QString verdict;
+    QString reason;
+    QString connType;
+    QString bytesStr;
+    int port = 0;
+    qint64 rx = 0;
+    qint64 tx = 0;
+    qint64 startedTs = 0;
+    bool tunneled = false;
+    bool active = false;
+    bool internal = false;
+    bool session = false;
+};
+
+class ConnectionListModel : public QAbstractListModel {
+    Q_OBJECT
+    Q_PROPERTY(int count READ rowCount NOTIFY countChanged)
+    Q_PROPERTY(QString searchQuery READ searchQuery WRITE setSearchQuery NOTIFY filterChanged)
+    Q_PROPERTY(bool scopeInternet READ scopeInternet WRITE setScopeInternet NOTIFY filterChanged)
+    Q_PROPERTY(bool scopeLan READ scopeLan WRITE setScopeLan NOTIFY filterChanged)
+    Q_PROPERTY(bool scopeLocal READ scopeLocal WRITE setScopeLocal NOTIFY filterChanged)
+    Q_PROPERTY(QString dirFilter READ dirFilter WRITE setDirFilter NOTIFY filterChanged)
+    Q_PROPERTY(QString verdictFilter READ verdictFilter WRITE setVerdictFilter NOTIFY filterChanged)
+    Q_PROPERTY(bool hideDnsNoise READ hideDnsNoise WRITE setHideDnsNoise NOTIFY filterChanged)
+    Q_PROPERTY(bool hideLocalhost READ hideLocalhost WRITE setHideLocalhost NOTIFY filterChanged)
+
+public:
+    enum Roles {
+        ConnIdRole = Qt::UserRole + 1,
+        ProfileKeyRole,
+        TargetRole,
+        DomainRole,
+        IpRole,
+        PortRole,
+        ProtoRole,
+        CountryRole,
+        AppRole,
+        ScopeRole,
+        DirectionRole,
+        VerdictRole,
+        TunneledRole,
+        ReasonRole,
+        AsOwnerRole,
+        BytesRole,
+        ActiveRole,
+        InternalRole,
+        ConnTypeRole,
+    };
+
+    explicit ConnectionListModel(const std::deque<ConnRecord>* source, QObject* parent = nullptr);
+
+    int rowCount(const QModelIndex& parent = QModelIndex()) const override;
+    QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
+    QHash<int, QByteArray> roleNames() const override;
+
+    QString searchQuery() const { return m_searchQuery; }
+    bool scopeInternet() const { return m_scopeInternet; }
+    bool scopeLan() const { return m_scopeLan; }
+    bool scopeLocal() const { return m_scopeLocal; }
+    QString dirFilter() const { return m_dirFilter; }
+    QString verdictFilter() const { return m_verdictFilter; }
+    bool hideDnsNoise() const { return m_hideDnsNoise; }
+    bool hideLocalhost() const { return m_hideLocalhost; }
+
+    void setSearchQuery(const QString& q);
+    void setScopeInternet(bool v);
+    void setScopeLan(bool v);
+    void setScopeLocal(bool v);
+    void setDirFilter(const QString& v);
+    void setVerdictFilter(const QString& v);
+    void setHideDnsNoise(bool v);
+    void setHideLocalhost(bool v);
+
+    void syncFrom(int limit);
+
+signals:
+    void countChanged();
+    void filterChanged();
+
+private:
+    void refilter(bool preserveOnSameShape = true);
+
+    const std::deque<ConnRecord>* m_source = nullptr;
+    int m_limit = 2000;
+    QVector<int> m_filtered;
+    QString m_searchQuery;
+    bool m_scopeInternet = false;
+    bool m_scopeLan = false;
+    bool m_scopeLocal = false;
+    QString m_dirFilter = QStringLiteral("all");
+    QString m_verdictFilter = QStringLiteral("all");
+    bool m_hideDnsNoise = true;
+    bool m_hideLocalhost = true;
+};
 
 struct PortmasterIconStore {
     QMutex mutex;
@@ -75,7 +183,8 @@ class PortmasterBackend : public QObject {
     Q_PROPERTY(int selectedAppAllAllowed READ selectedAppAllAllowed NOTIFY selectedAppChanged)
     Q_PROPERTY(int selectedAppAllBlocked READ selectedAppAllBlocked NOTIFY selectedAppChanged)
 
-    Q_PROPERTY(QVariantList connections READ connections NOTIFY connectionsChanged)
+    Q_PROPERTY(QObject* connectionsModel READ connectionsModel CONSTANT)
+    Q_PROPERTY(int connectionsTotal READ connectionsTotal NOTIFY connectionsChanged)
     Q_PROPERTY(QVariantList settingsList READ settingsList NOTIFY settingsChanged)
     Q_PROPERTY(QVariantList alerts READ alerts NOTIFY notificationsChanged)
     Q_PROPERTY(QVariantList prompts READ prompts NOTIFY notificationsChanged)
@@ -97,6 +206,7 @@ class PortmasterBackend : public QObject {
     Q_PROPERTY(bool historyLoading READ historyLoading NOTIFY historyConfigChanged)
     Q_PROPERTY(QVariantList connChartBins READ connChartBins NOTIFY connectionsChanged)
     Q_PROPERTY(bool dashboardChartInternetOnly READ dashboardChartInternetOnly WRITE setDashboardChartInternetOnly NOTIFY connectionsChanged)
+    Q_PROPERTY(bool chartDataMode READ chartDataMode WRITE setChartDataMode NOTIFY chartDataModeChanged)
     Q_PROPERTY(int connAllowedTotal READ connAllowedTotal NOTIFY connectionsChanged)
     Q_PROPERTY(int connBlockedTotal READ connBlockedTotal NOTIFY connectionsChanged)
     Q_PROPERTY(int connInetAllowedTotal READ connInetAllowedTotal NOTIFY connectionsChanged)
@@ -106,6 +216,8 @@ class PortmasterBackend : public QObject {
     Q_PROPERTY(int connTunneledTotal READ connTunneledTotal NOTIFY connectionsChanged)
     Q_PROPERTY(QString connRxStr READ connRxStr NOTIFY connectionsChanged)
     Q_PROPERTY(QString connTxStr READ connTxStr NOTIFY connectionsChanged)
+    Q_PROPERTY(QString connInetRxStr READ connInetRxStr NOTIFY connectionsChanged)
+    Q_PROPERTY(QString connInetTxStr READ connInetTxStr NOTIFY connectionsChanged)
     Q_PROPERTY(QVariantList connCountriesSummary READ connCountriesSummary NOTIFY connectionsChanged)
     Q_PROPERTY(QVariantList blockedAppsSummary READ blockedAppsSummary NOTIFY connectionsChanged)
 
@@ -113,12 +225,12 @@ class PortmasterBackend : public QObject {
     Q_PROPERTY(QString modalBody READ modalBody NOTIFY modalChanged)
 
 public:
-    explicit PortmasterBackend(bool startBackground = false, bool withTray = true, QObject* parent = nullptr);
+    explicit PortmasterBackend(bool startBackground = false, bool withTray = true, bool demoMode = false, QObject* parent = nullptr);
     ~PortmasterBackend() override;
 
-    bool connected() const { return m_api->isConnected(); }
+    bool connected() const { return m_demoMode || m_api->isConnected(); }
     bool hasTray() const { return m_withTray && QSystemTrayIcon::isSystemTrayAvailable(); }
-    QString transport() const { return m_api->transportLabel(); }
+    QString transport() const { return m_demoMode ? QStringLiteral("Demo Mode (Offline)") : m_api->transportLabel(); }
     QString lang() const { return m_ru ? QStringLiteral("ru") : QStringLiteral("en"); }
     bool isRu() const { return m_ru; }
 
@@ -156,9 +268,12 @@ public:
     int selectedAppAllBlocked() const { return m_selectedAppAllBlocked; }
     Q_INVOKABLE void setAppChartInternetOnly(bool internetOnly);
     Q_INVOKABLE void setUiWindowVisible(bool visible);
+    Q_INVOKABLE void enableDemoMode();
+    Q_INVOKABLE void openDemoNodeEditor(const QString& nodeId);
     Q_INVOKABLE QVariantMap hitTestMapCountry(double nx, double ny) const;
 
-    QVariantList connections() const { return m_connectionsCache; }
+    QObject* connectionsModel() const { return m_connModel; }
+    int connectionsTotal() const { return static_cast<int>(m_connections.size()); }
     QVariantList settingsList() const { return m_settingsCache; }
     QVariantList alerts() const { return m_alertsCache; }
     QVariantList prompts() const { return m_promptsCache; }
@@ -181,6 +296,8 @@ public:
     QVariantList connChartBins() const { return m_connChartBins; }
     bool dashboardChartInternetOnly() const { return m_dashboardChartInternetOnly; }
     Q_INVOKABLE void setDashboardChartInternetOnly(bool internetOnly);
+    bool chartDataMode() const { return m_chartDataMode; }
+    Q_INVOKABLE void setChartDataMode(bool dataMode);
     int connAllowedTotal() const { return m_connAllowedTotal; }
     int connBlockedTotal() const { return m_connBlockedTotal; }
     int connInetAllowedTotal() const { return m_connInetAllowedTotal; }
@@ -190,6 +307,8 @@ public:
     int connTunneledTotal() const { return m_connTunneledTotal; }
     QString connRxStr() const { return m_connRxStr; }
     QString connTxStr() const { return m_connTxStr; }
+    QString connInetRxStr() const { return m_connInetRxStr; }
+    QString connInetTxStr() const { return m_connInetTxStr; }
     QVariantList connCountriesSummary() const { return m_connCountriesSummary; }
     QVariantList blockedAppsSummary() const { return m_blockedAppsSummary; }
 
@@ -279,6 +398,7 @@ signals:
     void appsChanged();
     void selectedAppChanged();
     void connectionsChanged();
+    void chartDataModeChanged();
     void settingsChanged();
     void notificationsChanged();
     void xrayChanged();
@@ -301,8 +421,10 @@ private:
     void startSubscriptions();
     void fetchWorldMap();
     void loadHistoryFromDb(bool forceReload = false);
-    void fetchHistoryPage(int gen, const QString& db, int page, int targetLimit, QVector<QJsonObject> acc);
-    void mergeDbConnections(const QVector<QJsonObject>& rows);
+    void fetchHistoryPage(int gen, const QString& db, int page, int targetLimit, QVector<ConnRecord> acc);
+    void mergeDbConnections(const QVector<ConnRecord>& rows);
+    void parseWorldMapJson(const QByteArray& body);
+    void loadDemoData();
     void scheduleAppsRebuild();
     void scheduleAppsTickRebuild();
     void scheduleSettingsRebuild();
@@ -338,10 +460,12 @@ private:
     void processNextIconBatch();
     QString formatBytes(qint64 bytes) const;
 
+    bool m_demoMode = false;
     bool m_uiWindowVisible = true;
     bool m_appsDirty = false;
     bool m_connsDirty = false;
     bool m_appChartInternetOnly = false;
+    bool m_chartDataMode = false;
     QString m_trayTheme = QStringLiteral("system");
     QMenu* m_trayMenu = nullptr;
     QAction* m_trayStatusAct = nullptr;
@@ -380,7 +504,8 @@ private:
     QMap<QString, QJsonObject> m_profiles;
     QMap<QString, QJsonObject> m_settings;
     QMap<QString, QJsonObject> m_notifications;
-    std::deque<QJsonObject> m_connections;
+    std::deque<ConnRecord> m_connections;
+    ConnectionListModel* m_connModel = nullptr;
     qint64 m_connHeadSeq = 0;
     QHash<QString, qint64> m_connSeqById;
     QVector<WorldCountryHit> m_worldHitIndex;
@@ -406,7 +531,6 @@ private:
     int m_selectedAppInetBlocked = 0;
     int m_selectedAppAllAllowed = 0;
     int m_selectedAppAllBlocked = 0;
-    QVariantList m_connectionsCache;
     QVariantList m_connChartBins;
     int m_connAllowedTotal = 0;
     int m_connBlockedTotal = 0;
@@ -417,6 +541,8 @@ private:
     int m_connTunneledTotal = 0;
     QString m_connRxStr = QStringLiteral("0 B");
     QString m_connTxStr = QStringLiteral("0 B");
+    QString m_connInetRxStr = QStringLiteral("0 B");
+    QString m_connInetTxStr = QStringLiteral("0 B");
     QVariantList m_connCountriesSummary;
     QVariantList m_blockedAppsSummary;
     QHash<QString, QString> m_countryNames;

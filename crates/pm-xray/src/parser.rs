@@ -536,15 +536,52 @@ fn parse_vmess(body: &str, fragment: Option<&str>) -> Result<ParsedProfile, Pars
     let network = if network.is_empty() { field("type") } else { network };
     profile.network = normalize_network(&network);
     let security = field("tls");
-    let security = if security.is_empty() { field("scy") } else { security };
     profile.security = normalize_security(&security);
+    let scy = field("scy");
+    if scy.eq_ignore_ascii_case("tls") || scy.eq_ignore_ascii_case("reality") {
+        if profile.security == "none" {
+            profile.security = scy.to_ascii_lowercase();
+        }
+    } else if !scy.is_empty() {
+        profile.method = scy;
+    }
+    if profile.method.is_empty() {
+        profile.method = "auto".into();
+    }
     profile.path = field("path");
     profile.host = field("host");
-    profile.sni = field("sny");
+    let sni = field("sni");
+    profile.sni = if sni.is_empty() { field("sny") } else { sni };
     profile.fingerprint = field("fp");
     profile.flow = field("flow");
     profile.header_type = field("headerType");
     profile.service_name = field("serviceName");
+    profile.xhttp_mode = field("mode");
+    profile.xhttp_extra = field("extra");
+    profile.grpc_authority = field("authority");
+    profile.kcp_seed = field("seed");
+    profile.pinned_peer_cert = field("pcs");
+    profile.verify_peer_cert_by_name = field("vcn");
+    profile.ech_config_list = field("ech");
+    profile.reality_spider_x = field("spx");
+    if matches!(field("multiMode").to_ascii_lowercase().as_str(), "1" | "true" | "multi") {
+        profile.grpc_multi_mode = true;
+    }
+    if let Ok(mc) = field("muxConcurrency").parse::<i32>() {
+        profile.mux_concurrency = mc;
+        if mc > 0 {
+            profile.mux_enabled = true;
+        }
+    }
+    if matches!(field("mux").to_ascii_lowercase().as_str(), "1" | "true") {
+        profile.mux_enabled = true;
+    }
+    if matches!(field("frag").to_ascii_lowercase().as_str(), "1" | "true") {
+        profile.fragment_enabled = true;
+    }
+    if matches!(field("tfo").to_ascii_lowercase().as_str(), "1" | "true") {
+        profile.tcp_fast_open = true;
+    }
     let alpn = field("alpn");
     if !alpn.is_empty() {
         profile.alpn = alpn
@@ -1324,6 +1361,12 @@ pub fn encode_share_link(p: &ParsedProfile) -> String {
         if p.tcp_keep_alive_interval > 0 {
             params.push(format!("keepalive={}", p.tcp_keep_alive_interval));
         }
+        if !p.headers.is_empty() {
+            let map: BTreeMap<&str, &str> = p.headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+            if let Ok(json_str) = serde_json::to_string(&map) {
+                params.push(format!("headers={}", percent_encode(&json_str)));
+            }
+        }
     };
 
     match p.protocol {
@@ -1344,13 +1387,14 @@ pub fn encode_share_link(p: &ParsedProfile) -> String {
             format!("trojan://{}@{endpoint}{q}{frag}", percent_encode(pass))
         }
         Protocol::Vmess => {
-            let obj = serde_json::json!({
+            let mut obj = serde_json::json!({
                 "v": "2",
                 "ps": p.name,
                 "add": p.address,
                 "port": p.port.to_string(),
                 "id": p.credential,
                 "aid": "0",
+                "scy": if p.method.is_empty() { "auto" } else { p.method.as_str() },
                 "net": if p.network == "raw" { "tcp" } else { p.network.as_str() },
                 "type": if p.header_type.is_empty() { "none" } else { p.header_type.as_str() },
                 "host": p.host,
@@ -1359,7 +1403,26 @@ pub fn encode_share_link(p: &ParsedProfile) -> String {
                 "sni": p.sni,
                 "alpn": p.alpn.join(","),
                 "fp": p.fingerprint,
+                "serviceName": p.service_name,
             });
+            if let Some(m) = obj.as_object_mut() {
+                if !p.xhttp_mode.is_empty() { m.insert("mode".into(), serde_json::Value::String(p.xhttp_mode.clone())); }
+                if !p.xhttp_extra.is_empty() { m.insert("extra".into(), serde_json::Value::String(p.xhttp_extra.clone())); }
+                if !p.grpc_authority.is_empty() { m.insert("authority".into(), serde_json::Value::String(p.grpc_authority.clone())); }
+                if !p.kcp_seed.is_empty() { m.insert("seed".into(), serde_json::Value::String(p.kcp_seed.clone())); }
+                if p.grpc_multi_mode { m.insert("multiMode".into(), serde_json::Value::String("true".into())); }
+                if !p.pinned_peer_cert.is_empty() { m.insert("pcs".into(), serde_json::Value::String(p.pinned_peer_cert.clone())); }
+                if !p.verify_peer_cert_by_name.is_empty() { m.insert("vcn".into(), serde_json::Value::String(p.verify_peer_cert_by_name.clone())); }
+                if !p.ech_config_list.is_empty() { m.insert("ech".into(), serde_json::Value::String(p.ech_config_list.clone())); }
+                if p.mux_enabled {
+                    m.insert("mux".into(), serde_json::Value::String("1".into()));
+                    if p.mux_concurrency > 0 {
+                        m.insert("muxConcurrency".into(), serde_json::Value::String(p.mux_concurrency.to_string()));
+                    }
+                }
+                if p.fragment_enabled { m.insert("frag".into(), serde_json::Value::String("1".into())); }
+                if p.tcp_fast_open { m.insert("tfo".into(), serde_json::Value::String("1".into())); }
+            }
             format!("vmess://{}", STANDARD.encode(obj.to_string().as_bytes()))
         }
         Protocol::Shadowsocks => {
@@ -1395,11 +1458,20 @@ pub fn encode_share_link(p: &ParsedProfile) -> String {
             if !p.sni.is_empty() {
                 params.push(format!("sni={}", percent_encode(&p.sni)));
             }
+            if !p.fingerprint.is_empty() {
+                params.push(format!("fp={}", percent_encode(&p.fingerprint)));
+            }
+            if !p.hy_pin.is_empty() {
+                params.push(format!("pinSHA256={}", percent_encode(&p.hy_pin)));
+            }
             if !p.hy_obfs.is_empty() {
                 params.push(format!("obfs={}", percent_encode(&p.hy_obfs)));
             }
             if !p.hy_obfs_password.is_empty() {
                 params.push(format!("obfs-password={}", percent_encode(&p.hy_obfs_password)));
+            }
+            if !p.hy_mport.is_empty() {
+                params.push(format!("mport={}", percent_encode(&p.hy_mport)));
             }
             let q = if params.is_empty() { String::new() } else { format!("?{}", params.join("&")) };
             format!("hysteria2://{}@{endpoint}{q}{frag}", percent_encode(&p.credential))
@@ -1429,6 +1501,9 @@ pub fn encode_share_link(p: &ParsedProfile) -> String {
             conf.push_str(&format!("Endpoint = {endpoint}\n"));
             if !wg.allowed_ips.is_empty() {
                 conf.push_str(&format!("AllowedIPs = {}\n", wg.allowed_ips.join(", ")));
+            }
+            if wg.keep_alive > 0 {
+                conf.push_str(&format!("PersistentKeepalive = {}\n", wg.keep_alive));
             }
             format!("wireguard://{}{frag}", STANDARD.encode(conf.as_bytes()))
         }

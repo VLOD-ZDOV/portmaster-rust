@@ -163,10 +163,16 @@ Rectangle {
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 6
-                    Rectangle { width: 6; height: 6; radius: 3; color: "#1de966" }
-                    Label { text: pm.connAllowedTotal; color: "#1de966"; font.pixelSize: 10; font.bold: true }
-                    Rectangle { width: 6; height: 6; radius: 3; color: "#f03c3c" }
-                    Label { text: pm.connBlockedTotal; color: "#f03c3c"; font.pixelSize: 10; font.bold: true }
+                    Rectangle { width: 6; height: 6; radius: 3; color: "#2be876" }
+                    Label {
+                        text: pm.chartDataMode ? ("↓ " + pm.connRxStr) : pm.connAllowedTotal
+                        color: "#2be876"; font.pixelSize: 10; font.bold: true
+                    }
+                    Rectangle { width: 6; height: 6; radius: 3; color: pm.chartDataMode ? "#4e97fa" : "#f03c3c" }
+                    Label {
+                        text: pm.chartDataMode ? ("↑ " + pm.connTxStr) : pm.connBlockedTotal
+                        color: pm.chartDataMode ? "#4e97fa" : "#f03c3c"; font.pixelSize: 10; font.bold: true
+                    }
                     Item { Layout.fillWidth: true }
                     Label { text: pm.isRu ? "Трафик →" : "Monitor →"; color: "#767884"; font.pixelSize: 9 }
                 }
@@ -175,6 +181,8 @@ Rectangle {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     compact: true
+                    showAxes: false
+                    dataMode: pm.chartDataMode
                     bins: pm.connChartBins
                 }
             }
